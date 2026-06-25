@@ -2,7 +2,7 @@
 
 #include <bitemporal/assertion_store.hpp>
 
-using namespace bitemporal::assertion_store;
+using namespace bt;
 
 int main(int argc, char const *argv[])
 {

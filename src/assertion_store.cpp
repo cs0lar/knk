@@ -5,7 +5,7 @@
 #include <unordered_map>
 #include <optional>
 
-namespace bitemporal::assertion_store {
+namespace bt {
 AssertionId AssertionStore::append(
     EntityId subject,
     PredicateId predicate,

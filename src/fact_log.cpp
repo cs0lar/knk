@@ -3,7 +3,7 @@
 #include <fstream>
 #include <stdexcept>
 
-namespace bitemporal::fact_log {
+namespace bt {
 
 namespace {
 
@@ -24,7 +24,7 @@ FactLog::FactLog(std::filesystem::path path)
 void FactLog::append(const Assertion& assertion) {
 	std::filesystem::create_directories(path_.parent_path());
 
-	std::ofstream out(path_, std::binary | std::ios::app);
+	std::ofstream out(path_, std::ios::binary | std::ios::app);
 	if (!out) {
 		throw std::runtime_error("failed to open fact log for append");
 	}
@@ -62,6 +62,10 @@ std::vector<Assertion> FactLog::read_all() const {
 
 		Assertion assertion{};
 		in.read(reinterpret_cast<char*>(&assertion), sizeof(assertion));
+
+		if (!in) {
+			break; // ignore incomplete trailing record for now
+		}
 
 		assertions.push_back(assertion);
 	}

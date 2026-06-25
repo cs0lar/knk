@@ -9,7 +9,7 @@
 #include <bitemporal/status.hpp>
 #include <bitemporal/assertion.hpp>
 
-namespace bitemporal::assertion_store {
+namespace bt {
 class AssertionStore {
 public:
 	AssertionId append(

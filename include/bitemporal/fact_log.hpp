@@ -5,7 +5,7 @@
 
 #include <bitemporal/assertion.hpp>
 
-namespace bitemporal::fact_log {
+namespace bt {
 
 class FactLog {
 public:
@@ -17,6 +17,6 @@ public:
 
 private:
 	std::filesystem::path path_;
-}
+};
 
 }
