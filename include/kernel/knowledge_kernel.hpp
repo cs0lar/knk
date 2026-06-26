@@ -4,15 +4,16 @@
 #include <vector>
 #include <unordered_map>
 
-#include <bitemporal/ids.hpp>
-#include <bitemporal/time.hpp>
-#include <bitemporal/status.hpp>
-#include <bitemporal/assertion.hpp>
+#include <kernel/ids.hpp>
+#include <kernel/time.hpp>
+#include <kernel/status.hpp>
+#include <kernel/assertion.hpp>
 
-namespace bt {
-class AssertionStore {
+namespace knk {
+
+class KnowledgeKernel {
 public:
-	AssertionId append(
+	AssertionId commit(
 	    EntityId subject,
 	    PredicateId predicate,
 	    EntityId object,

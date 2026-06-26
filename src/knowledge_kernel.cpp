@@ -1,12 +1,13 @@
-#include <bitemporal/assertion_store.hpp>
+#include <kernel/knowledge_kernel.hpp>
 
 #include <cstdint>
 #include <vector>
 #include <unordered_map>
 #include <optional>
 
-namespace bt {
-AssertionId AssertionStore::append(
+namespace knk {
+
+AssertionId KnowledgeKernel::commit(
     EntityId subject,
     PredicateId predicate,
     EntityId object,
@@ -37,7 +38,7 @@ AssertionId AssertionStore::append(
 	return id;
 }
 
-std::optional<Assertion> AssertionStore::get(AssertionId id) const {
+std::optional<Assertion> KnowledgeKernel::get(AssertionId id) const {
 	if (id == 0 || id >= next_id_) {
 		return std::nullopt;
 	}
@@ -45,7 +46,7 @@ std::optional<Assertion> AssertionStore::get(AssertionId id) const {
 	return facts_[id - 1];
 }
 
-std::vector<Assertion> AssertionStore::facts_for_subject(EntityId subject) const {
+std::vector<Assertion> KnowledgeKernel::facts_for_subject(EntityId subject) const {
 	std::vector<Assertion> result;
 
 	auto it = subject_index_.find(subject);
@@ -63,7 +64,7 @@ std::vector<Assertion> AssertionStore::facts_for_subject(EntityId subject) const
 	return result;
 }
 
-std::vector<Assertion> AssertionStore::current_facts(EntityId subject) const {
+std::vector<Assertion> KnowledgeKernel::current_facts(EntityId subject) const {
 	std::vector<Assertion> result;
 
 	auto subject_id = current_index_.find(subject);
@@ -89,7 +90,7 @@ std::vector<Assertion> AssertionStore::current_facts(EntityId subject) const {
 	return result;
 }
 
-std::vector<Assertion> AssertionStore::valid_at(EntityId subject, Timestamp t) const {
+std::vector<Assertion> KnowledgeKernel::valid_at(EntityId subject, Timestamp t) const {
 	std::vector<Assertion> result;
 
 	auto it = subject_index_.find(subject);

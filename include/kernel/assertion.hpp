@@ -1,8 +1,8 @@
 #pragma once
 
-#include <bitemporal/ids.hpp>
-#include <bitemporal/time.hpp>
-#include <bitemporal/status.hpp>
+#include <kernel/ids.hpp>
+#include <kernel/time.hpp>
+#include <kernel/status.hpp>
 
 
 struct Assertion {

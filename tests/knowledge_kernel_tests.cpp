@@ -3,9 +3,9 @@
 #include <vector>
 
 
-#include <bitemporal/assertion_store.hpp>
+#include <kernel/knowledge_kernel.hpp>
 
-using namespace bt;
+using namespace knk;
 
 namespace {
 
@@ -19,10 +19,10 @@ constexpr Timestamp JAN_1_2024 = 1704067200;
 constexpr Timestamp JUL_1_2024 = 1719792000;
 constexpr Timestamp JUL_2_2024 = 1719878400;
 
-void append_and_get_fact() {
-	AssertionStore store;
+void commit_and_get_fact() {
+	KnowledgeKernel kernel;
 
-	auto id  = store.append(
+	auto id  = kernel.commit(
 	               ALICE,
 	               WORKS_AT,
 	               ACME,
@@ -32,7 +32,7 @@ void append_and_get_fact() {
 	               0.95
 	           );
 
-	auto fact = store.get(id);
+	auto fact = kernel.get(id);
 
 	assert(fact.has_value());
 	assert(fact->id == id);
@@ -47,17 +47,17 @@ void append_and_get_fact() {
 }
 
 void get_unknown_fact_returns_nullopt() {
-	AssertionStore store;
+	KnowledgeKernel kernel;
 
-	auto fact = store.get(999);
+	auto fact = kernel.get(999);
 
 	assert(!fact.has_value());
 }
 
 void current_fact_returns_open_ended_fact() {
-	AssertionStore store;
+	KnowledgeKernel kernel;
 
-	store.append(
+	kernel.commit(
 	    ALICE,
 	    WORKS_AT,
 	    ACME,
@@ -67,7 +67,7 @@ void current_fact_returns_open_ended_fact() {
 	    0.95
 	);
 
-	store.append(
+	kernel.commit(
 	    ALICE,
 	    WORKS_AT,
 	    BETA,
@@ -77,16 +77,16 @@ void current_fact_returns_open_ended_fact() {
 	    0.90
 	);
 
-	auto current = store.current_facts(ALICE);
+	auto current = kernel.current_facts(ALICE);
 
 	assert(current.size() == 1);
 	assert(current[0].object == BETA);
 }
 
 void valid_at_returns_historical_fact() {
-	AssertionStore store;
+	KnowledgeKernel kernel;
 
-	store.append(
+	kernel.commit(
 	    ALICE,
 	    WORKS_AT,
 	    ACME,
@@ -96,7 +96,7 @@ void valid_at_returns_historical_fact() {
 	    0.95
 	);
 
-	store.append(
+	kernel.commit(
 	    ALICE,
 	    WORKS_AT,
 	    BETA,
@@ -106,16 +106,16 @@ void valid_at_returns_historical_fact() {
 	    0.90
 	);
 
-	auto facts = store.valid_at(ALICE, JAN_1_2024);
+	auto facts = kernel.valid_at(ALICE, JAN_1_2024);
 
 	assert(facts.size() == 1);
 	assert(facts[0].object == ACME);
 }
 
 void valid_at_respects_exclusive_valid_to() {
-	AssertionStore store;
+	KnowledgeKernel kernel;
 
-	store.append(
+	kernel.commit(
 	    ALICE,
 	    WORKS_AT,
 	    ACME,
@@ -125,15 +125,15 @@ void valid_at_respects_exclusive_valid_to() {
 	    0.95
 	);
 
-	auto facts = store.valid_at(ALICE, JUL_1_2024);
+	auto facts = kernel.valid_at(ALICE, JUL_1_2024);
 
 	assert(facts.empty());
 }
 
 void facts_for_subject_returns_all_subject_facts() {
-	AssertionStore store;
+	KnowledgeKernel kernel;
 
-	store.append(
+	kernel.commit(
 	    ALICE,
 	    WORKS_AT,
 	    ACME,
@@ -143,7 +143,7 @@ void facts_for_subject_returns_all_subject_facts() {
 	    0.95
 	);
 
-	store.append(
+	kernel.commit(
 	    ALICE,
 	    WORKS_AT,
 	    BETA,
@@ -153,7 +153,7 @@ void facts_for_subject_returns_all_subject_facts() {
 	    0.90
 	);
 
-	auto facts = store.facts_for_subject(ALICE);
+	auto facts = kernel.facts_for_subject(ALICE);
 
 	assert(facts.size() == 2);
 	assert(facts[0].object == ACME);
@@ -164,13 +164,13 @@ void facts_for_subject_returns_all_subject_facts() {
 
 int main()
 {
-	append_and_get_fact();
+	commit_and_get_fact();
 	get_unknown_fact_returns_nullopt();
 	current_fact_returns_open_ended_fact();
 	valid_at_returns_historical_fact();
 	valid_at_respects_exclusive_valid_to();
 	facts_for_subject_returns_all_subject_facts();
 
-	std::cout << "All assertion_store tests passed.\n";
+	std::cout << "All assertion_kernel tests passed.\n";
 	return 0;
 }
