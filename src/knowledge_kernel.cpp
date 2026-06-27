@@ -7,6 +7,36 @@
 
 namespace knk {
 
+KnowledgeKernel::KnowledgeKernel(StorageConfig config)
+	: storage_(config) {
+	auto log_records = storage_.load_assertions();
+
+	for (const auto& record : log_records) {
+		apply_replayed_assertion(record);
+	}
+}
+
+void KnowledgeKernel::apply_replayed_assertion(const Assertion& assertion) {
+	if (assertion.supersedes_id != 0) {
+		mark_superseded(assertion.supersedes_id);
+	}
+
+	if (assertion.retracts_id != 0) {
+		mark_retracted(assertion.retracts_id);
+	}
+
+	assertions_.push_back(assertion);
+	next_id_ = std::max(next_id_, assertion.id + 1);
+}
+
+void KnowledgeKernel::mark_superseded(AssertionId superseded_id) {
+	assertions_[superseded_id - 1].status = AssertionStatus::Superseded;
+}
+
+void KnowledgeKernel::mark_retracted(AssertionId retracted_id) {
+	assertions_[retracted_id - 1].status = AssertionStatus::Retracted;
+}
+
 AssertionId KnowledgeKernel::commit(
     EntityId subject,
     PredicateId predicate,
@@ -18,7 +48,7 @@ AssertionId KnowledgeKernel::commit(
 ) {
 	AssertionId id = next_id_++;
 
-	Assertion a {
+	Assertion assertion {
 		id,
 		subject,
 		predicate,
@@ -30,7 +60,8 @@ AssertionId KnowledgeKernel::commit(
 		AssertionStatus::Active
 	};
 
-	assertions_.push_back(a);
+	storage_.append_assertion(assertion);
+	apply_replayed_assertion(assertion);
 
 	subject_index_[subject].push_back(id);
 	current_index_[subject][predicate].push_back(id);
@@ -43,14 +74,6 @@ std::optional<Assertion> KnowledgeKernel::get(AssertionId id) const {
 		return std::nullopt;
 	}
 
-	return assertions_[id - 1];
-}
-
-std::optional<Assertion> KnowledgeKernel::retract(AssertionId id) {
-	if (id == 0 || id >= next_id_) {
-		return std::nullopt;
-	}
-	assertions_[id - 1].status = AssertionStatus::Retracted;
 	return assertions_[id - 1];
 }
 

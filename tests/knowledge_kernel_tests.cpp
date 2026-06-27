@@ -200,30 +200,6 @@ void valid_at_known_at_respects_both_times() {
 	assert(assertions[0].object == BETA);
 }
 
-void retracted_fact_is_hidden() {
-	KnowledgeKernel kernel;
-
-	auto assertion_id = kernel.commit(
-	                        ALICE,
-	                        WORKS_AT,
-	                        ACME,
-	                        JAN_1_2023,
-	                        OPEN_ENDED,
-	                        JUL_1_2024,
-	                        0.95
-	                    );
-
-	kernel.retract(assertion_id);
-
-	auto current = kernel.current(ALICE);
-
-	assert(current.empty());
-
-	auto assertions = kernel.valid_at(ALICE, JUL_1_2024);
-
-	assert(assertions.empty());
-}
-
 void assertions_for_subject_returns_all_subject_assertions() {
 	KnowledgeKernel kernel;
 
@@ -264,7 +240,6 @@ int main()
 	valid_at_returns_historical_assertion();
 	valid_at_respects_exclusive_valid_to();
 	valid_at_known_at_respects_both_times();
-	retracted_fact_is_hidden();
 	known_at_excludes_future_observed_fact();
 	assertions_for_subject_returns_all_subject_assertions();
 

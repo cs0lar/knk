@@ -6,7 +6,8 @@ using namespace knk;
 
 int main(int argc, char const *argv[])
 {
-	KnowledgeKernel kernel;
+	auto config = StorageConfig();
+	KnowledgeKernel kernel(config);
 
 	EntityId alice = 1;
 	EntityId acme = 100;

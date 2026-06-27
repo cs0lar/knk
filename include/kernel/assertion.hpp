@@ -19,4 +19,7 @@ struct Assertion {
 	double confidence;
 
 	AssertionStatus status;
+
+	AssertionId supersedes_id = 0;
+	AssertionId retracts_id = 0;
 };
