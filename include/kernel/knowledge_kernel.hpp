@@ -25,9 +25,11 @@ public:
 
 	std::optional<Assertion> get(AssertionId id) const;
 
-	std::vector<Assertion> facts_for_subject(EntityId subject) const;
+	std::optional<Assertion> retract(AssertionId id);
 
-	std::vector<Assertion> current_facts(EntityId subject) const;
+	std::vector<Assertion> assertions_for_subject(EntityId subject) const;
+
+	std::vector<Assertion> current(EntityId subject) const;
 
 	std::vector<Assertion> valid_at(EntityId subject, Timestamp valid_time) const;
 
@@ -41,7 +43,7 @@ public:
 private:
 	AssertionId next_id_ = 1;
 
-	std::vector<Assertion> facts_;
+	std::vector<Assertion> assertions_;
 
 	std::unordered_map<EntityId, std::vector<AssertionId>> subject_index_;
 

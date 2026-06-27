@@ -34,7 +34,7 @@ int main(int argc, char const *argv[])
 	    0.90
 	);
 
-	auto current = kernel.current_facts(alice);
+	auto current = kernel.current(alice);
 
 	std::cout << "Current facts for Alice\n";
 	for (const auto& fact : current) {

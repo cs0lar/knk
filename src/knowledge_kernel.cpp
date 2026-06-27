@@ -30,7 +30,7 @@ AssertionId KnowledgeKernel::commit(
 		AssertionStatus::Active
 	};
 
-	facts_.push_back(a);
+	assertions_.push_back(a);
 
 	subject_index_[subject].push_back(id);
 	current_index_[subject][predicate].push_back(id);
@@ -43,10 +43,18 @@ std::optional<Assertion> KnowledgeKernel::get(AssertionId id) const {
 		return std::nullopt;
 	}
 
-	return facts_[id - 1];
+	return assertions_[id - 1];
 }
 
-std::vector<Assertion> KnowledgeKernel::facts_for_subject(EntityId subject) const {
+std::optional<Assertion> KnowledgeKernel::retract(AssertionId id) {
+	if (id == 0 || id >= next_id_) {
+		return std::nullopt;
+	}
+	assertions_[id - 1].status = AssertionStatus::Retracted;
+	return assertions_[id - 1];
+}
+
+std::vector<Assertion> KnowledgeKernel::assertions_for_subject(EntityId subject) const {
 	std::vector<Assertion> result;
 
 	auto it = subject_index_.find(subject);
@@ -55,16 +63,16 @@ std::vector<Assertion> KnowledgeKernel::facts_for_subject(EntityId subject) cons
 	}
 
 	for (AssertionId id : it->second) {
-		auto fact = get(id);
-		if (fact.has_value()) {
-			result.push_back(*fact);
+		auto assertion = get(id);
+		if (assertion.has_value()) {
+			result.push_back(*assertion);
 		}
 	}
 
 	return result;
 }
 
-std::vector<Assertion> KnowledgeKernel::current_facts(EntityId subject) const {
+std::vector<Assertion> KnowledgeKernel::current(EntityId subject) const {
 	std::vector<Assertion> result;
 
 	auto subject_id = current_index_.find(subject);
@@ -74,14 +82,14 @@ std::vector<Assertion> KnowledgeKernel::current_facts(EntityId subject) const {
 
 	for (const auto& [predicate, ids] : subject_id->second) {
 		for (auto it = ids.rbegin(); it != ids.rend(); ++it) {
-			auto fact = get(*it);
+			auto assertion = get(*it);
 
 			if (
-			    fact.has_value() &&
-			    fact->status == AssertionStatus::Active &&
-			    fact->valid_to == OPEN_ENDED
+			    assertion.has_value() &&
+			    assertion->status == AssertionStatus::Active &&
+			    assertion->valid_to == OPEN_ENDED
 			) {
-				result.push_back(*fact);
+				result.push_back(*assertion);
 				break;
 			}
 		}
@@ -99,20 +107,82 @@ std::vector<Assertion> KnowledgeKernel::valid_at(EntityId subject, Timestamp t) 
 	}
 
 	for (AssertionId id : it->second) {
-		auto fact = get(id);
-		if (!fact.has_value()) {
+		auto assertion = get(id);
+		if (!assertion.has_value()) {
 			continue;
 		}
 
-		bool starts_before_or_at = fact->valid_from <= t;
-		bool ends_after = fact->valid_to == OPEN_ENDED || t < fact->valid_to;
+		bool starts_before_or_at = assertion->valid_from <= t;
+		bool ends_after = assertion->valid_to == OPEN_ENDED || t < assertion->valid_to;
 
 		if (
-		    fact->status == AssertionStatus::Active &&
+		    assertion->status == AssertionStatus::Active &&
 		    starts_before_or_at &&
 		    ends_after
 		) {
-			result.push_back(*fact);
+			result.push_back(*assertion);
+		}
+	}
+
+	return result;
+}
+
+std::vector<Assertion> KnowledgeKernel::known_at(EntityId subject, Timestamp t) const {
+	std::vector<Assertion> result;
+
+	auto it = subject_index_.find(subject);
+	if (it == subject_index_.end()) {
+		return result;
+	}
+
+	for (AssertionId id : it->second) {
+		auto assertion = get(id);
+		if (!assertion.has_value()) {
+			continue;
+		}
+
+		bool is_observed = assertion->observed_at <= t;
+
+		if (
+		    assertion->status == AssertionStatus::Active &&
+		    is_observed
+		) {
+			result.push_back(*assertion);
+		}
+	}
+
+	return result;
+}
+
+std::vector<Assertion> KnowledgeKernel::valid_at_known_at(
+    EntityId subject,
+    Timestamp valid_time,
+    Timestamp observed_time
+) const {
+	std::vector<Assertion> result;
+
+	auto it = subject_index_.find(subject);
+	if (it == subject_index_.end()) {
+		return result;
+	}
+
+	for (AssertionId id : it->second) {
+		auto assertion = get(id);
+		if (!assertion.has_value()) {
+			continue;
+		}
+
+		bool starts_before_or_at = assertion->valid_from <= valid_time;
+		bool ends_after = assertion->valid_to == OPEN_ENDED || valid_time < assertion->valid_to;
+		bool is_observed = assertion->observed_at <= observed_time;
+
+		if (
+		    assertion->status == AssertionStatus::Active &&
+		    is_observed &&
+		    starts_before_or_at &&
+		    ends_after
+		) {
+			result.push_back(*assertion);
 		}
 	}
 
