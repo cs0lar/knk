@@ -24,26 +24,26 @@ target_link_libraries(kernel_demo
 
 enable_testing()
 
-#add_executable(knowledge_kernel_tests
-#    tests/knowledge_kernel_tests.cpp
-#)
+add_executable(knowledge_kernel_tests
+    tests/knowledge_kernel_tests.cpp
+)
 
 add_executable(assertion_log_tests
     tests/assertion_log_tests.cpp
 )
 
-#target_link_libraries(knowledge_kernel_tests
-#    PRIVATE kernel
-#)
+target_link_libraries(knowledge_kernel_tests
+    PRIVATE kernel
+)
 
 target_link_libraries(assertion_log_tests
     PRIVATE kernel
 )
 
-#add_test(
-#    NAME knowledge_kernel_tests
-#    COMMAND knowledge_kernel_tests
-#)
+add_test(
+    NAME knowledge_kernel_tests
+    COMMAND knowledge_kernel_tests
+)
 
 add_test(
     NAME assertion_log_tests
