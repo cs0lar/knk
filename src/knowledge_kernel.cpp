@@ -26,6 +26,9 @@ void KnowledgeKernel::apply_replayed_assertion(const Assertion& assertion) {
 	}
 
 	assertions_.push_back(assertion);
+	subject_index_[assertion.subject].push_back(assertion.id);
+	current_index_[assertion.subject][assertion.predicate].push_back(assertion.id);
+
 	next_id_ = std::max(next_id_, assertion.id + 1);
 }
 
@@ -62,9 +65,6 @@ AssertionId KnowledgeKernel::commit(
 
 	storage_.append_assertion(assertion);
 	apply_replayed_assertion(assertion);
-
-	subject_index_[subject].push_back(id);
-	current_index_[subject][predicate].push_back(id);
 
 	return id;
 }
