@@ -4,10 +4,20 @@
 
 using namespace knk;
 
+std::filesystem::path test_root(const std::string & name) {
+	auto path = std::filesystem::temp_directory_path() / ("knowledge_kernel_" + name);
+	std::filesystem::remove_all(path);
+	return path;
+}
+
+void cleanup(const std::filesystem::path & path) {
+	std::filesystem::remove_all(path);
+}
+
 int main(int argc, char const *argv[])
 {
-	auto config = StorageConfig();
-	KnowledgeKernel kernel(config);
+	auto root = test_root("main_example");
+	KnowledgeKernel kernel(StorageConfig{root});
 
 	EntityId alice = 1;
 	EntityId acme = 100;
@@ -57,4 +67,6 @@ int main(int argc, char const *argv[])
 		        << " object=" << fact.object
 		        << "\n";
 	}
+
+	cleanup(root);
 }

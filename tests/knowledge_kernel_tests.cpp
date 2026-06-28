@@ -71,6 +71,41 @@ void get_unknown_assertion_returns_nullopt() {
 	cleanup(root);
 }
 
+void current_assertion_is_preserved_across_kernels() {
+	auto root = test_root("current_assertion_preserves_result_across_kernels");
+
+	KnowledgeKernel kernel(StorageConfig{root});
+
+	kernel.commit(
+	    ALICE,
+	    WORKS_AT,
+	    ACME,
+	    JAN_1_2023,
+	    JUL_1_2024,
+	    JUL_2_2024,
+	    0.95
+	);
+
+	kernel.commit(
+	    ALICE,
+	    WORKS_AT,
+	    BETA,
+	    JUL_1_2024,
+	    OPEN_ENDED,
+	    JUL_2_2024,
+	    0.90
+	);
+
+	KnowledgeKernel other_kernel(StorageConfig{root});
+
+	auto current = other_kernel.current(ALICE);
+
+	assert(current.size() == 1);
+	assert(current[0].object == BETA);
+
+	cleanup(root);
+}
+
 void current_assertion_returns_open_ended_assertion() {
 	auto root = test_root("current_assertion_returns_open_ended_assertion");
 	KnowledgeKernel kernel(StorageConfig{root});
@@ -128,6 +163,39 @@ void valid_at_returns_historical_assertion() {
 	);
 
 	auto assertions = kernel.valid_at(ALICE, JAN_1_2024);
+
+	assert(assertions.size() == 1);
+	assert(assertions[0].object == ACME);
+
+	cleanup(root);
+}
+
+void valid_at_is_preserved_across_kernels() {
+	auto root = test_root("valid_at_is_preserved_across_kernels");
+	KnowledgeKernel kernel(StorageConfig{root});
+
+	kernel.commit(
+	    ALICE,
+	    WORKS_AT,
+	    ACME,
+	    JAN_1_2023,
+	    JUL_1_2024,
+	    JUL_2_2024,
+	    0.95
+	);
+
+	kernel.commit(
+	    ALICE,
+	    WORKS_AT,
+	    BETA,
+	    JUL_1_2024,
+	    OPEN_ENDED,
+	    JUL_2_2024,
+	    0.90
+	);
+
+	KnowledgeKernel other_kernel(StorageConfig{root});
+	auto assertions = other_kernel.valid_at(ALICE, JAN_1_2024);
 
 	assert(assertions.size() == 1);
 	assert(assertions[0].object == ACME);
@@ -270,14 +338,14 @@ void constructor_replays_assertions_and_continues_ids() {
 	{
 		KnowledgeKernel kernel(StorageConfig{root});
 		auto id = kernel.commit(
-		    ALICE,
-		    WORKS_AT,
-		    ACME,
-		    JAN_1_2023,
-		    OPEN_ENDED,
-		    JUL_2_2024,
-		    0.95
-		);
+		              ALICE,
+		              WORKS_AT,
+		              ACME,
+		              JAN_1_2023,
+		              OPEN_ENDED,
+		              JUL_2_2024,
+		              0.95
+		          );
 
 		assert(id == 1);
 	}
@@ -289,14 +357,14 @@ void constructor_replays_assertions_and_continues_ids() {
 	assert(replayed->object == ACME);
 
 	auto next_id = kernel.commit(
-	    ALICE,
-	    WORKS_AT,
-	    BETA,
-	    JUL_1_2024,
-	    OPEN_ENDED,
-	    JUL_3_2024,
-	    0.90
-	);
+	                   ALICE,
+	                   WORKS_AT,
+	                   BETA,
+	                   JUL_1_2024,
+	                   OPEN_ENDED,
+	                   JUL_3_2024,
+	                   0.90
+	               );
 
 	assert(next_id == 2);
 
@@ -309,8 +377,10 @@ int main()
 {
 	commit_and_get_assertion();
 	get_unknown_assertion_returns_nullopt();
+	current_assertion_is_preserved_across_kernels();
 	current_assertion_returns_open_ended_assertion();
 	valid_at_returns_historical_assertion();
+	valid_at_is_preserved_across_kernels();
 	valid_at_respects_exclusive_valid_to();
 	valid_at_known_at_respects_both_times();
 	known_at_excludes_future_observed_fact();
