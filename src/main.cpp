@@ -1,12 +1,13 @@
 #include <iostream>
 
-#include <bitemporal/assertion_store.hpp>
+#include <kernel/knowledge_kernel.hpp>
 
-using namespace bt;
+using namespace knk;
 
 int main(int argc, char const *argv[])
 {
-	AssertionStore store;
+	auto config = StorageConfig();
+	KnowledgeKernel kernel(config);
 
 	EntityId alice = 1;
 	EntityId acme = 100;
@@ -14,7 +15,7 @@ int main(int argc, char const *argv[])
 
 	PredicateId works_at = 10;
 
-	store.append(
+	kernel.commit(
 	    alice,
 	    works_at,
 	    acme,
@@ -24,7 +25,7 @@ int main(int argc, char const *argv[])
 	    0.95
 	);
 
-	store.append(
+	kernel.commit(
 	    alice,
 	    works_at,
 	    beta,
@@ -34,7 +35,7 @@ int main(int argc, char const *argv[])
 	    0.90
 	);
 
-	auto current = store.current_facts(alice);
+	auto current = kernel.current(alice);
 
 	std::cout << "Current facts for Alice\n";
 	for (const auto& fact : current) {
@@ -46,7 +47,7 @@ int main(int argc, char const *argv[])
 		        << "\n";
 	}
 
-	auto historical = store.valid_at(alice, 1704067200);
+	auto historical = kernel.valid_at(alice, 1704067200);
 
 	std::cout << "\nFacts valid on 2024-01-01:\n";
 	for (const auto& fact : historical) {

@@ -3,11 +3,11 @@
 #include <filesystem>
 #include <vector>
 
-#include <bitemporal/assertion.hpp>
-#include <bitemporal/fact_log.hpp>
-#include <bitemporal/storage_config.hpp>
+#include <kernel/assertion.hpp>
+#include <kernel/assertion_log.hpp>
+#include <kernel/storage_config.hpp>
 
-namespace bt {
+namespace knk {
 
 class StorageEngine {
 public:
@@ -21,7 +21,7 @@ public:
 
 private:
 	StorageConfig config_;
-	FactLog fact_log_;
-}
+	AssertionLog assertion_log_;
+};
 
 }

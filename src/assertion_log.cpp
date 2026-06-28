@@ -1,9 +1,9 @@
-#include <bitemporal/fact_log.hpp>
+#include <kernel/assertion_log.hpp>
 
 #include <fstream>
 #include <stdexcept>
 
-namespace bt {
+namespace knk {
 
 namespace {
 
@@ -18,10 +18,10 @@ void write_or_throw(std::ofstream& out, const char* data, std::streamsize size) 
 
 }
 
-FactLog::FactLog(std::filesystem::path path)
+AssertionLog::AssertionLog(std::filesystem::path path)
 	: path_(std::move(path)) {}
 
-void FactLog::append(const Assertion& assertion) {
+void AssertionLog::append(const Assertion& assertion) {
 	std::filesystem::create_directories(path_.parent_path());
 
 	std::ofstream out(path_, std::ios::binary | std::ios::app);
@@ -35,7 +35,7 @@ void FactLog::append(const Assertion& assertion) {
 	write_or_throw(out, reinterpret_cast<const char*>(&assertion), sizeof(assertion));
 }
 
-std::vector<Assertion> FactLog::read_all() const {
+std::vector<Assertion> AssertionLog::read_all() const {
 	std::vector<Assertion> assertions;
 
 	std::ifstream in (path_, std::ios::binary);

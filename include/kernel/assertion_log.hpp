@@ -3,13 +3,13 @@
 #include <filesystem>
 #include <vector>
 
-#include <bitemporal/assertion.hpp>
+#include <kernel/assertion.hpp>
 
-namespace bt {
+namespace knk {
 
-class FactLog {
+class AssertionLog {
 public:
-	explicit FactLog(std::filesystem::path path);
+	explicit AssertionLog(std::filesystem::path path);
 
 	void append(const Assertion& assertion);
 

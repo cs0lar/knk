@@ -2,13 +2,13 @@
 
 #include <filesystem>
 
-namespace bt {
+namespace knk {
 
 struct StorageConfig {
 	std::filesystem::path root;
 
-	std::filesystem::path fact_log_path() const {
-		return root / "facts.log";
+	std::filesystem::path assertion_log_path() const {
+		return root / "assertions.log";
 	}
 
 	std::filesystem::path index_directory() const {
