@@ -49,7 +49,7 @@ AssertionId KnowledgeKernel::commit(
     Timestamp observed_at,
     double confidence
 ) {
-	AssertionId id = next_id_++;
+	AssertionId id = next_id_;
 
 	Assertion assertion {
 		id,

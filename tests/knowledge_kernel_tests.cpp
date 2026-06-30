@@ -60,6 +60,47 @@ void commit_and_get_assertion() {
 	cleanup(root);
 }
 
+void failed_commit_does_not_burn_id() {
+	auto root = test_root("failed_commit_does_not_burn_id");
+
+	KnowledgeKernel kernel(StorageConfig{root});
+	auto log_path = StorageConfig{root}.assertion_log_path();
+
+	std::filesystem::create_directory(log_path);
+
+	bool failed = false;
+	try {
+		kernel.commit(
+		    ALICE,
+		    WORKS_AT,
+		    ACME,
+		    JAN_1_2023,
+		    OPEN_ENDED,
+		    JUL_2_2024,
+		    0.95
+		);
+	}
+	catch (const std::runtime_error&) {
+		failed = true;
+	}
+
+	assert(failed);
+	std::filesystem::remove(log_path);
+
+	auto other_id = kernel.commit(
+	                    ALICE,
+	                    WORKS_AT,
+	                    ACME,
+	                    JAN_1_2023,
+	                    OPEN_ENDED,
+	                    JUL_2_2024,
+	                    0.95
+	                );
+
+	assert(other_id == 1);
+	cleanup(root);
+}
+
 void get_unknown_assertion_returns_nullopt() {
 	auto root = test_root("get_unknown_assertion_returns_nullopt");
 	KnowledgeKernel kernel(StorageConfig{root});
@@ -376,6 +417,7 @@ void constructor_replays_assertions_and_continues_ids() {
 int main()
 {
 	commit_and_get_assertion();
+	failed_commit_does_not_burn_id();
 	get_unknown_assertion_returns_nullopt();
 	current_assertion_is_preserved_across_kernels();
 	current_assertion_returns_open_ended_assertion();
