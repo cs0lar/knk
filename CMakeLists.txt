@@ -9,6 +9,7 @@ add_library(kernel
     src/knowledge_kernel.cpp
     src/assertion_log.cpp
     src/storage_engine.cpp
+    src/index_manager.cpp
 )
 
 target_include_directories(kernel
