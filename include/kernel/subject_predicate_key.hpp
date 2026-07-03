@@ -15,8 +15,7 @@ struct SubjectPredicateKey {
 
 } // namespace knk
 
-template <>
-struct std::hash<knk::SubjectPredicateKey> {
+template <> struct std::hash<knk::SubjectPredicateKey> {
     std::size_t operator()(const knk::SubjectPredicateKey &key) const {
         std::size_t h1 = std::hash<knk::EntityId>{}(key.subject);
         std::size_t h2 = std::hash<knk::PredicateId>{}(key.predicate);
