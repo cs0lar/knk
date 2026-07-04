@@ -1,61 +1,50 @@
 #pragma once
 
 #include <optional>
-#include <vector>
 #include <unordered_map>
+#include <vector>
 
-#include <kernel/ids.hpp>
-#include <kernel/time.hpp>
-#include <kernel/status.hpp>
 #include <kernel/assertion.hpp>
+#include <kernel/ids.hpp>
+#include <kernel/index_manager.hpp>
+#include <kernel/status.hpp>
 #include <kernel/storage_engine.hpp>
+#include <kernel/time.hpp>
 
 namespace knk {
 
 class KnowledgeKernel {
-public:
-	explicit KnowledgeKernel(StorageConfig config);
+  public:
+    explicit KnowledgeKernel(StorageConfig config);
 
-	AssertionId commit(
-	    EntityId subject,
-	    PredicateId predicate,
-	    EntityId object,
-	    Timestamp valid_from,
-	    Timestamp valid_to,
-	    Timestamp observed_at,
-	    double confidence
-	);
+    AssertionId commit(EntityId subject, PredicateId predicate, EntityId object, Timestamp valid_from,
+                       Timestamp valid_to, Timestamp observed_at, double confidence);
 
-	void apply_replayed_assertion(const Assertion& assertion);
+    void apply_replayed_assertion(const Assertion &assertion);
 
-	void mark_superseded(AssertionId superseded_id);
+    void mark_superseded(AssertionId superseded_id);
 
-	void mark_retracted(AssertionId retracted_id);
+    void mark_retracted(AssertionId retracted_id);
 
-	std::optional<Assertion> get(AssertionId id) const;
+    std::optional<Assertion> get(AssertionId id) const;
 
-	std::vector<Assertion> assertions_for_subject(EntityId subject) const;
+    std::vector<Assertion> assertions_for_subject(EntityId subject) const;
 
-	std::vector<Assertion> current(EntityId subject) const;
+    std::vector<Assertion> current(EntityId subject) const;
 
-	std::vector<Assertion> valid_at(EntityId subject, Timestamp valid_time) const;
+    std::vector<Assertion> valid_at(EntityId subject, Timestamp valid_time) const;
 
-	std::vector<Assertion> known_at(EntityId subject, Timestamp observed_time) const;
+    std::vector<Assertion> known_at(EntityId subject, Timestamp observed_time) const;
 
-	std::vector<Assertion> valid_at_known_at(
-	    EntityId subject,
-	    Timestamp valid_time,
-	    Timestamp observed_time
-	) const;
-private:
-	AssertionId next_id_ = 1;
+    std::vector<Assertion> valid_at_known_at(EntityId subject, Timestamp valid_time, Timestamp observed_time) const;
 
-	StorageEngine storage_;
+  private:
+    AssertionId next_id_ = 1;
 
-	std::vector<Assertion> assertions_;
+    StorageEngine storage_;
 
-	std::unordered_map<EntityId, std::vector<AssertionId>> subject_index_;
+    IndexManager index_manager_;
 
-	std::unordered_map<EntityId, std::unordered_map<PredicateId, std::vector<AssertionId>>> current_index_;
+    std::vector<Assertion> assertions_;
 };
-}
+} // namespace knk

@@ -10,18 +10,18 @@
 namespace knk {
 
 class StorageEngine {
-public:
-	explicit StorageEngine(StorageConfig config);
+  public:
+    explicit StorageEngine(StorageConfig config);
 
-	void append_assertion(const Assertion& assertion);
+    void append_assertion(const Assertion &assertion);
 
-	std::vector<Assertion> load_assertions() const;
+    std::vector<Assertion> load_assertions() const;
 
-	const StorageConfig& config() const;
+    const StorageConfig &config() const;
 
-private:
-	StorageConfig config_;
-	AssertionLog assertion_log_;
+  private:
+    StorageConfig config_;
+    AssertionLog assertion_log_;
 };
 
-}
+} // namespace knk

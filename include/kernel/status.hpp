@@ -1,7 +1,7 @@
 #pragma once
 
-enum class AssertionStatus {
-	Active,
-	Superseded,
-	Retracted
-};
+namespace knk {
+
+enum class AssertionStatus { Active, Superseded, Retracted };
+
+}
