@@ -1,3 +1,5 @@
+#include "kernel/ids.hpp"
+#include "kernel/index_manager.hpp"
 #include <kernel/knowledge_kernel.hpp>
 
 #include <cstdint>
@@ -7,7 +9,7 @@
 
 namespace knk {
 
-KnowledgeKernel::KnowledgeKernel(StorageConfig config) : storage_(config) {
+KnowledgeKernel::KnowledgeKernel(StorageConfig config) : storage_(config), index_manager_() {
     auto log_records = storage_.load_assertions();
 
     for (const auto &record : log_records) {
@@ -25,18 +27,19 @@ void KnowledgeKernel::apply_replayed_assertion(const Assertion &assertion) {
     }
 
     assertions_.push_back(assertion);
-    subject_index_[assertion.subject].push_back(assertion.id);
-    current_index_[assertion.subject][assertion.predicate].push_back(assertion.id);
+    index_manager_.add(assertion);
 
     next_id_ = std::max(next_id_, assertion.id + 1);
 }
 
 void KnowledgeKernel::mark_superseded(AssertionId superseded_id) {
     assertions_[superseded_id - 1].status = AssertionStatus::Superseded;
+    index_manager_.mark_superseded(superseded_id);
 }
 
 void KnowledgeKernel::mark_retracted(AssertionId retracted_id) {
     assertions_[retracted_id - 1].status = AssertionStatus::Retracted;
+    index_manager_.mark_retracted(retracted_id);
 }
 
 AssertionId KnowledgeKernel::commit(EntityId subject, PredicateId predicate, EntityId object, Timestamp valid_from,
@@ -63,13 +66,14 @@ std::optional<Assertion> KnowledgeKernel::get(AssertionId id) const {
 std::vector<Assertion> KnowledgeKernel::assertions_for_subject(EntityId subject) const {
     std::vector<Assertion> result;
 
-    auto it = subject_index_.find(subject);
-    if (it == subject_index_.end()) {
+    auto assertions = index_manager_.assertions_for_subject(subject);
+    if (assertions.empty()) {
         return result;
     }
 
-    for (AssertionId id : it->second) {
+    for (AssertionId id : assertions) {
         auto assertion = get(id);
+
         if (assertion.has_value()) {
             result.push_back(*assertion);
         }
@@ -81,19 +85,16 @@ std::vector<Assertion> KnowledgeKernel::assertions_for_subject(EntityId subject)
 std::vector<Assertion> KnowledgeKernel::current(EntityId subject) const {
     std::vector<Assertion> result;
 
-    auto subject_id = current_index_.find(subject);
-    if (subject_id == current_index_.end()) {
-        return result;
-    }
+    auto predicates = index_manager_.predicates_for_subject(subject);
 
-    for (const auto &[predicate, ids] : subject_id->second) {
-        for (auto it = ids.rbegin(); it != ids.rend(); ++it) {
-            auto assertion = get(*it);
+    for (PredicateId predicate : predicates) {
+        auto current_assertions = index_manager_.current_assertions(subject, predicate);
 
-            if (assertion.has_value() && assertion->status == AssertionStatus::Active &&
-                assertion->valid_to == OPEN_ENDED) {
+        for (AssertionId id : current_assertions) {
+            auto assertion = get(id);
+
+            if (assertion.has_value()) {
                 result.push_back(*assertion);
-                break;
             }
         }
     }
@@ -104,13 +105,14 @@ std::vector<Assertion> KnowledgeKernel::current(EntityId subject) const {
 std::vector<Assertion> KnowledgeKernel::valid_at(EntityId subject, Timestamp t) const {
     std::vector<Assertion> result;
 
-    auto it = subject_index_.find(subject);
-    if (it == subject_index_.end()) {
+    auto assertions = index_manager_.assertions_for_subject(subject);
+    if (assertions.empty()) {
         return result;
     }
 
-    for (AssertionId id : it->second) {
+    for (AssertionId id : assertions) {
         auto assertion = get(id);
+
         if (!assertion.has_value()) {
             continue;
         }
@@ -129,12 +131,12 @@ std::vector<Assertion> KnowledgeKernel::valid_at(EntityId subject, Timestamp t) 
 std::vector<Assertion> KnowledgeKernel::known_at(EntityId subject, Timestamp t) const {
     std::vector<Assertion> result;
 
-    auto it = subject_index_.find(subject);
-    if (it == subject_index_.end()) {
+    auto assertions = index_manager_.assertions_for_subject(subject);
+    if (assertions.empty()) {
         return result;
     }
 
-    for (AssertionId id : it->second) {
+    for (AssertionId id : assertions) {
         auto assertion = get(id);
         if (!assertion.has_value()) {
             continue;
@@ -154,12 +156,12 @@ std::vector<Assertion> KnowledgeKernel::valid_at_known_at(EntityId subject, Time
                                                           Timestamp observed_time) const {
     std::vector<Assertion> result;
 
-    auto it = subject_index_.find(subject);
-    if (it == subject_index_.end()) {
+    auto assertions = index_manager_.assertions_for_subject(subject);
+    if (assertions.empty()) {
         return result;
     }
 
-    for (AssertionId id : it->second) {
+    for (AssertionId id : assertions) {
         auto assertion = get(id);
         if (!assertion.has_value()) {
             continue;

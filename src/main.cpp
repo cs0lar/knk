@@ -1,3 +1,4 @@
+#include "kernel/index_manager.hpp"
 #include <iostream>
 
 #include <kernel/knowledge_kernel.hpp>

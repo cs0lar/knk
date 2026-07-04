@@ -6,6 +6,7 @@
 
 #include <kernel/assertion.hpp>
 #include <kernel/ids.hpp>
+#include <kernel/index_manager.hpp>
 #include <kernel/status.hpp>
 #include <kernel/storage_engine.hpp>
 #include <kernel/time.hpp>
@@ -42,10 +43,8 @@ class KnowledgeKernel {
 
     StorageEngine storage_;
 
+    IndexManager index_manager_;
+
     std::vector<Assertion> assertions_;
-
-    std::unordered_map<EntityId, std::vector<AssertionId>> subject_index_;
-
-    std::unordered_map<EntityId, std::unordered_map<PredicateId, std::vector<AssertionId>>> current_index_;
 };
 } // namespace knk

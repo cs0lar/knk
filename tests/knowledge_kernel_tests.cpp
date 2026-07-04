@@ -1,3 +1,4 @@
+#include "kernel/index_manager.hpp"
 #include <cassert>
 #include <filesystem>
 #include <iostream>
