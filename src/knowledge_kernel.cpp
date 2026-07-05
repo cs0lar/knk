@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <iostream>
 #include <optional>
+#include <stdexcept>
 #include <unordered_map>
 #include <vector>
 
@@ -60,10 +61,14 @@ AssertionId KnowledgeKernel::commit(EntityId subject, PredicateId predicate, Ent
 AssertionId KnowledgeKernel::commit_retraction(EntityId subject, PredicateId predicate, EntityId object,
                                                Timestamp valid_from, Timestamp valid_to, Timestamp observed_at,
                                                double confidence, AssertionId retracts_id) {
+    if (retracts_id == 0 || !get(retracts_id).has_value()) {
+        throw std::runtime_error("invalid retraction target");
+    }
+
     AssertionId id = next_id_;
 
     Assertion assertion{
-        id, subject,    predicate, object, valid_from, valid_to, observed_at, confidence, AssertionStatus::Active,
+        id, subject,    predicate, object, valid_from, valid_to, observed_at, confidence, AssertionStatus::Retraction,
         0,  retracts_id};
 
     storage_.append_assertion(assertion);

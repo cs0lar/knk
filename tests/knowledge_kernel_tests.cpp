@@ -150,12 +150,15 @@ void retracted_assertion_is_excluded_from_current_queries() {
 
     auto current = kernel.current(ALICE);
 
-    assert(current.size() == 1);
-    assert(current[0].id == other_id);
+    assert(current.size() == 0);
 
-    auto retracted_assertion = kernel.get(id);
-    assert(retracted_assertion.has_value());
-    assert(retracted_assertion->status == AssertionStatus::Retracted);
+    auto assertion = kernel.get(id);
+    assert(assertion.has_value());
+    assert(assertion->status == AssertionStatus::Retracted);
+
+    assertion = kernel.get(other_id);
+    assert(assertion.has_value());
+    assert(assertion->status == AssertionStatus::Retraction);
 
     cleanup(root);
 }
