@@ -20,6 +20,14 @@ class KnowledgeKernel {
     AssertionId commit(EntityId subject, PredicateId predicate, EntityId object, Timestamp valid_from,
                        Timestamp valid_to, Timestamp observed_at, double confidence);
 
+    AssertionId commit_retraction(EntityId subject, PredicateId predicate, EntityId object, Timestamp valid_from,
+                                  Timestamp valid_to, Timestamp observed_at, double confidence,
+                                  AssertionId retracts_id);
+
+    AssertionId commit_superseding(EntityId subject, PredicateId predicate, EntityId object, Timestamp valid_from,
+                                   Timestamp valid_to, Timestamp observed_at, double confidence,
+                                   AssertionId supersedes_id);
+
     void apply_replayed_assertion(const Assertion &assertion);
 
     void mark_superseded(AssertionId superseded_id);

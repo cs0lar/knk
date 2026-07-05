@@ -1,7 +1,10 @@
 #include "kernel/index_manager.hpp"
+#include "kernel/status.hpp"
+#include "kernel/time.hpp"
 #include <cassert>
 #include <filesystem>
 #include <iostream>
+#include <ostream>
 #include <string>
 
 #include <kernel/knowledge_kernel.hpp>
@@ -117,6 +120,92 @@ void current_assertion_returns_open_ended_assertion() {
 
     assert(current.size() == 1);
     assert(current[0].object == BETA);
+
+    cleanup(root);
+}
+
+void superseded_assertion_is_excluded_from_current_queries() {
+    auto root = test_root("superseded_assertion_is_excluded_from_current_queries");
+    KnowledgeKernel kernel(StorageConfig{root});
+
+    AssertionId id = kernel.commit(ALICE, WORKS_AT, ACME, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.95);
+
+    kernel.commit_superseding(ALICE, WORKS_AT, BETA, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.95, id);
+
+    auto current = kernel.current(ALICE);
+    assert(current.size() == 1);
+    assert(current[0].object == BETA);
+
+    cleanup(root);
+}
+
+void retracted_assertion_is_excluded_from_current_queries() {
+    auto root = test_root("retracted_assertion_is_excluded_from_current_queries");
+    KnowledgeKernel kernel(StorageConfig{root});
+
+    AssertionId id = kernel.commit(ALICE, WORKS_AT, ACME, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.95);
+
+    AssertionId other_id =
+        kernel.commit_retraction(ALICE, WORKS_AT, ACME, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.95, id);
+
+    auto current = kernel.current(ALICE);
+
+    assert(current.size() == 1);
+    assert(current[0].id == other_id);
+
+    auto retracted_assertion = kernel.get(id);
+    assert(retracted_assertion.has_value());
+    assert(retracted_assertion->status == AssertionStatus::Retracted);
+
+    cleanup(root);
+}
+
+void recovery_preserves_superseded_state() {
+
+    auto root = test_root("recovery_preserves_superseded_state");
+    KnowledgeKernel kernel(StorageConfig{root});
+
+    AssertionId id = kernel.commit(ALICE, WORKS_AT, ACME, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.95);
+
+    AssertionId other_id =
+        kernel.commit_superseding(ALICE, WORKS_AT, BETA, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.95, id);
+
+    KnowledgeKernel other_kernel(StorageConfig{root});
+
+    auto assertion = other_kernel.get(id);
+
+    assert(assertion.has_value());
+    assert(assertion->status == AssertionStatus::Superseded);
+
+    assertion = other_kernel.get(other_id);
+
+    assert(assertion.has_value());
+    assert(assertion->supersedes_id == id);
+
+    cleanup(root);
+}
+
+void recovery_preserves_retracted_state() {
+
+    auto root = test_root("recovery_preserves_retracted_state");
+    KnowledgeKernel kernel(StorageConfig{root});
+
+    AssertionId id = kernel.commit(ALICE, WORKS_AT, ACME, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.95);
+
+    AssertionId other_id =
+        kernel.commit_retraction(ALICE, WORKS_AT, ACME, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.95, id);
+
+    KnowledgeKernel other_kernel(StorageConfig{root});
+
+    auto assertion = other_kernel.get(id);
+
+    assert(assertion.has_value());
+    assert(assertion->status == AssertionStatus::Retracted);
+
+    assertion = other_kernel.get(other_id);
+
+    assert(assertion.has_value());
+    assert(assertion->retracts_id == id);
 
     cleanup(root);
 }
@@ -258,6 +347,10 @@ int main() {
     get_unknown_assertion_returns_nullopt();
     current_assertion_is_preserved_across_kernels();
     current_assertion_returns_open_ended_assertion();
+    superseded_assertion_is_excluded_from_current_queries();
+    retracted_assertion_is_excluded_from_current_queries();
+    recovery_preserves_superseded_state();
+    recovery_preserves_retracted_state();
     valid_at_returns_historical_assertion();
     valid_at_is_preserved_across_kernels();
     valid_at_respects_exclusive_valid_to();
