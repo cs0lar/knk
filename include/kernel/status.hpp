@@ -2,6 +2,6 @@
 
 namespace knk {
 
-enum class AssertionStatus { Active, Superseded, Retracted };
+enum class AssertionStatus { Active, Superseded, Retracted, Retraction };
 
 }

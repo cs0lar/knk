@@ -1,9 +1,12 @@
 #include "kernel/ids.hpp"
 #include "kernel/index_manager.hpp"
+#include "kernel/status.hpp"
 #include <kernel/knowledge_kernel.hpp>
 
 #include <cstdint>
+#include <iostream>
 #include <optional>
+#include <stdexcept>
 #include <unordered_map>
 #include <vector>
 
@@ -55,6 +58,41 @@ AssertionId KnowledgeKernel::commit(EntityId subject, PredicateId predicate, Ent
     return id;
 }
 
+AssertionId KnowledgeKernel::commit_retraction(EntityId subject, PredicateId predicate, EntityId object,
+                                               Timestamp valid_from, Timestamp valid_to, Timestamp observed_at,
+                                               double confidence, AssertionId retracts_id) {
+    if (retracts_id == 0 || !get(retracts_id).has_value()) {
+        throw std::runtime_error("invalid retraction target");
+    }
+
+    AssertionId id = next_id_;
+
+    Assertion assertion{
+        id, subject,    predicate, object, valid_from, valid_to, observed_at, confidence, AssertionStatus::Retraction,
+        0,  retracts_id};
+
+    storage_.append_assertion(assertion);
+    apply_replayed_assertion(assertion);
+
+    return id;
+}
+
+AssertionId KnowledgeKernel::commit_superseding(EntityId subject, PredicateId predicate, EntityId object,
+                                                Timestamp valid_from, Timestamp valid_to, Timestamp observed_at,
+                                                double confidence, AssertionId supersedes_id) {
+    AssertionId id = next_id_;
+
+    Assertion assertion{id,           subject,    predicate,
+                        object,       valid_from, valid_to,
+                        observed_at,  confidence, AssertionStatus::Active,
+                        supersedes_id};
+
+    storage_.append_assertion(assertion);
+    apply_replayed_assertion(assertion);
+
+    return id;
+}
+
 std::optional<Assertion> KnowledgeKernel::get(AssertionId id) const {
     if (id == 0 || id >= next_id_) {
         return std::nullopt;
@@ -92,7 +130,6 @@ std::vector<Assertion> KnowledgeKernel::current(EntityId subject) const {
 
         for (AssertionId id : current_assertions) {
             auto assertion = get(id);
-
             if (assertion.has_value()) {
                 result.push_back(*assertion);
             }
