@@ -2,7 +2,7 @@
 #include <iostream>
 #include <vector>
 
-#include <kernel/index_manager.hpp>
+#include "kernel/index_manager.hpp"
 
 using namespace knk;
 
@@ -23,15 +23,7 @@ constexpr Timestamp JUL_2_2024 = 1719878400;
 Assertion assertion(AssertionId id, EntityId subject, PredicateId predicate, EntityId object, Timestamp valid_from,
                     Timestamp valid_to, AssertionStatus status = AssertionStatus::Active) {
     return Assertion{
-        id,
-        subject,
-        predicate,
-        object,
-        valid_from,
-        valid_to,
-        JUL_2_2024,
-        0.95,
-        status,
+        id, subject, predicate, object, valid_from, valid_to, JUL_2_2024, 0.95, status,
     };
 }
 

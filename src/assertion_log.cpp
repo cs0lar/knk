@@ -1,7 +1,7 @@
-#include <kernel/assertion_log.hpp>
-
 #include <fstream>
 #include <stdexcept>
+
+#include "kernel/assertion_log.hpp"
 
 namespace knk {
 

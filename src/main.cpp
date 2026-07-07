@@ -1,7 +1,7 @@
-#include "kernel/index_manager.hpp"
 #include <iostream>
 
-#include <kernel/knowledge_kernel.hpp>
+#include "kernel/index_manager.hpp"
+#include "kernel/knowledge_kernel.hpp"
 
 using namespace knk;
 

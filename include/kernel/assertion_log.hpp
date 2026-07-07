@@ -3,7 +3,7 @@
 #include <filesystem>
 #include <vector>
 
-#include <kernel/assertion.hpp>
+#include "kernel/assertion.hpp"
 
 namespace knk {
 

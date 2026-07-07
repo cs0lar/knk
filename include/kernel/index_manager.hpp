@@ -4,10 +4,10 @@
 #include <unordered_set>
 #include <vector>
 
-#include <kernel/assertion.hpp>
-#include <kernel/ids.hpp>
-#include <kernel/subject_predicate_key.hpp>
-#include <kernel/time.hpp>
+#include "kernel/assertion.hpp"
+#include "kernel/ids.hpp"
+#include "kernel/subject_predicate_key.hpp"
+#include "kernel/time.hpp"
 
 namespace knk {
 
