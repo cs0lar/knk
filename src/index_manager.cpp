@@ -1,8 +1,9 @@
+#include <vector>
+
 #include "kernel/ids.hpp"
+#include "kernel/index_manager.hpp"
 #include "kernel/subject_predicate_key.hpp"
 #include "kernel/time.hpp"
-#include <kernel/index_manager.hpp>
-#include <vector>
 
 namespace knk {
 

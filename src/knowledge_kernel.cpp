@@ -1,7 +1,3 @@
-#include "kernel/ids.hpp"
-#include "kernel/index_manager.hpp"
-#include "kernel/status.hpp"
-#include <kernel/knowledge_kernel.hpp>
 
 #include <cstdint>
 #include <iostream>
@@ -9,6 +5,11 @@
 #include <stdexcept>
 #include <unordered_map>
 #include <vector>
+
+#include "kernel/ids.hpp"
+#include "kernel/index_manager.hpp"
+#include "kernel/knowledge_kernel.hpp"
+#include "kernel/status.hpp"
 
 namespace knk {
 
