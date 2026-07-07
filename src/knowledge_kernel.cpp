@@ -81,6 +81,10 @@ AssertionId KnowledgeKernel::commit_retraction(EntityId subject, PredicateId pre
 AssertionId KnowledgeKernel::commit_superseding(EntityId subject, PredicateId predicate, EntityId object,
                                                 Timestamp valid_from, Timestamp valid_to, Timestamp observed_at,
                                                 double confidence, AssertionId supersedes_id) {
+    if (supersedes_id == 0 || !get(supersedes_id).has_value()) {
+        throw std::runtime_error("invalid superseding target");
+    }
+
     AssertionId id = next_id_;
 
     Assertion assertion{id,           subject,    predicate,

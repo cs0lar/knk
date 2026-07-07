@@ -139,6 +139,27 @@ void superseded_assertion_is_excluded_from_current_queries() {
     cleanup(root);
 }
 
+void failed_supersession_does_not_persist_or_burn_id() {
+    auto root = test_root("failed_supersession_does_not_persist_or_burn_id");
+    bool exception_thrown = false;
+
+    KnowledgeKernel kernel(StorageConfig{root});
+
+    try {
+        kernel.commit_superseding(ALICE, WORKS_AT, BETA, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.95, 1);
+    } catch (std::runtime_error &err) {
+        exception_thrown = true;
+    }
+
+    assert(exception_thrown);
+
+    auto id = kernel.commit(ALICE, WORKS_AT, ACME, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.95);
+
+    assert(id == 1);
+
+    cleanup(root);
+}
+
 void retracted_assertion_is_excluded_from_current_queries() {
     auto root = test_root("retracted_assertion_is_excluded_from_current_queries");
     KnowledgeKernel kernel(StorageConfig{root});
@@ -351,6 +372,7 @@ int main() {
     current_assertion_is_preserved_across_kernels();
     current_assertion_returns_open_ended_assertion();
     superseded_assertion_is_excluded_from_current_queries();
+    failed_supersession_does_not_persist_or_burn_id();
     retracted_assertion_is_excluded_from_current_queries();
     recovery_preserves_superseded_state();
     recovery_preserves_retracted_state();
