@@ -1,4 +1,5 @@
 
+#include <algorithm>
 #include <cstdint>
 #include <iostream>
 #include <optional>
@@ -220,4 +221,79 @@ std::vector<Assertion> KnowledgeKernel::valid_at_known_at(EntityId subject, Time
 
     return result;
 }
+
+std::vector<Assertion> KnowledgeKernel::valid_time_timeline(EntityId subject, PredicateId predicate) const {
+    std::vector<Assertion> result;
+
+    auto assertions = index_manager_.assertions_for_subject(subject);
+    if (assertions.empty()) {
+        return result;
+    }
+
+    for (AssertionId id : assertions) {
+        auto assertion = get(id);
+        if (!assertion.has_value()) {
+            continue;
+        }
+
+        if (assertion->status == AssertionStatus::Active && assertion->predicate == predicate) {
+            result.push_back(*assertion);
+        }
+    }
+
+    std::sort(result.begin(), result.end(),
+              [](const Assertion &a, const Assertion &b) { return a.valid_from < b.valid_from; });
+
+    return result;
+}
+
+std::vector<Assertion> KnowledgeKernel::observed_time_timeline(EntityId subject, PredicateId predicate) const {
+    std::vector<Assertion> result;
+
+    auto assertions = index_manager_.assertions_for_subject(subject);
+    if (assertions.empty()) {
+        return result;
+    }
+
+    for (AssertionId id : assertions) {
+        auto assertion = get(id);
+        if (!assertion.has_value()) {
+            continue;
+        }
+
+        if (assertion->status == AssertionStatus::Active && assertion->predicate == predicate) {
+            result.push_back(*assertion);
+        }
+    }
+
+    std::sort(result.begin(), result.end(),
+              [](const Assertion &a, const Assertion &b) { return a.observed_at < b.observed_at; });
+
+    return result;
+}
+
+std::vector<Assertion> KnowledgeKernel::commit_history(EntityId subject, PredicateId predicate) const {
+    std::vector<Assertion> result;
+
+    auto assertions = index_manager_.assertions_for_subject(subject);
+    if (assertions.empty()) {
+        return result;
+    }
+
+    for (AssertionId id : assertions) {
+        auto assertion = get(id);
+        if (!assertion.has_value()) {
+            continue;
+        }
+
+        if (assertion->predicate == predicate) {
+            result.push_back(*assertion);
+        }
+    }
+
+    std::sort(result.begin(), result.end(), [](const Assertion &a, const Assertion &b) { return a.id < b.id; });
+
+    return result;
+}
+
 } // namespace knk
