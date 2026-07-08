@@ -46,6 +46,12 @@ class KnowledgeKernel {
 
     std::vector<Assertion> valid_at_known_at(EntityId subject, Timestamp valid_time, Timestamp observed_time) const;
 
+    std::vector<Assertion> valid_time_timeline(EntityId subject, PredicateId predicate) const;
+
+    std::vector<Assertion> observed_time_timeline(EntityId subject, PredicateId predicate) const;
+
+    std::vector<Assertion> commit_history(EntityId subject, PredicateId predicate) const;
+
   private:
     AssertionId next_id_ = 1;
 

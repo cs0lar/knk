@@ -4,6 +4,7 @@
 #include <ostream>
 #include <string>
 
+#include "kernel/ids.hpp"
 #include "kernel/index_manager.hpp"
 #include "kernel/knowledge_kernel.hpp"
 #include "kernel/status.hpp"
@@ -16,13 +17,16 @@ namespace {
 constexpr EntityId ALICE = 1;
 constexpr EntityId ACME = 100;
 constexpr EntityId BETA = 200;
+constexpr EntityId GAMMA = 300;
 constexpr PredicateId WORKS_AT = 10;
 
+constexpr Timestamp JAN_1_2020 = 1577894012;
 constexpr Timestamp JAN_1_2023 = 1672531200;
 constexpr Timestamp JAN_1_2024 = 1704067200;
 constexpr Timestamp JUL_1_2024 = 1719792000;
 constexpr Timestamp JUL_2_2024 = 1719878400;
 constexpr Timestamp JUL_3_2024 = 1719961200;
+constexpr Timestamp JUL_8_2024 = 1720450412;
 
 std::filesystem::path test_root(const std::string &name) {
     auto path = std::filesystem::temp_directory_path() / ("knowledge_kernel_" + name);
@@ -363,6 +367,86 @@ void constructor_replays_assertions_and_continues_ids() {
     cleanup(root);
 }
 
+void valid_time_timeline_only_returns_active_assertions_sorted_by_valid_from() {
+    auto root = test_root("valid_time_timeline_only_returns_active_assertions_sorted_by_valid_from");
+
+    KnowledgeKernel kernel(StorageConfig{root});
+
+    kernel.commit(ALICE, WORKS_AT, ACME, JAN_1_2020, OPEN_ENDED, JAN_1_2024, 0.95);
+
+    kernel.commit(ALICE, WORKS_AT, BETA, JUL_1_2024, OPEN_ENDED, JUL_1_2024, 0.90);
+
+    // we discover that alice actually left acme in 2023...
+    kernel.commit_superseding(ALICE, WORKS_AT, ACME, JAN_1_2020, JAN_1_2023, JUL_2_2024, 0.90, 1);
+
+    // ...then we discover an omitted job
+    kernel.commit(ALICE, WORKS_AT, GAMMA, JAN_1_2023, JUL_1_2024, JUL_8_2024, 0.90);
+
+    auto assertions = kernel.valid_time_timeline(ALICE, WORKS_AT);
+
+    assert(assertions.size() == 3);
+
+    assert(assertions[0].object == ACME);
+    assert(assertions[1].object == GAMMA);
+    assert(assertions[2].object == BETA);
+
+    cleanup(root);
+}
+
+void commit_history_returns_history_of_recorded_assertions() {
+    auto root = test_root("commit_history_returns_history_of_recorded_assertions");
+
+    KnowledgeKernel kernel(StorageConfig{root});
+
+    kernel.commit(ALICE, WORKS_AT, ACME, JAN_1_2020, OPEN_ENDED, JAN_1_2024, 0.95);
+
+    kernel.commit(ALICE, WORKS_AT, BETA, JUL_1_2024, OPEN_ENDED, JUL_1_2024, 0.90);
+
+    // we discover that alice actually left acme in 2023...
+    kernel.commit_superseding(ALICE, WORKS_AT, ACME, JAN_1_2020, JAN_1_2023, JUL_2_2024, 0.90, 1);
+
+    // ...then we discover an omitted job
+    kernel.commit(ALICE, WORKS_AT, GAMMA, JAN_1_2023, JUL_1_2024, JUL_8_2024, 0.90);
+
+    auto assertions = kernel.commit_history(ALICE, WORKS_AT);
+
+    assert(assertions.size() == 4);
+    assert(assertions[0].object == ACME);
+    assert(assertions[0].status == AssertionStatus::Superseded);
+    assert(assertions[1].object == BETA);
+    assert(assertions[2].object == ACME);
+    assert(assertions[2].status == AssertionStatus::Active);
+    assert(assertions[3].object == GAMMA);
+
+    cleanup(root);
+}
+
+void observed_time_timeline_only_return_active_assertions_sorted_by_observed_at() {
+    auto root = test_root("commit_history_returns_history_of_recorded_assertions");
+
+    KnowledgeKernel kernel(StorageConfig{root});
+
+    kernel.commit(ALICE, WORKS_AT, BETA, JUL_1_2024, OPEN_ENDED, JAN_1_2024, 0.90);
+
+    kernel.commit(ALICE, WORKS_AT, ACME, JAN_1_2020, OPEN_ENDED, JUL_1_2024, 0.95);
+
+    // we discover that alice actually left acme in 2023...
+    kernel.commit_superseding(ALICE, WORKS_AT, ACME, JAN_1_2020, JAN_1_2023, JUL_2_2024, 0.90, 2);
+
+    // ...then we discover an omitted job
+    kernel.commit(ALICE, WORKS_AT, GAMMA, JAN_1_2023, JUL_1_2024, JUL_8_2024, 0.90);
+
+    auto assertions = kernel.observed_time_timeline(ALICE, WORKS_AT);
+
+    assert(assertions.size() == 3);
+
+    assert(assertions[0].object == BETA);
+    assert(assertions[1].object == ACME);
+    assert(assertions[2].object == GAMMA);
+
+    cleanup(root);
+}
+
 } // namespace
 
 int main() {
@@ -383,6 +467,9 @@ int main() {
     known_at_excludes_future_observed_fact();
     assertions_for_subject_returns_all_subject_assertions();
     constructor_replays_assertions_and_continues_ids();
+    valid_time_timeline_only_returns_active_assertions_sorted_by_valid_from();
+    commit_history_returns_history_of_recorded_assertions();
+    observed_time_timeline_only_return_active_assertions_sorted_by_observed_at();
 
     std::cout << "All assertion_kernel tests passed.\n";
     return 0;
