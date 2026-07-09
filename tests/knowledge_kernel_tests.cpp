@@ -1,13 +1,17 @@
+#include <algorithm>
 #include <cassert>
+#include <cerrno>
 #include <filesystem>
 #include <iostream>
 #include <ostream>
 #include <string>
 
+#include "kernel/assertion.hpp"
 #include "kernel/ids.hpp"
 #include "kernel/index_manager.hpp"
 #include "kernel/knowledge_kernel.hpp"
 #include "kernel/status.hpp"
+#include "kernel/storage_config.hpp"
 #include "kernel/time.hpp"
 
 using namespace knk;
@@ -18,6 +22,8 @@ constexpr EntityId ALICE = 1;
 constexpr EntityId ACME = 100;
 constexpr EntityId BETA = 200;
 constexpr EntityId GAMMA = 300;
+constexpr EntityId UNIVERSITY = 400;
+constexpr EntityId STARTUP = 500;
 constexpr PredicateId WORKS_AT = 10;
 
 constexpr Timestamp JAN_1_2020 = 1577894012;
@@ -367,6 +373,52 @@ void constructor_replays_assertions_and_continues_ids() {
     cleanup(root);
 }
 
+void replay_does_not_append_to_log() {
+    auto root = test_root("replay_does_not_append_to_log");
+
+    {
+        KnowledgeKernel kernel(StorageConfig{root});
+        auto id = kernel.commit(ALICE, WORKS_AT, ACME, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.95);
+    }
+
+    KnowledgeKernel kernel(StorageConfig{root});
+
+    auto assertions = kernel.commit_history(ALICE, WORKS_AT);
+
+    assert(assertions.size() == 1);
+
+    KnowledgeKernel other_kernel(StorageConfig{root});
+
+    assertions = other_kernel.commit_history(ALICE, WORKS_AT);
+
+    assert(assertions.size() == 1);
+
+    cleanup(root);
+}
+
+void conflicting_active_assertions_can_coexist() {
+    auto root = test_root("conflicting_active_assertions_can_coexist");
+
+    KnowledgeKernel kernel(StorageConfig{root});
+
+    kernel.commit(ALICE, WORKS_AT, UNIVERSITY, JAN_1_2020, OPEN_ENDED, JAN_1_2024, 0.95);
+
+    kernel.commit(ALICE, WORKS_AT, STARTUP, JAN_1_2023, OPEN_ENDED, JUL_1_2024, 0.90);
+
+    auto assertions = kernel.current(ALICE);
+
+    assert(assertions.size() == 2);
+
+    for (EntityId object : {UNIVERSITY, STARTUP}) {
+        auto found = std::find_if(assertions.begin(), assertions.end(),
+                                  [&object](const Assertion &a) { return a.object == object; });
+
+        assert(found != assertions.end());
+    }
+
+    cleanup(root);
+}
+
 void valid_time_timeline_only_returns_active_assertions_sorted_by_valid_from() {
     auto root = test_root("valid_time_timeline_only_returns_active_assertions_sorted_by_valid_from");
 
@@ -467,6 +519,8 @@ int main() {
     known_at_excludes_future_observed_fact();
     assertions_for_subject_returns_all_subject_assertions();
     constructor_replays_assertions_and_continues_ids();
+    replay_does_not_append_to_log();
+    conflicting_active_assertions_can_coexist();
     valid_time_timeline_only_returns_active_assertions_sorted_by_valid_from();
     commit_history_returns_history_of_recorded_assertions();
     observed_time_timeline_only_return_active_assertions_sorted_by_observed_at();
