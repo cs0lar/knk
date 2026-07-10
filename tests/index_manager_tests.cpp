@@ -106,6 +106,46 @@ void removing_unknown_or_non_current_assertion_is_a_noop() {
     assert_ids_equal(indexes.assertions_for_subject(ALICE), {1, 2});
 }
 
+Assertion assertion_observed_at(AssertionId id, EntityId subject, PredicateId predicate, EntityId object,
+                                Timestamp observed_at) {
+    return Assertion{
+        id, subject, predicate, object, JAN_1_2023, OPEN_ENDED, observed_at, 0.95, AssertionStatus::Active,
+    };
+}
+
+void observed_before_returns_ids_with_observed_at_at_or_before_the_given_time() {
+    IndexManager indexes;
+
+    indexes.add(assertion_observed_at(1, ALICE, WORKS_AT, ACME, JAN_1_2023));
+    indexes.add(assertion_observed_at(2, ALICE, LIVES_IN, BETA, JAN_1_2024));
+    indexes.add(assertion_observed_at(3, ALICE, WORKS_AT, BETA, JUL_1_2024));
+
+    assert_ids_equal(indexes.observed_before(ALICE, JAN_1_2023), {1});
+    assert_ids_equal(indexes.observed_before(ALICE, JAN_1_2024), {1, 2});
+    assert_ids_equal(indexes.observed_before(ALICE, JUL_1_2024), {1, 2, 3});
+    assert(indexes.observed_before(ALICE, JAN_1_2023 - 1).empty());
+}
+
+void observed_before_orders_entries_by_observed_at_regardless_of_insertion_order() {
+    IndexManager indexes;
+
+    indexes.add(assertion_observed_at(1, ALICE, WORKS_AT, ACME, JUL_1_2024));
+    indexes.add(assertion_observed_at(2, ALICE, LIVES_IN, BETA, JAN_1_2023));
+    indexes.add(assertion_observed_at(3, ALICE, WORKS_AT, BETA, JAN_1_2024));
+
+    assert_ids_equal(indexes.observed_before(ALICE, JUL_1_2024), {2, 3, 1});
+}
+
+void observed_before_scopes_to_subject_and_handles_unknown_subject() {
+    IndexManager indexes;
+
+    indexes.add(assertion_observed_at(1, ALICE, WORKS_AT, ACME, JAN_1_2023));
+    indexes.add(assertion_observed_at(2, BOB, WORKS_AT, ACME, JAN_1_2023));
+
+    assert_ids_equal(indexes.observed_before(ALICE, JUL_1_2024), {1});
+    assert(indexes.observed_before(999, JUL_1_2024).empty());
+}
+
 } // namespace
 
 int main() {
@@ -115,6 +155,9 @@ int main() {
     mark_superseded_removes_only_the_requested_current_assertion();
     mark_retracted_removes_only_the_requested_current_assertion();
     removing_unknown_or_non_current_assertion_is_a_noop();
+    observed_before_returns_ids_with_observed_at_at_or_before_the_given_time();
+    observed_before_orders_entries_by_observed_at_regardless_of_insertion_order();
+    observed_before_scopes_to_subject_and_handles_unknown_subject();
 
     std::cout << "All index_manager tests passed.\n";
     return 0;

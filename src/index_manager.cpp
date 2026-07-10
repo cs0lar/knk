@@ -1,3 +1,5 @@
+#include <algorithm>
+#include <utility>
 #include <vector>
 
 #include "kernel/ids.hpp"
@@ -16,6 +18,12 @@ void IndexManager::add(const Assertion &assertion) {
         assertion_keys_[assertion.id] = key;
         predicate_index_[assertion.subject].insert(assertion.predicate);
     }
+
+    auto &observed_entries = observed_time_index_[assertion.subject];
+    auto insert_at = std::upper_bound(
+        observed_entries.begin(), observed_entries.end(), std::make_pair(assertion.observed_at, assertion.id),
+        [](const auto &lhs, const auto &rhs) { return lhs.first < rhs.first; });
+    observed_entries.insert(insert_at, {assertion.observed_at, assertion.id});
 }
 
 void IndexManager::mark_superseded(AssertionId id) { remove_from_current(id); }
@@ -84,6 +92,25 @@ std::vector<AssertionId> IndexManager::current_assertions(EntityId subject, Pred
 
     for (AssertionId id : assertion_ids->second) {
         result.push_back(id);
+    }
+
+    return result;
+}
+
+std::vector<AssertionId> IndexManager::observed_before(EntityId subject, Timestamp t) const {
+    std::vector<AssertionId> result;
+
+    auto it = observed_time_index_.find(subject);
+
+    if (it == observed_time_index_.end()) {
+        return result;
+    }
+
+    auto end = std::upper_bound(it->second.begin(), it->second.end(), t,
+                                 [](Timestamp value, const auto &entry) { return value < entry.first; });
+
+    for (auto entry = it->second.begin(); entry != end; ++entry) {
+        result.push_back(entry->second);
     }
 
     return result;
