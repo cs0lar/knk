@@ -174,7 +174,7 @@ std::vector<Assertion> KnowledgeKernel::valid_at(EntityId subject, Timestamp t) 
 std::vector<Assertion> KnowledgeKernel::known_at(EntityId subject, Timestamp t) const {
     std::vector<Assertion> result;
 
-    auto assertions = index_manager_.assertions_for_subject(subject);
+    auto assertions = index_manager_.observed_before(subject, t);
     if (assertions.empty()) {
         return result;
     }
@@ -185,9 +185,7 @@ std::vector<Assertion> KnowledgeKernel::known_at(EntityId subject, Timestamp t) 
             continue;
         }
 
-        bool is_observed = assertion->observed_at <= t;
-
-        if (assertion->status == AssertionStatus::Active && is_observed) {
+        if (assertion->status == AssertionStatus::Active) {
             result.push_back(*assertion);
         }
     }
@@ -199,7 +197,7 @@ std::vector<Assertion> KnowledgeKernel::valid_at_known_at(EntityId subject, Time
                                                           Timestamp observed_time) const {
     std::vector<Assertion> result;
 
-    auto assertions = index_manager_.assertions_for_subject(subject);
+    auto assertions = index_manager_.observed_before(subject, observed_time);
     if (assertions.empty()) {
         return result;
     }
@@ -212,9 +210,8 @@ std::vector<Assertion> KnowledgeKernel::valid_at_known_at(EntityId subject, Time
 
         bool starts_before_or_at = assertion->valid_from <= valid_time;
         bool ends_after = assertion->valid_to == OPEN_ENDED || valid_time < assertion->valid_to;
-        bool is_observed = assertion->observed_at <= observed_time;
 
-        if (assertion->status == AssertionStatus::Active && is_observed && starts_before_or_at && ends_after) {
+        if (assertion->status == AssertionStatus::Active && starts_before_or_at && ends_after) {
             result.push_back(*assertion);
         }
     }
