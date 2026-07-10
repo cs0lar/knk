@@ -62,7 +62,7 @@ Core responsibilities :
 * Support superseded and retracted assertions.
 * Maintain clear tests for temporal semantics.
 
-### Phase 2 — Storage engine/current phase
+### Phase 2 — Storage engine ✅
 
 Current focus :
 
@@ -120,18 +120,22 @@ Current implementation status :
 	* Core types, `AssertionStatus`, storage classes, and `KnowledgeKernel` now live in the `knk` namespace.
 	* Verified on 2026-07-09: `cmake --build build && ctest --test-dir build --output-on-failure` passes with the current CMake targets after replay and conflicting-active-assertion regression tests.
 
-### Phase 3 — Persistent indexes
+### Phase 3 — Persistent indexes/current phase
 
 Future work :
 
 	* Subject index
 	* Predicate index
 	* Current - state index
-	* Observed - time index
+	* Observed - time index ✅ (in-memory only so far; see Phase 2 implementation status for `IndexManager::observed_before`)
 
 	Indexes are derived acceleration structures. They must be rebuildable from the assertion log.
 
 	If persistent indexes are missing or corrupted, the kernel should still recover from the log.
+
+	Remaining Phase 3 work: making the subject, predicate, current-state, and observed-time indexes durable/persisted
+	to disk (not just rebuilt in memory from the log on every startup), with corruption of the persisted index files
+	falling back to a full log replay.
 
 ### Phase 4 — Storage engine internals
 
