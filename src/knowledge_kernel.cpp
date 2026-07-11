@@ -28,9 +28,24 @@ KnowledgeKernel::KnowledgeKernel(StorageConfig config) : storage_(config), index
         observed_time_index_restored = false;
     }
 
+    bool subject_index_restored = false;
+    try {
+        auto entries = storage_.load_subject_index();
+        for (const auto &entry : entries) {
+            index_manager_.restore_subject_entry(entry.subject, entry.assertion_id);
+        }
+        subject_index_restored = true;
+    } catch (const std::runtime_error &) {
+        subject_index_restored = false;
+    }
+
     for (const auto &record : log_records) {
-        if (observed_time_index_restored) {
+        if (observed_time_index_restored && subject_index_restored) {
+            apply_replayed_assertion_without_observed_time_and_subject(record);
+        } else if (observed_time_index_restored) {
             apply_replayed_assertion_without_observed_time(record);
+        } else if (subject_index_restored) {
+            apply_replayed_assertion_without_subject(record);
         } else {
             apply_replayed_assertion(record);
         }
@@ -42,6 +57,14 @@ KnowledgeKernel::KnowledgeKernel(StorageConfig config) : storage_(config), index
             records.push_back(ObservedTimeIndexRecord{subject, observed_at, id});
         }
         storage_.rewrite_observed_time_index(records);
+    }
+
+    if (!subject_index_restored) {
+        std::vector<SubjectIndexRecord> records;
+        for (const auto &[subject, id] : index_manager_.subject_index_entries()) {
+            records.push_back(SubjectIndexRecord{subject, id});
+        }
+        storage_.rewrite_subject_index(records);
     }
 }
 
@@ -70,7 +93,39 @@ void KnowledgeKernel::apply_replayed_assertion_without_observed_time(const Asser
     }
 
     assertions_.push_back(assertion);
-    index_manager_.add_without_observed_time(assertion);
+    index_manager_.add_without_observed_time_and_subject(assertion);
+    index_manager_.restore_subject_entry(assertion.subject, assertion.id);
+
+    next_id_ = std::max(next_id_, assertion.id + 1);
+}
+
+void KnowledgeKernel::apply_replayed_assertion_without_subject(const Assertion &assertion) {
+    if (assertion.supersedes_id != 0) {
+        mark_superseded(assertion.supersedes_id);
+    }
+
+    if (assertion.retracts_id != 0) {
+        mark_retracted(assertion.retracts_id);
+    }
+
+    assertions_.push_back(assertion);
+    index_manager_.add_without_observed_time_and_subject(assertion);
+    index_manager_.restore_observed_time_entry(assertion.subject, assertion.observed_at, assertion.id);
+
+    next_id_ = std::max(next_id_, assertion.id + 1);
+}
+
+void KnowledgeKernel::apply_replayed_assertion_without_observed_time_and_subject(const Assertion &assertion) {
+    if (assertion.supersedes_id != 0) {
+        mark_superseded(assertion.supersedes_id);
+    }
+
+    if (assertion.retracts_id != 0) {
+        mark_retracted(assertion.retracts_id);
+    }
+
+    assertions_.push_back(assertion);
+    index_manager_.add_without_observed_time_and_subject(assertion);
 
     next_id_ = std::max(next_id_, assertion.id + 1);
 }
@@ -94,6 +149,7 @@ AssertionId KnowledgeKernel::commit(EntityId subject, PredicateId predicate, Ent
 
     storage_.append_assertion(assertion);
     storage_.append_observed_time_entry(assertion.subject, assertion.observed_at, assertion.id);
+    storage_.append_subject_entry(assertion.subject, assertion.id);
     apply_replayed_assertion(assertion);
 
     return id;
@@ -114,6 +170,7 @@ AssertionId KnowledgeKernel::commit_retraction(EntityId subject, PredicateId pre
 
     storage_.append_assertion(assertion);
     storage_.append_observed_time_entry(assertion.subject, assertion.observed_at, assertion.id);
+    storage_.append_subject_entry(assertion.subject, assertion.id);
     apply_replayed_assertion(assertion);
 
     return id;
@@ -135,6 +192,7 @@ AssertionId KnowledgeKernel::commit_superseding(EntityId subject, PredicateId pr
 
     storage_.append_assertion(assertion);
     storage_.append_observed_time_entry(assertion.subject, assertion.observed_at, assertion.id);
+    storage_.append_subject_entry(assertion.subject, assertion.id);
     apply_replayed_assertion(assertion);
 
     return id;

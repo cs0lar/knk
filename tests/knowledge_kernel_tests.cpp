@@ -560,6 +560,88 @@ void corrupt_observed_time_index_falls_back_to_replay_and_self_heals() {
     cleanup(root);
 }
 
+void assertions_for_subject_is_restored_from_persisted_subject_index_across_kernels() {
+    auto root = test_root("assertions_for_subject_is_restored_from_persisted_subject_index_across_kernels");
+
+    {
+        KnowledgeKernel kernel(StorageConfig{root});
+
+        kernel.commit(ALICE, WORKS_AT, ACME, JAN_1_2023, JUL_1_2024, JUL_1_2024, 0.95);
+        kernel.commit(ALICE, WORKS_AT, BETA, JUL_1_2024, OPEN_ENDED, JUL_2_2024, 0.90);
+    }
+
+    KnowledgeKernel other_kernel(StorageConfig{root});
+
+    auto assertions = other_kernel.assertions_for_subject(ALICE);
+
+    assert(assertions.size() == 2);
+    assert(assertions[0].object == ACME);
+    assert(assertions[1].object == BETA);
+
+    cleanup(root);
+}
+
+void corrupt_subject_index_falls_back_to_replay_and_self_heals() {
+    auto root = test_root("corrupt_subject_index_falls_back_to_replay_and_self_heals");
+
+    {
+        KnowledgeKernel kernel(StorageConfig{root});
+
+        kernel.commit(ALICE, WORKS_AT, ACME, JAN_1_2023, JUL_1_2024, JUL_1_2024, 0.95);
+        kernel.commit(ALICE, WORKS_AT, BETA, JUL_1_2024, OPEN_ENDED, JUL_2_2024, 0.90);
+    }
+
+    auto index_path = StorageConfig{root}.subject_index_path();
+    {
+        std::ofstream out(index_path, std::ios::binary | std::ios::trunc);
+        uint32_t bad_record_size = 1;
+        out.write(reinterpret_cast<const char *>(&bad_record_size), sizeof(bad_record_size));
+    }
+
+    KnowledgeKernel recovered_kernel(StorageConfig{root});
+
+    auto assertions = recovered_kernel.assertions_for_subject(ALICE);
+    assert(assertions.size() == 2);
+
+    // the self-heal rewrite above should have replaced the corrupt file, so a further
+    // reopen still recovers correctly (this time via direct restore, not fallback).
+    KnowledgeKernel reopened_kernel(StorageConfig{root});
+
+    assertions = reopened_kernel.assertions_for_subject(ALICE);
+    assert(assertions.size() == 2);
+
+    cleanup(root);
+}
+
+void corrupt_both_indexes_falls_back_to_full_replay_and_self_heals() {
+    auto root = test_root("corrupt_both_indexes_falls_back_to_full_replay_and_self_heals");
+
+    {
+        KnowledgeKernel kernel(StorageConfig{root});
+
+        kernel.commit(ALICE, WORKS_AT, ACME, JAN_1_2023, JUL_1_2024, JUL_1_2024, 0.95);
+        kernel.commit(ALICE, WORKS_AT, BETA, JUL_1_2024, OPEN_ENDED, JUL_2_2024, 0.90);
+    }
+
+    auto config = StorageConfig{root};
+    for (const auto &index_path : {config.observed_time_index_path(), config.subject_index_path()}) {
+        std::ofstream out(index_path, std::ios::binary | std::ios::trunc);
+        uint32_t bad_record_size = 1;
+        out.write(reinterpret_cast<const char *>(&bad_record_size), sizeof(bad_record_size));
+    }
+
+    KnowledgeKernel recovered_kernel(StorageConfig{root});
+
+    auto assertions = recovered_kernel.assertions_for_subject(ALICE);
+    assert(assertions.size() == 2);
+
+    auto known = recovered_kernel.known_at(ALICE, JUL_1_2024);
+    assert(known.size() == 1);
+    assert(known[0].object == ACME);
+
+    cleanup(root);
+}
+
 } // namespace
 
 int main() {
@@ -587,6 +669,9 @@ int main() {
     observed_time_timeline_only_return_active_assertions_sorted_by_observed_at();
     known_at_is_restored_from_persisted_observed_time_index_across_kernels();
     corrupt_observed_time_index_falls_back_to_replay_and_self_heals();
+    assertions_for_subject_is_restored_from_persisted_subject_index_across_kernels();
+    corrupt_subject_index_falls_back_to_replay_and_self_heals();
+    corrupt_both_indexes_falls_back_to_full_replay_and_self_heals();
 
     std::cout << "All assertion_kernel tests passed.\n";
     return 0;

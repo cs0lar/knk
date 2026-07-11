@@ -32,6 +32,10 @@ class KnowledgeKernel {
 
     void apply_replayed_assertion_without_observed_time(const Assertion &assertion);
 
+    void apply_replayed_assertion_without_subject(const Assertion &assertion);
+
+    void apply_replayed_assertion_without_observed_time_and_subject(const Assertion &assertion);
+
     void mark_superseded(AssertionId superseded_id);
 
     void mark_retracted(AssertionId retracted_id);
