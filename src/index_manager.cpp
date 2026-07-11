@@ -10,20 +10,27 @@
 
 namespace knk {
 
+bool is_current_assertion(const Assertion &assertion) {
+    return assertion.status == AssertionStatus::Active && assertion.valid_to == OPEN_ENDED;
+}
+
 void IndexManager::add(const Assertion &assertion) {
-    add_without_observed_time_and_subject(assertion);
+    restore_current_index_entry(assertion.subject, assertion.predicate, assertion.id, is_current_assertion(assertion));
     restore_subject_entry(assertion.subject, assertion.id);
     restore_observed_time_entry(assertion.subject, assertion.observed_at, assertion.id);
 }
 
-void IndexManager::add_without_observed_time_and_subject(const Assertion &assertion) {
-    SubjectPredicateKey key{assertion.subject, assertion.predicate};
-
-    if (assertion.status == AssertionStatus::Active && assertion.valid_to == OPEN_ENDED) {
-        current_index_[key].push_back(assertion.id);
-        assertion_keys_[assertion.id] = key;
-        predicate_index_[assertion.subject].insert(assertion.predicate);
+void IndexManager::restore_current_index_entry(EntityId subject, PredicateId predicate, AssertionId id,
+                                               bool active) {
+    if (!active) {
+        remove_from_current(id);
+        return;
     }
+
+    SubjectPredicateKey key{subject, predicate};
+    current_index_[key].push_back(id);
+    assertion_keys_[id] = key;
+    predicate_index_[subject].insert(predicate);
 }
 
 void IndexManager::restore_observed_time_entry(EntityId subject, Timestamp observed_at, AssertionId id) {
@@ -146,6 +153,18 @@ std::vector<std::pair<EntityId, AssertionId>> IndexManager::subject_index_entrie
     for (const auto &[subject, ids] : subject_index_) {
         for (AssertionId id : ids) {
             result.emplace_back(subject, id);
+        }
+    }
+
+    return result;
+}
+
+std::vector<std::tuple<EntityId, PredicateId, AssertionId>> IndexManager::current_index_entries() const {
+    std::vector<std::tuple<EntityId, PredicateId, AssertionId>> result;
+
+    for (const auto &[key, ids] : current_index_) {
+        for (AssertionId id : ids) {
+            result.emplace_back(key.subject, key.predicate, id);
         }
     }
 

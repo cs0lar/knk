@@ -28,13 +28,7 @@ class KnowledgeKernel {
                                    Timestamp valid_to, Timestamp observed_at, double confidence,
                                    AssertionId supersedes_id);
 
-    void apply_replayed_assertion(const Assertion &assertion);
-
-    void apply_replayed_assertion_without_observed_time(const Assertion &assertion);
-
-    void apply_replayed_assertion_without_subject(const Assertion &assertion);
-
-    void apply_replayed_assertion_without_observed_time_and_subject(const Assertion &assertion);
+    void apply(const Assertion &assertion);
 
     void mark_superseded(AssertionId superseded_id);
 
@@ -59,6 +53,8 @@ class KnowledgeKernel {
     std::vector<Assertion> commit_history(EntityId subject, PredicateId predicate) const;
 
   private:
+    void restore_assertion(const Assertion &assertion);
+
     AssertionId next_id_ = 1;
 
     StorageEngine storage_;
