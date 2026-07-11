@@ -17,58 +17,73 @@ namespace knk {
 KnowledgeKernel::KnowledgeKernel(StorageConfig config) : storage_(config), index_manager_() {
     auto log_records = storage_.load_assertions();
 
-    bool observed_time_index_restored = false;
+    bool indexes_restored = true;
+
     try {
         auto entries = storage_.load_observed_time_index();
         for (const auto &entry : entries) {
             index_manager_.restore_observed_time_entry(entry.subject, entry.observed_at, entry.assertion_id);
         }
-        observed_time_index_restored = true;
     } catch (const std::runtime_error &) {
-        observed_time_index_restored = false;
+        indexes_restored = false;
     }
 
-    bool subject_index_restored = false;
     try {
         auto entries = storage_.load_subject_index();
         for (const auto &entry : entries) {
             index_manager_.restore_subject_entry(entry.subject, entry.assertion_id);
         }
-        subject_index_restored = true;
     } catch (const std::runtime_error &) {
-        subject_index_restored = false;
+        indexes_restored = false;
+    }
+
+    try {
+        auto entries = storage_.load_current_index();
+        for (const auto &entry : entries) {
+            index_manager_.restore_current_index_entry(entry.subject, entry.predicate, entry.assertion_id,
+                                                        entry.active);
+        }
+    } catch (const std::runtime_error &) {
+        indexes_restored = false;
+    }
+
+    // A persisted index file is either fully trustworthy or not: if any one of them is missing/corrupt, discard
+    // whatever partial state the others contributed and rebuild every index uniformly from the log below, rather
+    // than tracking which of the three succeeded independently.
+    if (!indexes_restored) {
+        index_manager_ = IndexManager();
     }
 
     for (const auto &record : log_records) {
-        if (observed_time_index_restored && subject_index_restored) {
-            apply_replayed_assertion_without_observed_time_and_subject(record);
-        } else if (observed_time_index_restored) {
-            apply_replayed_assertion_without_observed_time(record);
-        } else if (subject_index_restored) {
-            apply_replayed_assertion_without_subject(record);
+        if (indexes_restored) {
+            restore_assertion(record);
         } else {
-            apply_replayed_assertion(record);
+            apply(record);
         }
     }
 
-    if (!observed_time_index_restored) {
-        std::vector<ObservedTimeIndexRecord> records;
+    if (!indexes_restored) {
+        std::vector<ObservedTimeIndexRecord> observed_time_records;
         for (const auto &[subject, observed_at, id] : index_manager_.observed_time_entries()) {
-            records.push_back(ObservedTimeIndexRecord{subject, observed_at, id});
+            observed_time_records.push_back(ObservedTimeIndexRecord{subject, observed_at, id});
         }
-        storage_.rewrite_observed_time_index(records);
-    }
+        storage_.rewrite_observed_time_index(observed_time_records);
 
-    if (!subject_index_restored) {
-        std::vector<SubjectIndexRecord> records;
+        std::vector<SubjectIndexRecord> subject_records;
         for (const auto &[subject, id] : index_manager_.subject_index_entries()) {
-            records.push_back(SubjectIndexRecord{subject, id});
+            subject_records.push_back(SubjectIndexRecord{subject, id});
         }
-        storage_.rewrite_subject_index(records);
+        storage_.rewrite_subject_index(subject_records);
+
+        std::vector<CurrentIndexRecord> current_records;
+        for (const auto &[subject, predicate, id] : index_manager_.current_index_entries()) {
+            current_records.push_back(CurrentIndexRecord{subject, predicate, id, true});
+        }
+        storage_.rewrite_current_index(current_records);
     }
 }
 
-void KnowledgeKernel::apply_replayed_assertion(const Assertion &assertion) {
+void KnowledgeKernel::apply(const Assertion &assertion) {
     if (assertion.supersedes_id != 0) {
         mark_superseded(assertion.supersedes_id);
     }
@@ -83,49 +98,16 @@ void KnowledgeKernel::apply_replayed_assertion(const Assertion &assertion) {
     next_id_ = std::max(next_id_, assertion.id + 1);
 }
 
-void KnowledgeKernel::apply_replayed_assertion_without_observed_time(const Assertion &assertion) {
+void KnowledgeKernel::restore_assertion(const Assertion &assertion) {
     if (assertion.supersedes_id != 0) {
-        mark_superseded(assertion.supersedes_id);
+        assertions_[assertion.supersedes_id - 1].status = AssertionStatus::Superseded;
     }
 
     if (assertion.retracts_id != 0) {
-        mark_retracted(assertion.retracts_id);
+        assertions_[assertion.retracts_id - 1].status = AssertionStatus::Retracted;
     }
 
     assertions_.push_back(assertion);
-    index_manager_.add_without_observed_time_and_subject(assertion);
-    index_manager_.restore_subject_entry(assertion.subject, assertion.id);
-
-    next_id_ = std::max(next_id_, assertion.id + 1);
-}
-
-void KnowledgeKernel::apply_replayed_assertion_without_subject(const Assertion &assertion) {
-    if (assertion.supersedes_id != 0) {
-        mark_superseded(assertion.supersedes_id);
-    }
-
-    if (assertion.retracts_id != 0) {
-        mark_retracted(assertion.retracts_id);
-    }
-
-    assertions_.push_back(assertion);
-    index_manager_.add_without_observed_time_and_subject(assertion);
-    index_manager_.restore_observed_time_entry(assertion.subject, assertion.observed_at, assertion.id);
-
-    next_id_ = std::max(next_id_, assertion.id + 1);
-}
-
-void KnowledgeKernel::apply_replayed_assertion_without_observed_time_and_subject(const Assertion &assertion) {
-    if (assertion.supersedes_id != 0) {
-        mark_superseded(assertion.supersedes_id);
-    }
-
-    if (assertion.retracts_id != 0) {
-        mark_retracted(assertion.retracts_id);
-    }
-
-    assertions_.push_back(assertion);
-    index_manager_.add_without_observed_time_and_subject(assertion);
 
     next_id_ = std::max(next_id_, assertion.id + 1);
 }
@@ -150,7 +132,9 @@ AssertionId KnowledgeKernel::commit(EntityId subject, PredicateId predicate, Ent
     storage_.append_assertion(assertion);
     storage_.append_observed_time_entry(assertion.subject, assertion.observed_at, assertion.id);
     storage_.append_subject_entry(assertion.subject, assertion.id);
-    apply_replayed_assertion(assertion);
+    storage_.append_current_index_entry(assertion.subject, assertion.predicate, assertion.id,
+                                        is_current_assertion(assertion));
+    apply(assertion);
 
     return id;
 }
@@ -158,7 +142,8 @@ AssertionId KnowledgeKernel::commit(EntityId subject, PredicateId predicate, Ent
 AssertionId KnowledgeKernel::commit_retraction(EntityId subject, PredicateId predicate, EntityId object,
                                                Timestamp valid_from, Timestamp valid_to, Timestamp observed_at,
                                                double confidence, AssertionId retracts_id) {
-    if (retracts_id == 0 || !get(retracts_id).has_value()) {
+    auto target = get(retracts_id);
+    if (retracts_id == 0 || !target.has_value()) {
         throw std::runtime_error("invalid retraction target");
     }
 
@@ -171,7 +156,10 @@ AssertionId KnowledgeKernel::commit_retraction(EntityId subject, PredicateId pre
     storage_.append_assertion(assertion);
     storage_.append_observed_time_entry(assertion.subject, assertion.observed_at, assertion.id);
     storage_.append_subject_entry(assertion.subject, assertion.id);
-    apply_replayed_assertion(assertion);
+    // Retraction-status records are never current (see is_current_assertion), so only the retracted
+    // target needs a current-index tombstone here.
+    storage_.append_current_index_entry(target->subject, target->predicate, retracts_id, false);
+    apply(assertion);
 
     return id;
 }
@@ -179,7 +167,8 @@ AssertionId KnowledgeKernel::commit_retraction(EntityId subject, PredicateId pre
 AssertionId KnowledgeKernel::commit_superseding(EntityId subject, PredicateId predicate, EntityId object,
                                                 Timestamp valid_from, Timestamp valid_to, Timestamp observed_at,
                                                 double confidence, AssertionId supersedes_id) {
-    if (supersedes_id == 0 || !get(supersedes_id).has_value()) {
+    auto target = get(supersedes_id);
+    if (supersedes_id == 0 || !target.has_value()) {
         throw std::runtime_error("invalid superseding target");
     }
 
@@ -193,7 +182,10 @@ AssertionId KnowledgeKernel::commit_superseding(EntityId subject, PredicateId pr
     storage_.append_assertion(assertion);
     storage_.append_observed_time_entry(assertion.subject, assertion.observed_at, assertion.id);
     storage_.append_subject_entry(assertion.subject, assertion.id);
-    apply_replayed_assertion(assertion);
+    storage_.append_current_index_entry(assertion.subject, assertion.predicate, assertion.id,
+                                        is_current_assertion(assertion));
+    storage_.append_current_index_entry(target->subject, target->predicate, supersedes_id, false);
+    apply(assertion);
 
     return id;
 }

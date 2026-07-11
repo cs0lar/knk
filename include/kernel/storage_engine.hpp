@@ -5,6 +5,7 @@
 
 #include "kernel/assertion.hpp"
 #include "kernel/assertion_log.hpp"
+#include "kernel/current_index_log.hpp"
 #include "kernel/ids.hpp"
 #include "kernel/observed_time_index_log.hpp"
 #include "kernel/storage_config.hpp"
@@ -33,6 +34,12 @@ class StorageEngine {
 
     void rewrite_subject_index(const std::vector<SubjectIndexRecord> &records);
 
+    void append_current_index_entry(EntityId subject, PredicateId predicate, AssertionId id, bool active);
+
+    std::vector<CurrentIndexRecord> load_current_index() const;
+
+    void rewrite_current_index(const std::vector<CurrentIndexRecord> &records);
+
     const StorageConfig &config() const;
 
   private:
@@ -40,6 +47,7 @@ class StorageEngine {
     AssertionLog assertion_log_;
     ObservedTimeIndexLog observed_time_index_log_;
     SubjectIndexLog subject_index_log_;
+    CurrentIndexLog current_index_log_;
 };
 
 } // namespace knk

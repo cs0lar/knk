@@ -15,6 +15,8 @@ struct StorageConfig {
 
     std::filesystem::path subject_index_path() const { return index_directory() / "subject.idx"; }
 
+    std::filesystem::path current_index_path() const { return index_directory() / "current.idx"; }
+
     std::filesystem::path payload_directory() const { return root / "payloads"; }
 };
 

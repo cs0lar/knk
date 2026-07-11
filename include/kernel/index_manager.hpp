@@ -13,12 +13,14 @@
 
 namespace knk {
 
+bool is_current_assertion(const Assertion &assertion);
+
 class IndexManager {
   public:
     void add(const Assertion &assertion);
-    void add_without_observed_time_and_subject(const Assertion &assertion);
     void restore_observed_time_entry(EntityId subject, Timestamp observed_at, AssertionId id);
     void restore_subject_entry(EntityId subject, AssertionId id);
+    void restore_current_index_entry(EntityId subject, PredicateId predicate, AssertionId id, bool active);
     void mark_superseded(AssertionId id);
     void mark_retracted(AssertionId id);
     void remove_from_current(AssertionId id);
@@ -29,6 +31,7 @@ class IndexManager {
     std::vector<AssertionId> observed_before(EntityId subject, Timestamp t) const;
     std::vector<std::tuple<EntityId, Timestamp, AssertionId>> observed_time_entries() const;
     std::vector<std::pair<EntityId, AssertionId>> subject_index_entries() const;
+    std::vector<std::tuple<EntityId, PredicateId, AssertionId>> current_index_entries() const;
 
   private:
     std::unordered_map<EntityId, std::vector<AssertionId>> subject_index_;
