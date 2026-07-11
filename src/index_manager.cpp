@@ -2,6 +2,7 @@
 #include <utility>
 #include <vector>
 
+#include "kernel/assertion.hpp"
 #include "kernel/ids.hpp"
 #include "kernel/index_manager.hpp"
 #include "kernel/subject_predicate_key.hpp"
@@ -10,12 +11,12 @@
 namespace knk {
 
 void IndexManager::add(const Assertion &assertion) {
-    add_without_observed_time(assertion);
+    add_without_observed_time_and_subject(assertion);
+    restore_subject_entry(assertion.subject, assertion.id);
     restore_observed_time_entry(assertion.subject, assertion.observed_at, assertion.id);
 }
 
-void IndexManager::add_without_observed_time(const Assertion &assertion) {
-    subject_index_[assertion.subject].push_back(assertion.id);
+void IndexManager::add_without_observed_time_and_subject(const Assertion &assertion) {
     SubjectPredicateKey key{assertion.subject, assertion.predicate};
 
     if (assertion.status == AssertionStatus::Active && assertion.valid_to == OPEN_ENDED) {
@@ -27,10 +28,14 @@ void IndexManager::add_without_observed_time(const Assertion &assertion) {
 
 void IndexManager::restore_observed_time_entry(EntityId subject, Timestamp observed_at, AssertionId id) {
     auto &observed_entries = observed_time_index_[subject];
-    auto insert_at =
-        std::upper_bound(observed_entries.begin(), observed_entries.end(), std::make_pair(observed_at, id),
-                         [](const auto &lhs, const auto &rhs) { return lhs.first < rhs.first; });
+    auto insert_at = std::upper_bound(observed_entries.begin(), observed_entries.end(), std::make_pair(observed_at, id),
+                                      [](const auto &lhs, const auto &rhs) { return lhs.first < rhs.first; });
     observed_entries.insert(insert_at, {observed_at, id});
+}
+
+void IndexManager::restore_subject_entry(EntityId subject, AssertionId id) {
+    auto &subject_entries = subject_index_[subject];
+    subject_entries.push_back(id);
 }
 
 void IndexManager::mark_superseded(AssertionId id) { remove_from_current(id); }
@@ -114,7 +119,7 @@ std::vector<AssertionId> IndexManager::observed_before(EntityId subject, Timesta
     }
 
     auto end = std::upper_bound(it->second.begin(), it->second.end(), t,
-                                 [](Timestamp value, const auto &entry) { return value < entry.first; });
+                                [](Timestamp value, const auto &entry) { return value < entry.first; });
 
     for (auto entry = it->second.begin(); entry != end; ++entry) {
         result.push_back(entry->second);
@@ -134,4 +139,17 @@ std::vector<std::tuple<EntityId, Timestamp, AssertionId>> IndexManager::observed
 
     return result;
 }
+
+std::vector<std::pair<EntityId, AssertionId>> IndexManager::subject_index_entries() const {
+    std::vector<std::pair<EntityId, AssertionId>> result;
+
+    for (const auto &[subject, ids] : subject_index_) {
+        for (AssertionId id : ids) {
+            result.emplace_back(subject, id);
+        }
+    }
+
+    return result;
+}
+
 } // namespace knk

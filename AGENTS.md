@@ -124,7 +124,7 @@ Current implementation status :
 
 Future work :
 
-	* Subject index
+	* Subject index ✅ (persisted to disk; see implementation status below)
 	* Predicate index
 	* Current - state index
 	* Observed - time index ✅ (persisted to disk; see implementation status below)
@@ -133,9 +133,9 @@ Future work :
 
 	If persistent indexes are missing or corrupted, the kernel should still recover from the log.
 
-	Remaining Phase 3 work: making the subject, predicate, and current-state indexes durable/persisted to disk (not
-	just rebuilt in memory from the log on every startup), with corruption of the persisted index files falling back
-	to a full log replay. The observed-time index established the pattern to repeat for these three.
+	Remaining Phase 3 work: making the predicate and current-state indexes durable/persisted to disk (not just
+	rebuilt in memory from the log on every startup), with corruption of the persisted index files falling back to a
+	full log replay. The observed-time and subject indexes established the pattern to repeat for these two.
 
 Current implementation status :
 
@@ -161,9 +161,40 @@ Current implementation status :
 	  index too.
 	* Covered by `tests/observed_time_index_log_tests.cpp` (append/read round trip, missing file, invalid record
 	  size, incomplete trailing record, `overwrite_all`), additions to `tests/index_manager_tests.cpp`
-	  (`add_without_observed_time`, `restore_observed_time_entry`, `observed_time_entries`), and additions to
-	  `tests/knowledge_kernel_tests.cpp` (`known_at_is_restored_from_persisted_observed_time_index_across_kernels`,
+	  (`add_without_observed_time_and_subject`, `restore_observed_time_entry`, `observed_time_entries`), and
+	  additions to `tests/knowledge_kernel_tests.cpp`
+	  (`known_at_is_restored_from_persisted_observed_time_index_across_kernels`,
 	  `corrupt_observed_time_index_falls_back_to_replay_and_self_heals`).
+	* The subject index is now durable, following the same pattern. `SubjectIndexLog`
+	  (`include/kernel/subject_index_log.hpp`, `src/subject_index_log.cpp`) persists `{subject, assertion_id}`
+	  records to `indexes/subject.idx` using the same size-prefixed binary record format (missing file -> empty;
+	  mismatched size prefix -> throws `std::runtime_error`; incomplete trailing record -> ignored), and exposes
+	  `overwrite_all` for the self-heal path only.
+	* `StorageEngine` owns the `SubjectIndexLog` alongside `AssertionLog` and `ObservedTimeIndexLog`, and exposes
+	  `append_subject_entry`, `load_subject_index`, and `rewrite_subject_index`.
+	* `IndexManager::add_without_observed_time_and_subject` builds only the current/predicate indexes;
+	  `restore_subject_entry` and `restore_observed_time_entry` seed the subject and observed-time indexes
+	  independently so either can be restored from its persisted file without touching the other.
+	  `IndexManager::add` composes all three. `IndexManager::subject_index_entries()` returns a flat snapshot of the
+	  subject index for the self-heal rewrite.
+	* `KnowledgeKernel`'s constructor now tries to load both the persisted observed-time index and the persisted
+	  subject index independently (each with its own try/catch, so corruption of one does not block recovery of the
+	  other). Depending on which of the two loaded successfully, replay uses one of four `apply_replayed_assertion*`
+	  paths: `apply_replayed_assertion` (neither restored), `apply_replayed_assertion_without_observed_time` (only
+	  observed-time restored), `apply_replayed_assertion_without_subject` (only subject restored), or
+	  `apply_replayed_assertion_without_observed_time_and_subject` (both restored). Whichever index failed to load
+	  gets a fresh snapshot written via `rewrite_observed_time_index`/`rewrite_subject_index` so the next startup can
+	  load it directly instead of falling back again.
+	* `commit`, `commit_superseding`, and `commit_retraction` each append to the subject index log immediately after
+	  appending to the observed-time index log and before applying to memory — durable-before-visible now covers
+	  this index too.
+	* Covered by `tests/subject_index_log_tests.cpp` (append/read round trip, missing file, invalid record size,
+	  incomplete trailing record, `overwrite_all`), additions to `tests/index_manager_tests.cpp`
+	  (`restore_subject_entry_reproduces_subject_index_out_of_band`, `subject_index_entries_returns_a_flat_snapshot_of_the_index`),
+	  and additions to `tests/knowledge_kernel_tests.cpp`
+	  (`assertions_for_subject_is_restored_from_persisted_subject_index_across_kernels`,
+	  `corrupt_subject_index_falls_back_to_replay_and_self_heals`,
+	  `corrupt_both_indexes_falls_back_to_full_replay_and_self_heals`).
 
 ### Phase 4 — Storage engine internals
 

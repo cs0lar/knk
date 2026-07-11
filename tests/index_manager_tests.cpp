@@ -146,14 +146,47 @@ void observed_before_scopes_to_subject_and_handles_unknown_subject() {
     assert(indexes.observed_before(999, JUL_1_2024).empty());
 }
 
-void add_without_observed_time_leaves_observed_time_index_untouched() {
+void add_without_observed_time_and_subject_leaves_those_indexes_untouched() {
     IndexManager indexes;
 
-    indexes.add_without_observed_time(assertion_observed_at(1, ALICE, WORKS_AT, ACME, JAN_1_2023));
+    indexes.add_without_observed_time_and_subject(assertion_observed_at(1, ALICE, WORKS_AT, ACME, JAN_1_2023));
 
     assert(indexes.observed_before(ALICE, JUL_1_2024).empty());
-    assert_ids_equal(indexes.assertions_for_subject(ALICE), {1});
+    assert(indexes.assertions_for_subject(ALICE).empty());
     assert_ids_equal(indexes.current_assertions(ALICE, WORKS_AT), {1});
+}
+
+void restore_subject_entry_reproduces_subject_index_out_of_band() {
+    IndexManager indexes;
+
+    indexes.add_without_observed_time_and_subject(assertion_observed_at(1, ALICE, WORKS_AT, ACME, JAN_1_2023));
+    indexes.restore_subject_entry(ALICE, 1);
+
+    assert_ids_equal(indexes.assertions_for_subject(ALICE), {1});
+}
+
+void subject_index_entries_returns_a_flat_snapshot_of_the_index() {
+    IndexManager indexes;
+
+    indexes.add(assertion(1, ALICE, WORKS_AT, ACME, JAN_1_2023, OPEN_ENDED));
+    indexes.add(assertion(2, BOB, WORKS_AT, ACME, JAN_1_2024, OPEN_ENDED));
+
+    auto entries = indexes.subject_index_entries();
+
+    assert(entries.size() == 2);
+
+    bool has_alice = false;
+    bool has_bob = false;
+    for (const auto &[subject, id] : entries) {
+        if (subject == ALICE && id == 1) {
+            has_alice = true;
+        }
+        if (subject == BOB && id == 2) {
+            has_bob = true;
+        }
+    }
+    assert(has_alice);
+    assert(has_bob);
 }
 
 void restore_observed_time_entry_reproduces_sorted_results_out_of_order() {
@@ -202,9 +235,11 @@ int main() {
     observed_before_returns_ids_with_observed_at_at_or_before_the_given_time();
     observed_before_orders_entries_by_observed_at_regardless_of_insertion_order();
     observed_before_scopes_to_subject_and_handles_unknown_subject();
-    add_without_observed_time_leaves_observed_time_index_untouched();
+    add_without_observed_time_and_subject_leaves_those_indexes_untouched();
     restore_observed_time_entry_reproduces_sorted_results_out_of_order();
     observed_time_entries_returns_a_flat_snapshot_of_the_index();
+    restore_subject_entry_reproduces_subject_index_out_of_band();
+    subject_index_entries_returns_a_flat_snapshot_of_the_index();
 
     std::cout << "All index_manager tests passed.\n";
     return 0;

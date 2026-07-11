@@ -11,6 +11,7 @@ add_library(kernel
     src/storage_engine.cpp
     src/index_manager.cpp
     src/observed_time_index_log.cpp
+    src/subject_index_log.cpp
 )
 
 target_include_directories(kernel
@@ -43,6 +44,10 @@ add_executable(observed_time_index_log_tests
     tests/observed_time_index_log_tests.cpp
 )
 
+add_executable(subject_index_log_tests
+    tests/subject_index_log_tests.cpp
+)
+
 target_link_libraries(knowledge_kernel_tests
     PRIVATE kernel
 )
@@ -56,6 +61,10 @@ target_link_libraries(index_manager_tests
 )
 
 target_link_libraries(observed_time_index_log_tests
+    PRIVATE kernel
+)
+
+target_link_libraries(subject_index_log_tests
     PRIVATE kernel
 )
 
@@ -77,4 +86,9 @@ add_test(
 add_test(
     NAME observed_time_index_log_tests
     COMMAND observed_time_index_log_tests
+)
+
+add_test(
+    NAME subject_index_log_tests
+    COMMAND subject_index_log_tests
 )

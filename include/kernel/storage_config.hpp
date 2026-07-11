@@ -13,6 +13,8 @@ struct StorageConfig {
 
     std::filesystem::path observed_time_index_path() const { return index_directory() / "observed_time.idx"; }
 
+    std::filesystem::path subject_index_path() const { return index_directory() / "subject.idx"; }
+
     std::filesystem::path payload_directory() const { return root / "payloads"; }
 };
 
