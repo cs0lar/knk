@@ -1,5 +1,6 @@
 #pragma once
 
+#include <tuple>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -15,6 +16,8 @@ namespace knk {
 class IndexManager {
   public:
     void add(const Assertion &assertion);
+    void add_without_observed_time(const Assertion &assertion);
+    void restore_observed_time_entry(EntityId subject, Timestamp observed_at, AssertionId id);
     void mark_superseded(AssertionId id);
     void mark_retracted(AssertionId id);
     void remove_from_current(AssertionId id);
@@ -23,6 +26,7 @@ class IndexManager {
     std::vector<PredicateId> predicates_for_subject(EntityId subject) const;
     std::vector<AssertionId> current_assertions(EntityId subject, PredicateId predicate) const;
     std::vector<AssertionId> observed_before(EntityId subject, Timestamp t) const;
+    std::vector<std::tuple<EntityId, Timestamp, AssertionId>> observed_time_entries() const;
 
   private:
     std::unordered_map<EntityId, std::vector<AssertionId>> subject_index_;

@@ -10,6 +10,11 @@
 namespace knk {
 
 void IndexManager::add(const Assertion &assertion) {
+    add_without_observed_time(assertion);
+    restore_observed_time_entry(assertion.subject, assertion.observed_at, assertion.id);
+}
+
+void IndexManager::add_without_observed_time(const Assertion &assertion) {
     subject_index_[assertion.subject].push_back(assertion.id);
     SubjectPredicateKey key{assertion.subject, assertion.predicate};
 
@@ -18,12 +23,14 @@ void IndexManager::add(const Assertion &assertion) {
         assertion_keys_[assertion.id] = key;
         predicate_index_[assertion.subject].insert(assertion.predicate);
     }
+}
 
-    auto &observed_entries = observed_time_index_[assertion.subject];
-    auto insert_at = std::upper_bound(
-        observed_entries.begin(), observed_entries.end(), std::make_pair(assertion.observed_at, assertion.id),
-        [](const auto &lhs, const auto &rhs) { return lhs.first < rhs.first; });
-    observed_entries.insert(insert_at, {assertion.observed_at, assertion.id});
+void IndexManager::restore_observed_time_entry(EntityId subject, Timestamp observed_at, AssertionId id) {
+    auto &observed_entries = observed_time_index_[subject];
+    auto insert_at =
+        std::upper_bound(observed_entries.begin(), observed_entries.end(), std::make_pair(observed_at, id),
+                         [](const auto &lhs, const auto &rhs) { return lhs.first < rhs.first; });
+    observed_entries.insert(insert_at, {observed_at, id});
 }
 
 void IndexManager::mark_superseded(AssertionId id) { remove_from_current(id); }
@@ -111,6 +118,18 @@ std::vector<AssertionId> IndexManager::observed_before(EntityId subject, Timesta
 
     for (auto entry = it->second.begin(); entry != end; ++entry) {
         result.push_back(entry->second);
+    }
+
+    return result;
+}
+
+std::vector<std::tuple<EntityId, Timestamp, AssertionId>> IndexManager::observed_time_entries() const {
+    std::vector<std::tuple<EntityId, Timestamp, AssertionId>> result;
+
+    for (const auto &[subject, entries] : observed_time_index_) {
+        for (const auto &[observed_at, id] : entries) {
+            result.emplace_back(subject, observed_at, id);
+        }
     }
 
     return result;

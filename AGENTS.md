@@ -127,15 +127,43 @@ Future work :
 	* Subject index
 	* Predicate index
 	* Current - state index
-	* Observed - time index ✅ (in-memory only so far; see Phase 2 implementation status for `IndexManager::observed_before`)
+	* Observed - time index ✅ (persisted to disk; see implementation status below)
 
 	Indexes are derived acceleration structures. They must be rebuildable from the assertion log.
 
 	If persistent indexes are missing or corrupted, the kernel should still recover from the log.
 
-	Remaining Phase 3 work: making the subject, predicate, current-state, and observed-time indexes durable/persisted
-	to disk (not just rebuilt in memory from the log on every startup), with corruption of the persisted index files
-	falling back to a full log replay.
+	Remaining Phase 3 work: making the subject, predicate, and current-state indexes durable/persisted to disk (not
+	just rebuilt in memory from the log on every startup), with corruption of the persisted index files falling back
+	to a full log replay. The observed-time index established the pattern to repeat for these three.
+
+Current implementation status :
+
+	* The observed-time index is now durable. `ObservedTimeIndexLog` (`include/kernel/observed_time_index_log.hpp`,
+	  `src/observed_time_index_log.cpp`) persists `{subject, observed_at, assertion_id}` records to
+	  `indexes/observed_time.idx` using the same size-prefixed binary record format as `AssertionLog`
+	  (missing file -> empty; mismatched size prefix -> throws `std::runtime_error`; incomplete trailing record ->
+	  ignored). It also exposes `overwrite_all`, used only by the self-heal path below — everything else is
+	  append-only.
+	* `StorageEngine` owns the `ObservedTimeIndexLog` alongside `AssertionLog` and exposes
+	  `append_observed_time_entry`, `load_observed_time_index`, and `rewrite_observed_time_index`.
+	* `IndexManager::add` is now composed from `add_without_observed_time` (subject/current/predicate indexes) and
+	  `restore_observed_time_entry` (the sorted-insert logic for the observed-time index), so the observed-time piece
+	  can be seeded independently of the rest. `IndexManager::observed_time_entries()` returns a flat snapshot of the
+	  whole index for the self-heal rewrite.
+	* `KnowledgeKernel`'s constructor tries to load the persisted observed-time index first. On success, it replays
+	  `assertions.log` via `apply_replayed_assertion_without_observed_time` (skips re-deriving the already-restored
+	  index). On a missing or corrupt index file, it falls back to the full `apply_replayed_assertion` replay path
+	  (as before this change) and then writes a fresh snapshot via `rewrite_observed_time_index` so the next startup
+	  can load directly instead of falling back again.
+	* `commit`, `commit_superseding`, and `commit_retraction` each append to the observed-time index log immediately
+	  after appending to the assertion log and before applying to memory — durable-before-visible now covers this
+	  index too.
+	* Covered by `tests/observed_time_index_log_tests.cpp` (append/read round trip, missing file, invalid record
+	  size, incomplete trailing record, `overwrite_all`), additions to `tests/index_manager_tests.cpp`
+	  (`add_without_observed_time`, `restore_observed_time_entry`, `observed_time_entries`), and additions to
+	  `tests/knowledge_kernel_tests.cpp` (`known_at_is_restored_from_persisted_observed_time_index_across_kernels`,
+	  `corrupt_observed_time_index_falls_back_to_replay_and_self_heals`).
 
 ### Phase 4 — Storage engine internals
 

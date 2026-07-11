@@ -146,6 +146,50 @@ void observed_before_scopes_to_subject_and_handles_unknown_subject() {
     assert(indexes.observed_before(999, JUL_1_2024).empty());
 }
 
+void add_without_observed_time_leaves_observed_time_index_untouched() {
+    IndexManager indexes;
+
+    indexes.add_without_observed_time(assertion_observed_at(1, ALICE, WORKS_AT, ACME, JAN_1_2023));
+
+    assert(indexes.observed_before(ALICE, JUL_1_2024).empty());
+    assert_ids_equal(indexes.assertions_for_subject(ALICE), {1});
+    assert_ids_equal(indexes.current_assertions(ALICE, WORKS_AT), {1});
+}
+
+void restore_observed_time_entry_reproduces_sorted_results_out_of_order() {
+    IndexManager indexes;
+
+    indexes.restore_observed_time_entry(ALICE, JUL_1_2024, 1);
+    indexes.restore_observed_time_entry(ALICE, JAN_1_2023, 2);
+    indexes.restore_observed_time_entry(ALICE, JAN_1_2024, 3);
+
+    assert_ids_equal(indexes.observed_before(ALICE, JUL_1_2024), {2, 3, 1});
+}
+
+void observed_time_entries_returns_a_flat_snapshot_of_the_index() {
+    IndexManager indexes;
+
+    indexes.add(assertion_observed_at(1, ALICE, WORKS_AT, ACME, JAN_1_2023));
+    indexes.add(assertion_observed_at(2, BOB, LIVES_IN, BETA, JAN_1_2024));
+
+    auto entries = indexes.observed_time_entries();
+
+    assert(entries.size() == 2);
+
+    bool has_alice = false;
+    bool has_bob = false;
+    for (const auto &[subject, observed_at, id] : entries) {
+        if (subject == ALICE && observed_at == JAN_1_2023 && id == 1) {
+            has_alice = true;
+        }
+        if (subject == BOB && observed_at == JAN_1_2024 && id == 2) {
+            has_bob = true;
+        }
+    }
+    assert(has_alice);
+    assert(has_bob);
+}
+
 } // namespace
 
 int main() {
@@ -158,6 +202,9 @@ int main() {
     observed_before_returns_ids_with_observed_at_at_or_before_the_given_time();
     observed_before_orders_entries_by_observed_at_regardless_of_insertion_order();
     observed_before_scopes_to_subject_and_handles_unknown_subject();
+    add_without_observed_time_leaves_observed_time_index_untouched();
+    restore_observed_time_entry_reproduces_sorted_results_out_of_order();
+    observed_time_entries_returns_a_flat_snapshot_of_the_index();
 
     std::cout << "All index_manager tests passed.\n";
     return 0;
