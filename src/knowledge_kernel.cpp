@@ -17,8 +17,31 @@ namespace knk {
 KnowledgeKernel::KnowledgeKernel(StorageConfig config) : storage_(config), index_manager_() {
     auto log_records = storage_.load_assertions();
 
+    bool observed_time_index_restored = false;
+    try {
+        auto entries = storage_.load_observed_time_index();
+        for (const auto &entry : entries) {
+            index_manager_.restore_observed_time_entry(entry.subject, entry.observed_at, entry.assertion_id);
+        }
+        observed_time_index_restored = true;
+    } catch (const std::runtime_error &) {
+        observed_time_index_restored = false;
+    }
+
     for (const auto &record : log_records) {
-        apply_replayed_assertion(record);
+        if (observed_time_index_restored) {
+            apply_replayed_assertion_without_observed_time(record);
+        } else {
+            apply_replayed_assertion(record);
+        }
+    }
+
+    if (!observed_time_index_restored) {
+        std::vector<ObservedTimeIndexRecord> records;
+        for (const auto &[subject, observed_at, id] : index_manager_.observed_time_entries()) {
+            records.push_back(ObservedTimeIndexRecord{subject, observed_at, id});
+        }
+        storage_.rewrite_observed_time_index(records);
     }
 }
 
@@ -33,6 +56,21 @@ void KnowledgeKernel::apply_replayed_assertion(const Assertion &assertion) {
 
     assertions_.push_back(assertion);
     index_manager_.add(assertion);
+
+    next_id_ = std::max(next_id_, assertion.id + 1);
+}
+
+void KnowledgeKernel::apply_replayed_assertion_without_observed_time(const Assertion &assertion) {
+    if (assertion.supersedes_id != 0) {
+        mark_superseded(assertion.supersedes_id);
+    }
+
+    if (assertion.retracts_id != 0) {
+        mark_retracted(assertion.retracts_id);
+    }
+
+    assertions_.push_back(assertion);
+    index_manager_.add_without_observed_time(assertion);
 
     next_id_ = std::max(next_id_, assertion.id + 1);
 }
@@ -55,6 +93,7 @@ AssertionId KnowledgeKernel::commit(EntityId subject, PredicateId predicate, Ent
         id, subject, predicate, object, valid_from, valid_to, observed_at, confidence, AssertionStatus::Active};
 
     storage_.append_assertion(assertion);
+    storage_.append_observed_time_entry(assertion.subject, assertion.observed_at, assertion.id);
     apply_replayed_assertion(assertion);
 
     return id;
@@ -74,6 +113,7 @@ AssertionId KnowledgeKernel::commit_retraction(EntityId subject, PredicateId pre
         0,  retracts_id};
 
     storage_.append_assertion(assertion);
+    storage_.append_observed_time_entry(assertion.subject, assertion.observed_at, assertion.id);
     apply_replayed_assertion(assertion);
 
     return id;
@@ -94,6 +134,7 @@ AssertionId KnowledgeKernel::commit_superseding(EntityId subject, PredicateId pr
                         supersedes_id};
 
     storage_.append_assertion(assertion);
+    storage_.append_observed_time_entry(assertion.subject, assertion.observed_at, assertion.id);
     apply_replayed_assertion(assertion);
 
     return id;
