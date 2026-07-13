@@ -44,6 +44,17 @@ std::filesystem::path test_root(const std::string &name) {
 
 void cleanup(const std::filesystem::path &path) { std::filesystem::remove_all(path); }
 
+// Writes a valid log header followed by a bad record-size field, so the corruption
+// exercises record-level validation rather than tripping header validation instead.
+void write_corrupt_record_size_after_valid_header(const std::filesystem::path &path) {
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    out.write("KNK1", 4);
+    uint32_t version = 1;
+    out.write(reinterpret_cast<const char *>(&version), sizeof(version));
+    uint32_t bad_record_size = 1;
+    out.write(reinterpret_cast<const char *>(&bad_record_size), sizeof(bad_record_size));
+}
+
 void commit_and_get_assertion() {
     auto root = test_root("commit_and_get_assertion");
     KnowledgeKernel kernel(StorageConfig{root});
@@ -537,11 +548,7 @@ void corrupt_observed_time_index_falls_back_to_replay_and_self_heals() {
     }
 
     auto index_path = StorageConfig{root}.observed_time_index_path();
-    {
-        std::ofstream out(index_path, std::ios::binary | std::ios::trunc);
-        uint32_t bad_record_size = 1;
-        out.write(reinterpret_cast<const char *>(&bad_record_size), sizeof(bad_record_size));
-    }
+    write_corrupt_record_size_after_valid_header(index_path);
 
     KnowledgeKernel recovered_kernel(StorageConfig{root});
 
@@ -592,11 +599,7 @@ void corrupt_subject_index_falls_back_to_replay_and_self_heals() {
     }
 
     auto index_path = StorageConfig{root}.subject_index_path();
-    {
-        std::ofstream out(index_path, std::ios::binary | std::ios::trunc);
-        uint32_t bad_record_size = 1;
-        out.write(reinterpret_cast<const char *>(&bad_record_size), sizeof(bad_record_size));
-    }
+    write_corrupt_record_size_after_valid_header(index_path);
 
     KnowledgeKernel recovered_kernel(StorageConfig{root});
 
@@ -626,9 +629,7 @@ void corrupt_all_persisted_indexes_falls_back_to_full_replay_and_self_heals() {
     auto config = StorageConfig{root};
     for (const auto &index_path :
         {config.observed_time_index_path(), config.subject_index_path(), config.current_index_path()}) {
-        std::ofstream out(index_path, std::ios::binary | std::ios::trunc);
-        uint32_t bad_record_size = 1;
-        out.write(reinterpret_cast<const char *>(&bad_record_size), sizeof(bad_record_size));
+        write_corrupt_record_size_after_valid_header(index_path);
     }
 
     KnowledgeKernel recovered_kernel(StorageConfig{root});
@@ -701,11 +702,7 @@ void corrupt_current_index_falls_back_to_replay_and_self_heals() {
     }
 
     auto index_path = StorageConfig{root}.current_index_path();
-    {
-        std::ofstream out(index_path, std::ios::binary | std::ios::trunc);
-        uint32_t bad_record_size = 1;
-        out.write(reinterpret_cast<const char *>(&bad_record_size), sizeof(bad_record_size));
-    }
+    write_corrupt_record_size_after_valid_header(index_path);
 
     KnowledgeKernel recovered_kernel(StorageConfig{root});
 

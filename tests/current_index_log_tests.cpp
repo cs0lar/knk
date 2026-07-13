@@ -53,11 +53,71 @@ void current_index_log_rejects_invalid_record_size() {
 
     {
         std::ofstream out(path, std::ios::binary);
+        out.write("KNK1", 4);
+        uint32_t version = 1;
+        out.write(reinterpret_cast<const char *>(&version), sizeof(version));
         uint32_t bad_record_size = static_cast<uint32_t>(sizeof(CurrentIndexRecord)) + 1;
         out.write(reinterpret_cast<const char *>(&bad_record_size), sizeof(bad_record_size));
     }
 
     CurrentIndexLog log(path);
+
+    bool threw = false;
+    try {
+        log.read_all();
+    } catch (const std::runtime_error &) {
+        threw = true;
+    }
+
+    assert(threw);
+
+    std::filesystem::remove(path);
+}
+
+void current_index_log_rejects_missing_or_invalid_header() {
+    auto path = std::filesystem::temp_directory_path() / "kernel_invalid_header_current_index_log.idx";
+    std::filesystem::remove(path);
+
+    {
+        std::ofstream out(path, std::ios::binary);
+        out.write("XXXX", 4);
+        uint32_t version = 1;
+        out.write(reinterpret_cast<const char *>(&version), sizeof(version));
+    }
+
+    CurrentIndexLog log(path);
+
+    bool threw = false;
+    try {
+        log.read_all();
+    } catch (const std::runtime_error &) {
+        threw = true;
+    }
+
+    assert(threw);
+
+    std::filesystem::remove(path);
+}
+
+void current_index_log_rejects_checksum_mismatch() {
+    auto path = std::filesystem::temp_directory_path() / "kernel_checksum_mismatch_current_index_log.idx";
+    std::filesystem::remove(path);
+
+    CurrentIndexLog log(path);
+
+    log.append(CurrentIndexRecord{1, 10, 1, true});
+
+    {
+        // Flip a byte inside the record payload, which sits right after the 8-byte
+        // header and the 4-byte record-size prefix.
+        std::fstream io(path, std::ios::binary | std::ios::in | std::ios::out);
+        io.seekp(8 + sizeof(uint32_t));
+        char byte = 0;
+        io.read(&byte, 1);
+        io.seekp(8 + sizeof(uint32_t));
+        char flipped = static_cast<char>(~byte);
+        io.write(&flipped, 1);
+    }
 
     bool threw = false;
     try {
@@ -124,6 +184,8 @@ int main() {
     current_index_log_appends_and_reads_records();
     current_index_log_returns_empty_when_missing();
     current_index_log_rejects_invalid_record_size();
+    current_index_log_rejects_missing_or_invalid_header();
+    current_index_log_rejects_checksum_mismatch();
     current_index_log_ignores_incomplete_trailing_record();
     current_index_log_overwrite_all_replaces_prior_contents();
 
