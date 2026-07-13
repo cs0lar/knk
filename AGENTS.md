@@ -213,11 +213,34 @@ Future work :
 
 	* Segment files
 	* WAL
-	* Checksums
+	* Checksums ✅ (per-record CRC32; see implementation status below)
 	* Crash recovery
 	* Snapshots
 
 	At this phase, the log should evolve from a simple file into a segmented storage subsystem with integrity checks and controlled recovery.
+
+Current implementation status :
+
+	* All four logs (`AssertionLog`, `SubjectIndexLog`, `CurrentIndexLog`, `ObservedTimeIndexLog`) now share an
+	  identical framed format: an 8-byte file header (`"KNK1"` magic + `uint32_t` format version, written once per
+	  file) followed by repeated `[uint32_t record_size][raw struct bytes][uint32_t crc32]` frames. The shared CRC-32
+	  (IEEE 802.3 polynomial) implementation lives in `include/kernel/checksum.hpp`/`src/checksum.cpp`; each log
+	  otherwise keeps its own read/write loop rather than sharing a generic framer, matching the existing duplication
+	  style across the four log types.
+	* A missing/mismatched header, a mismatched `record_size`, or a mismatched CRC all throw the same
+	  `std::runtime_error` `read_all()` already used for framing errors, so `KnowledgeKernel`'s existing
+	  fallback-to-replay-and-self-heal logic for the three persisted index logs needed no changes to handle
+	  checksum corruption. A short/truncated trailing frame (anywhere in size, payload, or crc bytes) is still
+	  silently dropped, as before — that remains the "torn write from a crash" case, distinct from a
+	  fully-present-but-wrong-content frame, which is the corruption case checksums exist to catch.
+	* This is a breaking, unmigrated on-disk format change — pre-checksum log files are not readable and must be
+	  deleted/rebuilt. `AssertionLog` reads are still not wrapped in a recovery path (a corrupt assertion log is a
+	  fatal, uncaught startup error, unchanged); giving the log of record its own recovery path is left to the
+	  "Crash recovery" item above.
+	* See `docs/storage_format.md` for the full format spec. Covered by `tests/checksum_tests.cpp` (CRC-32
+	  correctness against the standard check value) plus a `..._rejects_missing_or_invalid_header` and
+	  `..._rejects_checksum_mismatch` test added to each of the four log test files, and updated corruption byte
+	  offsets in the `corrupt_*_index_falls_back_to_replay_and_self_heals` tests in `tests/knowledge_kernel_tests.cpp`.
 
 ### Phase 5 — Performance
 

@@ -13,6 +13,7 @@ add_library(kernel
     src/observed_time_index_log.cpp
     src/subject_index_log.cpp
     src/current_index_log.cpp
+    src/checksum.cpp
 )
 
 target_include_directories(kernel
@@ -53,6 +54,10 @@ add_executable(current_index_log_tests
     tests/current_index_log_tests.cpp
 )
 
+add_executable(checksum_tests
+    tests/checksum_tests.cpp
+)
+
 target_link_libraries(knowledge_kernel_tests
     PRIVATE kernel
 )
@@ -74,6 +79,10 @@ target_link_libraries(subject_index_log_tests
 )
 
 target_link_libraries(current_index_log_tests
+    PRIVATE kernel
+)
+
+target_link_libraries(checksum_tests
     PRIVATE kernel
 )
 
@@ -105,4 +114,9 @@ add_test(
 add_test(
     NAME current_index_log_tests
     COMMAND current_index_log_tests
+)
+
+add_test(
+    NAME checksum_tests
+    COMMAND checksum_tests
 )
