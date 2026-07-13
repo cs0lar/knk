@@ -7,6 +7,7 @@
 #include "kernel/assertion_log.hpp"
 #include "kernel/current_index_log.hpp"
 #include "kernel/ids.hpp"
+#include "kernel/index_checkpoint.hpp"
 #include "kernel/observed_time_index_log.hpp"
 #include "kernel/storage_config.hpp"
 #include "kernel/subject_index_log.hpp"
@@ -40,6 +41,10 @@ class StorageEngine {
 
     void rewrite_current_index(const std::vector<CurrentIndexRecord> &records);
 
+    void write_checkpoint(AssertionId last_fully_indexed_id);
+
+    AssertionId load_checkpoint() const;
+
     const StorageConfig &config() const;
 
   private:
@@ -48,6 +53,7 @@ class StorageEngine {
     ObservedTimeIndexLog observed_time_index_log_;
     SubjectIndexLog subject_index_log_;
     CurrentIndexLog current_index_log_;
+    IndexCheckpoint checkpoint_;
 };
 
 } // namespace knk

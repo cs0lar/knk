@@ -20,8 +20,7 @@ void IndexManager::add(const Assertion &assertion) {
     restore_observed_time_entry(assertion.subject, assertion.observed_at, assertion.id);
 }
 
-void IndexManager::restore_current_index_entry(EntityId subject, PredicateId predicate, AssertionId id,
-                                               bool active) {
+void IndexManager::restore_current_index_entry(EntityId subject, PredicateId predicate, AssertionId id, bool active) {
     if (!active) {
         remove_from_current(id);
         return;

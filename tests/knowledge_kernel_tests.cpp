@@ -14,6 +14,7 @@
 #include "kernel/knowledge_kernel.hpp"
 #include "kernel/status.hpp"
 #include "kernel/storage_config.hpp"
+#include "kernel/storage_engine.hpp"
 #include "kernel/time.hpp"
 
 using namespace knk;
@@ -628,7 +629,7 @@ void corrupt_all_persisted_indexes_falls_back_to_full_replay_and_self_heals() {
 
     auto config = StorageConfig{root};
     for (const auto &index_path :
-        {config.observed_time_index_path(), config.subject_index_path(), config.current_index_path()}) {
+         {config.observed_time_index_path(), config.subject_index_path(), config.current_index_path()}) {
         write_corrupt_record_size_after_valid_header(index_path);
     }
 
@@ -676,8 +677,7 @@ void superseded_assertion_remains_excluded_from_current_after_restart() {
         KnowledgeKernel kernel(StorageConfig{root});
 
         AssertionId id = kernel.commit(ALICE, WORKS_AT, ACME, JAN_1_2023, OPEN_ENDED, JUL_1_2024, 0.95);
-        superseding_id =
-            kernel.commit_superseding(ALICE, WORKS_AT, BETA, JUL_1_2024, OPEN_ENDED, JUL_2_2024, 0.95, id);
+        superseding_id = kernel.commit_superseding(ALICE, WORKS_AT, BETA, JUL_1_2024, OPEN_ENDED, JUL_2_2024, 0.95, id);
     }
 
     KnowledgeKernel other_kernel(StorageConfig{root});
@@ -721,6 +721,40 @@ void corrupt_current_index_falls_back_to_replay_and_self_heals() {
     cleanup(root);
 }
 
+void crash_between_assertion_append_and_index_append_recovers_via_checkpoint() {
+    auto root = test_root("crash_between_assertion_append_and_index_append_recovers_via_checkpoint");
+
+    {
+        KnowledgeKernel kernel(StorageConfig{root});
+        kernel.commit(ALICE, WORKS_AT, ACME, JAN_1_2023, OPEN_ENDED, JUL_1_2024, 0.95);
+    }
+
+    // Simulate a crash between the assertion-log append and the index-log appends of a second
+    // commit: append the assertion directly through a raw StorageEngine, bypassing
+    // KnowledgeKernel::commit entirely, so none of its index entries or checkpoint update happen.
+    {
+        StorageEngine storage(StorageConfig{root});
+        Assertion second{2, BETA, WORKS_AT, GAMMA, JUL_1_2024, OPEN_ENDED, JUL_2_2024, 0.90, AssertionStatus::Active};
+        storage.append_assertion(second);
+    }
+
+    KnowledgeKernel recovered_kernel(StorageConfig{root});
+
+    // Without the checkpoint mismatch forcing a full rebuild, this would incorrectly return
+    // empty: the index logs never got an entry for BETA, even though assertions.log durably has
+    // it and get(2) would find it.
+    auto assertions = recovered_kernel.assertions_for_subject(BETA);
+    assert(assertions.size() == 1);
+    assert(assertions[0].id == 2);
+    assert(assertions[0].object == GAMMA);
+
+    auto current = recovered_kernel.current(BETA);
+    assert(current.size() == 1);
+    assert(current[0].id == 2);
+
+    cleanup(root);
+}
+
 } // namespace
 
 int main() {
@@ -754,6 +788,7 @@ int main() {
     current_assertion_is_restored_from_persisted_current_index_across_kernels();
     superseded_assertion_remains_excluded_from_current_after_restart();
     corrupt_current_index_falls_back_to_replay_and_self_heals();
+    crash_between_assertion_append_and_index_append_recovers_via_checkpoint();
 
     std::cout << "All assertion_kernel tests passed.\n";
     return 0;

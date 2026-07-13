@@ -6,7 +6,7 @@ namespace knk {
 StorageEngine::StorageEngine(StorageConfig config)
     : config_(std::move(config)), assertion_log_(config_.assertion_log_path()),
       observed_time_index_log_(config_.observed_time_index_path()), subject_index_log_(config_.subject_index_path()),
-      current_index_log_(config_.current_index_path()) {
+      current_index_log_(config_.current_index_path()), checkpoint_(config_.checkpoint_path()) {
     std::filesystem::create_directories(config_.root);
     std::filesystem::create_directories(config_.index_directory());
     std::filesystem::create_directories(config_.payload_directory());
@@ -38,8 +38,7 @@ void StorageEngine::rewrite_subject_index(const std::vector<SubjectIndexRecord> 
     subject_index_log_.overwrite_all(records);
 }
 
-void StorageEngine::append_current_index_entry(EntityId subject, PredicateId predicate, AssertionId id,
-                                                bool active) {
+void StorageEngine::append_current_index_entry(EntityId subject, PredicateId predicate, AssertionId id, bool active) {
     current_index_log_.append(CurrentIndexRecord{subject, predicate, id, active});
 }
 
@@ -48,6 +47,12 @@ std::vector<CurrentIndexRecord> StorageEngine::load_current_index() const { retu
 void StorageEngine::rewrite_current_index(const std::vector<CurrentIndexRecord> &records) {
     current_index_log_.overwrite_all(records);
 }
+
+void StorageEngine::write_checkpoint(AssertionId last_fully_indexed_id) {
+    checkpoint_.write(last_fully_indexed_id);
+}
+
+AssertionId StorageEngine::load_checkpoint() const { return checkpoint_.read(); }
 
 const StorageConfig &StorageEngine::config() const { return config_; }
 

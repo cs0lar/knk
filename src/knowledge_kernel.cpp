@@ -41,17 +41,23 @@ KnowledgeKernel::KnowledgeKernel(StorageConfig config) : storage_(config), index
         auto entries = storage_.load_current_index();
         for (const auto &entry : entries) {
             index_manager_.restore_current_index_entry(entry.subject, entry.predicate, entry.assertion_id,
-                                                        entry.active);
+                                                       entry.active);
         }
     } catch (const std::runtime_error &) {
         indexes_restored = false;
     }
 
-    // A persisted index file is either fully trustworthy or not: if any one of them is missing/corrupt, discard
-    // whatever partial state the others contributed and rebuild every index uniformly from the log below, rather
-    // than tracking which of the three succeeded independently.
-    if (!indexes_restored) {
+    // The persisted indexes are trusted only if every file loaded cleanly AND the checkpoint confirms every
+    // assertion in the log had its index writes fully completed -- otherwise a crash could have left the index
+    // logs silently behind assertions.log (missing entries for the newest commits, not distinguishable from those
+    // entries never existing). Either way, discard whatever partial state was loaded and rebuild every index
+    // uniformly from the log below, rather than trying to reconcile per-index-file coverage.
+    AssertionId max_committed_id = log_records.empty() ? 0 : log_records.back().id;
+    bool checkpoint_matches = storage_.load_checkpoint() == max_committed_id;
+
+    if (!indexes_restored || !checkpoint_matches) {
         index_manager_ = IndexManager();
+        indexes_restored = false;
     }
 
     for (const auto &record : log_records) {
@@ -80,6 +86,8 @@ KnowledgeKernel::KnowledgeKernel(StorageConfig config) : storage_(config), index
             current_records.push_back(CurrentIndexRecord{subject, predicate, id, true});
         }
         storage_.rewrite_current_index(current_records);
+
+        storage_.write_checkpoint(max_committed_id);
     }
 }
 
@@ -134,6 +142,7 @@ AssertionId KnowledgeKernel::commit(EntityId subject, PredicateId predicate, Ent
     storage_.append_subject_entry(assertion.subject, assertion.id);
     storage_.append_current_index_entry(assertion.subject, assertion.predicate, assertion.id,
                                         is_current_assertion(assertion));
+    storage_.write_checkpoint(assertion.id);
     apply(assertion);
 
     return id;
@@ -159,6 +168,7 @@ AssertionId KnowledgeKernel::commit_retraction(EntityId subject, PredicateId pre
     // Retraction-status records are never current (see is_current_assertion), so only the retracted
     // target needs a current-index tombstone here.
     storage_.append_current_index_entry(target->subject, target->predicate, retracts_id, false);
+    storage_.write_checkpoint(assertion.id);
     apply(assertion);
 
     return id;
@@ -185,6 +195,7 @@ AssertionId KnowledgeKernel::commit_superseding(EntityId subject, PredicateId pr
     storage_.append_current_index_entry(assertion.subject, assertion.predicate, assertion.id,
                                         is_current_assertion(assertion));
     storage_.append_current_index_entry(target->subject, target->predicate, supersedes_id, false);
+    storage_.write_checkpoint(assertion.id);
     apply(assertion);
 
     return id;
