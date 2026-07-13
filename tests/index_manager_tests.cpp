@@ -151,8 +151,8 @@ void is_current_assertion_requires_active_status_and_open_ended_valid_to() {
     assert(!is_current_assertion(assertion(2, ALICE, WORKS_AT, ACME, JAN_1_2023, JUL_1_2024)));
     assert(!is_current_assertion(
         assertion(3, ALICE, WORKS_AT, ACME, JAN_1_2023, OPEN_ENDED, AssertionStatus::Superseded)));
-    assert(!is_current_assertion(
-        assertion(4, ALICE, WORKS_AT, ACME, JAN_1_2023, OPEN_ENDED, AssertionStatus::Retracted)));
+    assert(
+        !is_current_assertion(assertion(4, ALICE, WORKS_AT, ACME, JAN_1_2023, OPEN_ENDED, AssertionStatus::Retracted)));
 }
 
 void restore_current_index_entry_reproduces_current_index_out_of_band() {

@@ -214,33 +214,59 @@ Future work :
 	* Segment files
 	* WAL
 	* Checksums ✅ (per-record CRC32; see implementation status below)
-	* Crash recovery
+	* Crash recovery ✅ (fsync durability, tail-tolerant corruption policy, index checkpoint; see implementation
+	  status below)
 	* Snapshots
 
 	At this phase, the log should evolve from a simple file into a segmented storage subsystem with integrity checks and controlled recovery.
 
 Current implementation status :
 
-	* All four logs (`AssertionLog`, `SubjectIndexLog`, `CurrentIndexLog`, `ObservedTimeIndexLog`) now share an
-	  identical framed format: an 8-byte file header (`"KNK1"` magic + `uint32_t` format version, written once per
-	  file) followed by repeated `[uint32_t record_size][raw struct bytes][uint32_t crc32]` frames. The shared CRC-32
+	* All four logs (`AssertionLog`, `SubjectIndexLog`, `CurrentIndexLog`, `ObservedTimeIndexLog`) share an identical
+	  framed format: an 8-byte file header (`"KNK1"` magic + `uint32_t` format version, written once per file)
+	  followed by repeated `[uint32_t record_size][raw struct bytes][uint32_t crc32]` frames. The shared CRC-32
 	  (IEEE 802.3 polynomial) implementation lives in `include/kernel/checksum.hpp`/`src/checksum.cpp`; each log
 	  otherwise keeps its own read/write loop rather than sharing a generic framer, matching the existing duplication
 	  style across the four log types.
-	* A missing/mismatched header, a mismatched `record_size`, or a mismatched CRC all throw the same
-	  `std::runtime_error` `read_all()` already used for framing errors, so `KnowledgeKernel`'s existing
-	  fallback-to-replay-and-self-heal logic for the three persisted index logs needed no changes to handle
-	  checksum corruption. A short/truncated trailing frame (anywhere in size, payload, or crc bytes) is still
-	  silently dropped, as before — that remains the "torn write from a crash" case, distinct from a
-	  fully-present-but-wrong-content frame, which is the corruption case checksums exist to catch.
-	* This is a breaking, unmigrated on-disk format change — pre-checksum log files are not readable and must be
-	  deleted/rebuilt. `AssertionLog` reads are still not wrapped in a recovery path (a corrupt assertion log is a
-	  fatal, uncaught startup error, unchanged); giving the log of record its own recovery path is left to the
-	  "Crash recovery" item above.
-	* See `docs/storage_format.md` for the full format spec. Covered by `tests/checksum_tests.cpp` (CRC-32
-	  correctness against the standard check value) plus a `..._rejects_missing_or_invalid_header` and
-	  `..._rejects_checksum_mismatch` test added to each of the four log test files, and updated corruption byte
-	  offsets in the `corrupt_*_index_falls_back_to_replay_and_self_heals` tests in `tests/knowledge_kernel_tests.cpp`.
+	* Corruption policy (revised by the Crash recovery work below from the original all-throw checksums design): a
+	  mismatched `record_size` always throws `std::runtime_error` (framing is unrecoverable once size is wrong). A
+	  torn header (fewer than 8 bytes, from a crash on the very first-ever append) is treated the same as an empty
+	  file, not thrown. A checksum mismatch on a fully-present frame is tail-tolerant: silently dropped if nothing
+	  follows it in the file (indistinguishable from a crash mid-append, same treatment as a short/truncated
+	  trailing frame), but still throws if valid-length data follows it (data can't validly follow a torn write, so
+	  that is unambiguous real corruption). A full 8-byte header with the wrong magic/version still always throws
+	  (a torn write cannot produce a full-length-but-wrong header).
+	* Durability: every `append()` closes its stream and then fsyncs the file (`knk::fsync_file`,
+	  `include/kernel/durability.hpp`) before returning, so a commit isn't durable until it reaches physical disk,
+	  not just the OS page cache. `overwrite_all()` (the three index logs' self-heal rewrite) writes via
+	  `knk::write_file_atomically` (temp file, fsync, atomic rename, fsync parent directory), so a crash mid-rewrite
+	  can never leave a half-written index file. Both are POSIX-only, an accepted limitation for early local
+	  development, same treatment as the raw-struct-serialization limitation already documented.
+	* Index checkpoint: `indexes/checkpoint` (`include/kernel/index_checkpoint.hpp`/`src/index_checkpoint.cpp`)
+	  closes a cross-log atomicity gap found while implementing this: `commit`/`commit_superseding`/
+	  `commit_retraction` append to `assertions.log` before the three index logs, so a crash in between leaves
+	  `assertions.log` with a record none of the index logs know about — and none of their `read_all()` calls throw
+	  in that case (the entry is simply missing, indistinguishable from never existing). The checkpoint persists the
+	  highest `AssertionId` whose index writes are confirmed complete, written as the last step of each commit's
+	  storage-append sequence; unlike the four data logs it never throws on read (missing/corrupt both degrade to
+	  `0`, since it's purely a startup-fast-path hint, not authoritative data). `KnowledgeKernel`'s constructor
+	  trusts the persisted indexes only if every index file loaded cleanly *and* the checkpoint matches the highest
+	  id in `assertions.log`; otherwise it takes the existing full-replay-and-self-heal path unchanged, additionally
+	  persisting the new checkpoint afterward.
+	* `AssertionLog` reads remain unwrapped in any recovery path — a corrupted assertion log is still a fatal,
+	  uncaught startup error, *except* when the corruption is tail-tolerant (a torn trailing write), which is now
+	  silently and safely dropped like the index logs. Non-tail corruption stays fatal deliberately: `assertions.log`
+	  is the one source of truth, so there is nothing to rebuild it from, and silently discarding real history would
+	  be worse than refusing to start.
+	* See `docs/storage_format.md` for the full format spec, durability model, and checkpoint format. Covered by
+	  `tests/checksum_tests.cpp`, `tests/durability_tests.cpp`, and `tests/index_checkpoint_tests.cpp`; each of the
+	  four log test files has `..._recovers_partial_header_as_empty_log`,
+	  `..._recovers_tail_checksum_mismatch_as_torn_write`, and
+	  `..._rejects_checksum_mismatch_when_followed_by_more_data` tests; and
+	  `crash_between_assertion_append_and_index_append_recovers_via_checkpoint` in
+	  `tests/knowledge_kernel_tests.cpp` exercises the cross-log atomicity gap directly (bypassing `commit()` via a
+	  raw `StorageEngine::append_assertion` call, then confirming a reopened kernel still surfaces the assertion via
+	  `assertions_for_subject`/`current`).
 
 ### Phase 5 — Performance
 

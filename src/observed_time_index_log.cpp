@@ -1,8 +1,11 @@
+#include <algorithm>
 #include <array>
+#include <cstring>
 #include <fstream>
 #include <stdexcept>
 
 #include "kernel/checksum.hpp"
+#include "kernel/durability.hpp"
 #include "kernel/observed_time_index_log.hpp"
 
 namespace knk {
@@ -12,38 +15,56 @@ namespace {
 constexpr uint32_t OBSERVED_TIME_INDEX_RECORD_SIZE = sizeof(ObservedTimeIndexRecord);
 constexpr std::array<char, 4> LOG_MAGIC{'K', 'N', 'K', '1'};
 constexpr uint32_t LOG_FORMAT_VERSION = 1;
+constexpr size_t HEADER_SIZE = LOG_MAGIC.size() + sizeof(uint32_t);
 
-void write_or_throw(std::ofstream &out, const char *data, std::streamsize size) {
+void write_or_throw(std::ostream &out, const char *data, std::streamsize size) {
     out.write(data, size);
     if (!out) {
         throw std::runtime_error("failed to write observed-time index log");
     }
 }
 
-void write_header(std::ofstream &out) {
+void write_header(std::ostream &out) {
     write_or_throw(out, LOG_MAGIC.data(), static_cast<std::streamsize>(LOG_MAGIC.size()));
 
     uint32_t version = LOG_FORMAT_VERSION;
     write_or_throw(out, reinterpret_cast<const char *>(&version), sizeof(version));
 }
 
-// Returns false if the file is empty (no header, treated as an empty log).
-bool read_and_validate_header(std::ifstream &in) {
-    std::array<char, 4> magic{};
-    in.read(magic.data(), static_cast<std::streamsize>(magic.size()));
+void write_record(std::ostream &out, const ObservedTimeIndexRecord &record) {
+    uint32_t record_size = OBSERVED_TIME_INDEX_RECORD_SIZE;
+    uint32_t crc = crc32(&record, sizeof(record));
 
-    if (in.gcount() == 0) {
+    write_or_throw(out, reinterpret_cast<const char *>(&record_size), sizeof(record_size));
+    write_or_throw(out, reinterpret_cast<const char *>(&record), sizeof(record));
+    write_or_throw(out, reinterpret_cast<const char *>(&crc), sizeof(crc));
+}
+
+// Returns false if the file is empty, or has a torn header (fewer than HEADER_SIZE bytes) from a
+// crash mid-write on the very first-ever append -- by construction no record frame can exist
+// without a complete header preceding it, so either case unambiguously means zero durably
+// completed records. Throws only when a full-size header has the wrong magic/version, which a
+// torn write cannot produce -- that is a genuine format mismatch, not a crash artifact.
+bool read_and_validate_header(std::ifstream &in) {
+    std::array<char, HEADER_SIZE> header{};
+    in.read(header.data(), static_cast<std::streamsize>(header.size()));
+
+    auto got = static_cast<size_t>(in.gcount());
+    if (got < HEADER_SIZE) {
         return false;
     }
 
-    if (!in || static_cast<size_t>(in.gcount()) != magic.size() || magic != LOG_MAGIC) {
+    std::array<char, 4> magic{};
+    std::copy(header.begin(), header.begin() + 4, magic.begin());
+
+    if (magic != LOG_MAGIC) {
         throw std::runtime_error("invalid or missing observed-time index log header");
     }
 
     uint32_t version = 0;
-    in.read(reinterpret_cast<char *>(&version), sizeof(version));
+    std::memcpy(&version, header.data() + 4, sizeof(version));
 
-    if (!in || version != LOG_FORMAT_VERSION) {
+    if (version != LOG_FORMAT_VERSION) {
         throw std::runtime_error("unsupported observed-time index log format version");
     }
 
@@ -68,33 +89,20 @@ void ObservedTimeIndexLog::append(const ObservedTimeIndexRecord &record) {
         write_header(out);
     }
 
-    uint32_t record_size = OBSERVED_TIME_INDEX_RECORD_SIZE;
-    uint32_t crc = crc32(&record, sizeof(record));
+    write_record(out, record);
 
-    write_or_throw(out, reinterpret_cast<const char *>(&record_size), sizeof(record_size));
-    write_or_throw(out, reinterpret_cast<const char *>(&record), sizeof(record));
-    write_or_throw(out, reinterpret_cast<const char *>(&crc), sizeof(crc));
+    out.close();
+    fsync_file(path_);
 }
 
 void ObservedTimeIndexLog::overwrite_all(const std::vector<ObservedTimeIndexRecord> &records) {
-    std::filesystem::create_directories(path_.parent_path());
+    write_file_atomically(path_, [&](std::ostream &out) {
+        write_header(out);
 
-    std::ofstream out(path_, std::ios::binary | std::ios::trunc);
-    if (!out) {
-        throw std::runtime_error("failed to open observed-time index log for overwrite");
-    }
-
-    write_header(out);
-
-    uint32_t record_size = OBSERVED_TIME_INDEX_RECORD_SIZE;
-
-    for (const auto &record : records) {
-        uint32_t crc = crc32(&record, sizeof(record));
-
-        write_or_throw(out, reinterpret_cast<const char *>(&record_size), sizeof(record_size));
-        write_or_throw(out, reinterpret_cast<const char *>(&record), sizeof(record));
-        write_or_throw(out, reinterpret_cast<const char *>(&crc), sizeof(crc));
-    }
+        for (const auto &record : records) {
+            write_record(out, record);
+        }
+    });
 }
 
 std::vector<ObservedTimeIndexRecord> ObservedTimeIndexLog::read_all() const {
@@ -141,6 +149,14 @@ std::vector<ObservedTimeIndexRecord> ObservedTimeIndexLog::read_all() const {
         }
 
         if (crc32(&record, sizeof(record)) != stored_crc) {
+            // A torn write can only ever leave garbage at the true end of the file, so a checksum
+            // mismatch with nothing after it is treated the same as an incomplete trailing record.
+            // A checksum mismatch with valid-length data following it, however, cannot be a crash
+            // artifact -- that is unambiguous corruption.
+            if (in.peek() == std::char_traits<char>::eof()) {
+                break;
+            }
+
             throw std::runtime_error("observed-time index log checksum mismatch");
         }
 

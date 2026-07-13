@@ -14,6 +14,8 @@ add_library(kernel
     src/subject_index_log.cpp
     src/current_index_log.cpp
     src/checksum.cpp
+    src/durability.cpp
+    src/index_checkpoint.cpp
 )
 
 target_include_directories(kernel
@@ -58,6 +60,14 @@ add_executable(checksum_tests
     tests/checksum_tests.cpp
 )
 
+add_executable(durability_tests
+    tests/durability_tests.cpp
+)
+
+add_executable(index_checkpoint_tests
+    tests/index_checkpoint_tests.cpp
+)
+
 target_link_libraries(knowledge_kernel_tests
     PRIVATE kernel
 )
@@ -83,6 +93,14 @@ target_link_libraries(current_index_log_tests
 )
 
 target_link_libraries(checksum_tests
+    PRIVATE kernel
+)
+
+target_link_libraries(durability_tests
+    PRIVATE kernel
+)
+
+target_link_libraries(index_checkpoint_tests
     PRIVATE kernel
 )
 
@@ -119,4 +137,14 @@ add_test(
 add_test(
     NAME checksum_tests
     COMMAND checksum_tests
+)
+
+add_test(
+    NAME durability_tests
+    COMMAND durability_tests
+)
+
+add_test(
+    NAME index_checkpoint_tests
+    COMMAND index_checkpoint_tests
 )

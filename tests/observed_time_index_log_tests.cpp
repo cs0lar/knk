@@ -100,8 +100,29 @@ void observed_time_index_log_rejects_missing_or_invalid_header() {
     std::filesystem::remove(path);
 }
 
-void observed_time_index_log_rejects_checksum_mismatch() {
-    auto path = std::filesystem::temp_directory_path() / "kernel_checksum_mismatch_observed_time_index_log.idx";
+void observed_time_index_log_recovers_partial_header_as_empty_log() {
+    auto path = std::filesystem::temp_directory_path() / "kernel_partial_header_observed_time_index_log.idx";
+    std::filesystem::remove(path);
+
+    {
+        // Fewer than the full 8-byte header, simulating a crash mid-write on the very
+        // first-ever append to a brand-new file -- by construction, zero records could
+        // have been durably completed yet.
+        std::ofstream out(path, std::ios::binary);
+        out.write("KNK", 3);
+    }
+
+    ObservedTimeIndexLog log(path);
+
+    auto records = log.read_all();
+
+    assert(records.empty());
+
+    std::filesystem::remove(path);
+}
+
+void observed_time_index_log_recovers_tail_checksum_mismatch_as_torn_write() {
+    auto path = std::filesystem::temp_directory_path() / "kernel_tail_checksum_mismatch_observed_time_index_log.idx";
     std::filesystem::remove(path);
 
     ObservedTimeIndexLog log(path);
@@ -110,7 +131,8 @@ void observed_time_index_log_rejects_checksum_mismatch() {
 
     {
         // Flip a byte inside the record payload, which sits right after the 8-byte
-        // header and the 4-byte record-size prefix.
+        // header and the 4-byte record-size prefix. Nothing follows this record, so it
+        // is indistinguishable from a crash mid-append and should be silently dropped.
         std::fstream io(path, std::ios::binary | std::ios::in | std::ios::out);
         io.seekp(8 + sizeof(uint32_t));
         char byte = 0;
@@ -119,6 +141,37 @@ void observed_time_index_log_rejects_checksum_mismatch() {
         char flipped = static_cast<char>(~byte);
         io.write(&flipped, 1);
     }
+
+    auto records = log.read_all();
+
+    assert(records.empty());
+
+    std::filesystem::remove(path);
+}
+
+void observed_time_index_log_rejects_checksum_mismatch_when_followed_by_more_data() {
+    auto path =
+        std::filesystem::temp_directory_path() / "kernel_mid_file_checksum_mismatch_observed_time_index_log.idx";
+    std::filesystem::remove(path);
+
+    ObservedTimeIndexLog log(path);
+
+    log.append(ObservedTimeIndexRecord{1, 1672531200, 1});
+
+    {
+        // Flip a byte inside the first record's payload before a second, valid record is
+        // appended after it -- data can't validly follow a torn write, so this is
+        // unambiguous corruption, not a crash artifact, and must still throw.
+        std::fstream io(path, std::ios::binary | std::ios::in | std::ios::out);
+        io.seekp(8 + sizeof(uint32_t));
+        char byte = 0;
+        io.read(&byte, 1);
+        io.seekp(8 + sizeof(uint32_t));
+        char flipped = static_cast<char>(~byte);
+        io.write(&flipped, 1);
+    }
+
+    log.append(ObservedTimeIndexRecord{2, 1704067200, 2});
 
     bool threw = false;
     try {
@@ -186,7 +239,9 @@ int main() {
     observed_time_index_log_returns_empty_when_missing();
     observed_time_index_log_rejects_invalid_record_size();
     observed_time_index_log_rejects_missing_or_invalid_header();
-    observed_time_index_log_rejects_checksum_mismatch();
+    observed_time_index_log_recovers_partial_header_as_empty_log();
+    observed_time_index_log_recovers_tail_checksum_mismatch_as_torn_write();
+    observed_time_index_log_rejects_checksum_mismatch_when_followed_by_more_data();
     observed_time_index_log_ignores_incomplete_trailing_record();
     observed_time_index_log_overwrite_all_replaces_prior_contents();
 
