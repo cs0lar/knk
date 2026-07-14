@@ -15,7 +15,17 @@
 namespace knk {
 
 KnowledgeKernel::KnowledgeKernel(StorageConfig config) : storage_(config), index_manager_() {
-    auto log_records = storage_.load_assertions();
+    // A snapshot only ever benefits the "indexes trusted" fast path below: the full-rebuild fallback
+    // path must apply() every record from id 1 to rebuild IndexManager from scratch regardless, and
+    // pre-seeding assertions_ from a snapshot while also apply()-ing those same records would
+    // double-push them. So here we only decide whether a usable snapshot exists and, if so, read just
+    // the log tail after it; if the fast path turns out not to apply below, the full log is re-read.
+    auto snapshot = storage_.load_snapshot();
+    bool used_snapshot =
+        snapshot.has_value() && snapshot->last_snapshotted_id <= storage_.assertion_log_record_count_hint();
+
+    auto tail_records =
+        used_snapshot ? storage_.load_assertions_after(snapshot->last_snapshotted_id) : storage_.load_assertions();
 
     bool indexes_restored = true;
 
@@ -52,7 +62,8 @@ KnowledgeKernel::KnowledgeKernel(StorageConfig config) : storage_(config), index
     // logs silently behind assertions.log (missing entries for the newest commits, not distinguishable from those
     // entries never existing). Either way, discard whatever partial state was loaded and rebuild every index
     // uniformly from the log below, rather than trying to reconcile per-index-file coverage.
-    AssertionId max_committed_id = log_records.empty() ? 0 : log_records.back().id;
+    AssertionId max_committed_id =
+        tail_records.empty() ? (used_snapshot ? snapshot->last_snapshotted_id : 0) : tail_records.back().id;
     bool checkpoint_matches = storage_.load_checkpoint() == max_committed_id;
 
     if (!indexes_restored || !checkpoint_matches) {
@@ -60,15 +71,24 @@ KnowledgeKernel::KnowledgeKernel(StorageConfig config) : storage_(config), index
         indexes_restored = false;
     }
 
-    for (const auto &record : log_records) {
-        if (indexes_restored) {
+    if (indexes_restored) {
+        if (used_snapshot) {
+            assertions_ = snapshot->assertions;
+            next_id_ = snapshot->last_snapshotted_id + 1;
+        }
+
+        for (const auto &record : tail_records) {
             restore_assertion(record);
-        } else {
+        }
+    } else {
+        // The fallback path always needs the full log to rebuild IndexManager via apply(); if only
+        // the tail was read above (because a snapshot looked usable), fetch the rest now.
+        auto full_records = used_snapshot ? storage_.load_assertions() : std::move(tail_records);
+
+        for (const auto &record : full_records) {
             apply(record);
         }
-    }
 
-    if (!indexes_restored) {
         std::vector<ObservedTimeIndexRecord> observed_time_records;
         for (const auto &[subject, observed_at, id] : index_manager_.observed_time_entries()) {
             observed_time_records.push_back(ObservedTimeIndexRecord{subject, observed_at, id});
@@ -90,6 +110,8 @@ KnowledgeKernel::KnowledgeKernel(StorageConfig config) : storage_(config), index
         storage_.write_checkpoint(max_committed_id);
     }
 }
+
+void KnowledgeKernel::write_snapshot() { storage_.write_snapshot(next_id_ - 1, assertions_); }
 
 void KnowledgeKernel::apply(const Assertion &assertion) {
     if (assertion.supersedes_id != 0) {

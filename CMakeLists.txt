@@ -16,6 +16,7 @@ add_library(kernel
     src/checksum.cpp
     src/durability.cpp
     src/index_checkpoint.cpp
+    src/snapshot_store.cpp
 )
 
 target_include_directories(kernel
@@ -68,6 +69,10 @@ add_executable(index_checkpoint_tests
     tests/index_checkpoint_tests.cpp
 )
 
+add_executable(snapshot_store_tests
+    tests/snapshot_store_tests.cpp
+)
+
 target_link_libraries(knowledge_kernel_tests
     PRIVATE kernel
 )
@@ -101,6 +106,10 @@ target_link_libraries(durability_tests
 )
 
 target_link_libraries(index_checkpoint_tests
+    PRIVATE kernel
+)
+
+target_link_libraries(snapshot_store_tests
     PRIVATE kernel
 )
 
@@ -147,4 +156,9 @@ add_test(
 add_test(
     NAME index_checkpoint_tests
     COMMAND index_checkpoint_tests
+)
+
+add_test(
+    NAME snapshot_store_tests
+    COMMAND snapshot_store_tests
 )

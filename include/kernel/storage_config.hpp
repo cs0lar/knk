@@ -19,6 +19,8 @@ struct StorageConfig {
 
     std::filesystem::path checkpoint_path() const { return index_directory() / "checkpoint"; }
 
+    std::filesystem::path snapshot_path() const { return root / "snapshot"; }
+
     std::filesystem::path payload_directory() const { return root / "payloads"; }
 };
 

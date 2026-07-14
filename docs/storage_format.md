@@ -121,6 +121,45 @@ the checkpoint as the last step of its storage-append sequence, after all index 
 and before applying the change to in-memory state — so a crash at any point during a commit's
 storage writes leaves the checkpoint reflecting only the last commit that fully completed.
 
+## Snapshot
+
+`snapshot` (at the storage root, alongside `assertions.log`, not inside `indexes/`) is a sixth,
+distinct file: a full-replace snapshot of `assertions_`, written only when the application explicitly
+calls `KnowledgeKernel::write_snapshot()` — there is no automatic cadence. Unlike the four append-only
+logs, it is always fully rewritten (never appended to), same as `indexes/checkpoint`.
+
+Note what this is *not*: `assertions_` (and therefore `assertions.log`) never shrinks — nothing is ever
+compacted or truncated, because audit/timeline queries (`commit_history`, `valid_time_timeline`,
+`observed_time_timeline`) need the full history forever. A snapshot does not reduce total data volume,
+and taking one never allows `assertions.log` to be truncated or archived. Its value is narrower: it
+turns "re-parse every individual framed record in `assertions.log` on every startup" into "one bulk
+snapshot load, plus only the small tail committed since the snapshot was taken."
+
+Format: `[4-byte magic "KNKS"][4-byte uint32 version][8-byte uint64 last_snapshotted_id][8-byte uint64
+record_count][record_count * sizeof(Assertion) raw bytes][4-byte uint32 crc32]`, where the crc32 covers
+`last_snapshotted_id`, `record_count`, and the assertion bytes together as one buffer (a single CRC over
+the whole payload, not per-record CRCs like the four framed logs — safe here because
+`write_file_atomically` already guarantees no torn file, so there's no tail-tolerance to preserve).
+
+Like `indexes/checkpoint`, reading a snapshot **never throws** — any anomaly (missing file, bad
+magic/version, `record_count != last_snapshotted_id`, a file size that doesn't match the expected size
+computed from `record_count`, or a bad crc) degrades to "no usable snapshot," never an error. The
+expected-size check runs before any allocation sized by `record_count`, so a corrupted, implausibly
+large `record_count` can never trigger a huge allocation attempt.
+
+`AssertionLog` gained two supporting methods for this: `read_after(AssertionId last_seen_id)` seeks
+directly to the deterministic byte offset for a given id (frames are fixed-size and ids are assigned
+1..N with no gaps, an invariant already relied on elsewhere via `assertions_[id - 1]`) instead of parsing
+from the start, and `record_count_hint()` is an O(1) file-size-based estimate (no parsing) used to
+sanity-check that a snapshot doesn't claim to cover more records than the log could possibly contain.
+
+`KnowledgeKernel`'s constructor only tries to use a snapshot on the same fast path already used by the
+index checkpoint (indexes loaded cleanly *and* checkpoint matches): it seeds `assertions_`/`next_id_`
+from the snapshot and then only needs to walk the log tail via `read_after`. The full-rebuild fallback
+path (index files missing/corrupt, or checkpoint mismatch) ignores the snapshot entirely and re-reads
+the whole log, because that path must `apply()` every record from id 1 to rebuild `IndexManager` from
+scratch regardless — a snapshot provides no benefit there.
+
 ## Known limitation: raw struct serialization
 
 Record payloads are still written via `reinterpret_cast`-style raw struct serialization, not

@@ -6,7 +6,8 @@ namespace knk {
 StorageEngine::StorageEngine(StorageConfig config)
     : config_(std::move(config)), assertion_log_(config_.assertion_log_path()),
       observed_time_index_log_(config_.observed_time_index_path()), subject_index_log_(config_.subject_index_path()),
-      current_index_log_(config_.current_index_path()), checkpoint_(config_.checkpoint_path()) {
+      current_index_log_(config_.current_index_path()), checkpoint_(config_.checkpoint_path()),
+      snapshot_store_(config_.snapshot_path()) {
     std::filesystem::create_directories(config_.root);
     std::filesystem::create_directories(config_.index_directory());
     std::filesystem::create_directories(config_.payload_directory());
@@ -15,6 +16,12 @@ StorageEngine::StorageEngine(StorageConfig config)
 void StorageEngine::append_assertion(const Assertion &assertion) { assertion_log_.append(assertion); }
 
 std::vector<Assertion> StorageEngine::load_assertions() const { return assertion_log_.read_all(); }
+
+std::vector<Assertion> StorageEngine::load_assertions_after(AssertionId last_seen_id) const {
+    return assertion_log_.read_after(last_seen_id);
+}
+
+AssertionId StorageEngine::assertion_log_record_count_hint() const { return assertion_log_.record_count_hint(); }
 
 void StorageEngine::append_observed_time_entry(EntityId subject, Timestamp observed_at, AssertionId id) {
     observed_time_index_log_.append(ObservedTimeIndexRecord{subject, observed_at, id});
@@ -48,11 +55,15 @@ void StorageEngine::rewrite_current_index(const std::vector<CurrentIndexRecord> 
     current_index_log_.overwrite_all(records);
 }
 
-void StorageEngine::write_checkpoint(AssertionId last_fully_indexed_id) {
-    checkpoint_.write(last_fully_indexed_id);
-}
+void StorageEngine::write_checkpoint(AssertionId last_fully_indexed_id) { checkpoint_.write(last_fully_indexed_id); }
 
 AssertionId StorageEngine::load_checkpoint() const { return checkpoint_.read(); }
+
+void StorageEngine::write_snapshot(AssertionId last_snapshotted_id, const std::vector<Assertion> &assertions) {
+    snapshot_store_.write(last_snapshotted_id, assertions);
+}
+
+std::optional<SnapshotData> StorageEngine::load_snapshot() const { return snapshot_store_.read(); }
 
 const StorageConfig &StorageEngine::config() const { return config_; }
 

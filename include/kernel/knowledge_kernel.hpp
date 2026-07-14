@@ -30,6 +30,11 @@ class KnowledgeKernel {
 
     void apply(const Assertion &assertion);
 
+    // Persists a full snapshot of the current in-memory assertions_ so a future startup can skip
+    // re-parsing the portion of assertions.log it covers. Explicit/caller-triggered only -- there
+    // is no automatic cadence, so commit-path latency is unaffected.
+    void write_snapshot();
+
     void mark_superseded(AssertionId superseded_id);
 
     void mark_retracted(AssertionId retracted_id);

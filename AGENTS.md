@@ -215,7 +215,7 @@ Future work :
 * ✅ Checksums (per-record CRC32; see implementation status below)
 * ✅ Crash recovery (fsync durability, tail-tolerant corruption policy, index checkpoint; see implementation
  status below)
-* Snapshots
+* ✅ Snapshots (explicit full-replace snapshot of `assertions_`; see implementation status below)
 
 At this phase, the log should evolve from a simple file into a segmented storage subsystem with integrity checks and controlled recovery.
 
@@ -266,6 +266,28 @@ Current implementation status :
  `tests/knowledge_kernel_tests.cpp` exercises the cross-log atomicity gap directly (bypassing `commit()` via a
  raw `StorageEngine::append_assertion` call, then confirming a reopened kernel still surfaces the assertion via
  `assertions_for_subject`/`current`).
+* Snapshots: `SnapshotStore` (`include/kernel/snapshot_store.hpp`/`src/snapshot_store.cpp`) persists a full
+ `assertions_` snapshot to a single root-level file (`snapshot`, alongside `assertions.log`, not inside
+ `indexes/`), written only via the explicit `KnowledgeKernel::write_snapshot()` call — there is no automatic
+ cadence, so commit-path latency is unaffected. Unlike the four framed logs, it is always fully rewritten (via
+ `write_file_atomically`, like `indexes/checkpoint`) rather than appended to, so it uses one CRC over the whole
+ payload instead of per-record CRCs, and `read()` never throws (same "optimization hint, never authoritative"
+ philosophy as `IndexCheckpoint`). Crucially, this does **not** shrink `assertions.log` or enable
+ truncation/compaction — `assertions_` never shrinks, since audit/timeline queries need full history forever;
+ the snapshot only turns "re-parse every record in `assertions.log` on every startup" into "one bulk snapshot
+ load plus only the tail committed since the snapshot." `AssertionLog` gained `read_after(AssertionId)` (seeks
+ directly to the deterministic byte offset for an id, exploiting the existing fixed-frame-size/no-gap-ids
+ invariant already relied on via `assertions_[id - 1]`) and `record_count_hint()` (an O(1) file-size estimate,
+ used only to sanity-check a snapshot isn't claiming to cover more records than the log could contain).
+ `KnowledgeKernel`'s constructor only uses a usable snapshot on the same fast path already used by the index
+ checkpoint (indexes loaded cleanly and checkpoint matches); the full-rebuild fallback path ignores the
+ snapshot entirely, since it must `apply()` every record from ID 1 to rebuild `IndexManager` regardless. See
+ `docs/storage_format.md`'s "Snapshot" section. Covered by `tests/snapshot_store_tests.cpp` (round trip, missing
+ file, corrupt magic/version/crc/record-count-mismatch all return `nullopt` without throwing, overwrite
+ replaces prior snapshot), additions to `tests/assertion_log_tests.cpp` for `read_after`/`record_count_hint`,
+ and additions to `tests/knowledge_kernel_tests.cpp`
+ (`write_snapshot_then_restart_uses_snapshot_and_replays_only_the_tail`,
+ `stale_or_corrupt_snapshot_falls_back_to_full_replay`, `snapshot_ahead_of_log_is_ignored`).
 
 ### Phase 5 — Performance
 
