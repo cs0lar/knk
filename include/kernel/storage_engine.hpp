@@ -1,6 +1,7 @@
 #pragma once
 
 #include <filesystem>
+#include <optional>
 #include <vector>
 
 #include "kernel/assertion.hpp"
@@ -9,6 +10,7 @@
 #include "kernel/ids.hpp"
 #include "kernel/index_checkpoint.hpp"
 #include "kernel/observed_time_index_log.hpp"
+#include "kernel/snapshot_store.hpp"
 #include "kernel/storage_config.hpp"
 #include "kernel/subject_index_log.hpp"
 #include "kernel/time.hpp"
@@ -22,6 +24,10 @@ class StorageEngine {
     void append_assertion(const Assertion &assertion);
 
     std::vector<Assertion> load_assertions() const;
+
+    std::vector<Assertion> load_assertions_after(AssertionId last_seen_id) const;
+
+    AssertionId assertion_log_record_count_hint() const;
 
     void append_observed_time_entry(EntityId subject, Timestamp observed_at, AssertionId id);
 
@@ -45,6 +51,10 @@ class StorageEngine {
 
     AssertionId load_checkpoint() const;
 
+    void write_snapshot(AssertionId last_snapshotted_id, const std::vector<Assertion> &assertions);
+
+    std::optional<SnapshotData> load_snapshot() const;
+
     const StorageConfig &config() const;
 
   private:
@@ -54,6 +64,7 @@ class StorageEngine {
     SubjectIndexLog subject_index_log_;
     CurrentIndexLog current_index_log_;
     IndexCheckpoint checkpoint_;
+    SnapshotStore snapshot_store_;
 };
 
 } // namespace knk

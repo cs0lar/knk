@@ -253,6 +253,114 @@ void assertion_log_ignores_incomplete_trailing_record() {
     std::filesystem::remove(path);
 }
 
+Assertion make_assertion(AssertionId id, EntityId subject) {
+    return Assertion{.id = id,
+                     .subject = subject,
+                     .predicate = 10,
+                     .object = 100,
+                     .valid_from = 1672531200,
+                     .valid_to = OPEN_ENDED,
+                     .observed_at = 1719878400,
+                     .confidence = 0.95,
+                     .status = AssertionStatus::Active};
+}
+
+void assertion_log_read_after_zero_behaves_like_read_all() {
+    auto path = std::filesystem::temp_directory_path() / "kernel_read_after_zero_log.log";
+    std::filesystem::remove(path);
+
+    AssertionLog log(path);
+    log.append(make_assertion(1, 1));
+    log.append(make_assertion(2, 2));
+
+    auto all = log.read_all();
+    auto after_zero = log.read_after(0);
+
+    assert(all.size() == after_zero.size());
+    assert(after_zero.size() == 2);
+    assert(after_zero[0].id == 1);
+    assert(after_zero[1].id == 2);
+
+    std::filesystem::remove(path);
+}
+
+void assertion_log_read_after_returns_only_records_committed_after_the_given_id() {
+    auto path = std::filesystem::temp_directory_path() / "kernel_read_after_tail_log.log";
+    std::filesystem::remove(path);
+
+    AssertionLog log(path);
+    log.append(make_assertion(1, 1));
+    log.append(make_assertion(2, 2));
+    log.append(make_assertion(3, 3));
+
+    auto tail = log.read_after(1);
+
+    assert(tail.size() == 2);
+    assert(tail[0].id == 2);
+    assert(tail[1].id == 3);
+
+    std::filesystem::remove(path);
+}
+
+void assertion_log_read_after_beyond_available_records_returns_empty() {
+    auto path = std::filesystem::temp_directory_path() / "kernel_read_after_beyond_log.log";
+    std::filesystem::remove(path);
+
+    AssertionLog log(path);
+    log.append(make_assertion(1, 1));
+
+    auto tail = log.read_after(5);
+
+    assert(tail.empty());
+
+    std::filesystem::remove(path);
+}
+
+void assertion_log_read_after_recovers_tail_checksum_mismatch_as_torn_write() {
+    auto path = std::filesystem::temp_directory_path() / "kernel_read_after_tail_checksum_log.log";
+    std::filesystem::remove(path);
+
+    AssertionLog log(path);
+    log.append(make_assertion(1, 1));
+    log.append(make_assertion(2, 2));
+
+    {
+        // Flip a byte inside the second record's payload; nothing follows it, so it must be
+        // silently dropped rather than throwing, exactly like read_all()'s tail-tolerance.
+        constexpr size_t FRAME_SIZE = sizeof(uint32_t) + sizeof(Assertion) + sizeof(uint32_t);
+        std::fstream io(path, std::ios::binary | std::ios::in | std::ios::out);
+        io.seekp(8 + FRAME_SIZE + sizeof(uint32_t));
+        char byte = 0;
+        io.read(&byte, 1);
+        io.seekp(8 + FRAME_SIZE + sizeof(uint32_t));
+        char flipped = static_cast<char>(~byte);
+        io.write(&flipped, 1);
+    }
+
+    auto tail = log.read_after(1);
+
+    assert(tail.empty());
+
+    std::filesystem::remove(path);
+}
+
+void assertion_log_record_count_hint_matches_appended_record_count() {
+    auto path = std::filesystem::temp_directory_path() / "kernel_record_count_hint_log.log";
+    std::filesystem::remove(path);
+
+    AssertionLog log(path);
+
+    assert(log.record_count_hint() == 0);
+
+    log.append(make_assertion(1, 1));
+    log.append(make_assertion(2, 2));
+    log.append(make_assertion(3, 3));
+
+    assert(log.record_count_hint() == 3);
+
+    std::filesystem::remove(path);
+}
+
 } // namespace
 
 int main() {
@@ -264,6 +372,11 @@ int main() {
     assertion_log_recovers_tail_checksum_mismatch_as_torn_write();
     assertion_log_rejects_checksum_mismatch_when_followed_by_more_data();
     assertion_log_ignores_incomplete_trailing_record();
+    assertion_log_read_after_zero_behaves_like_read_all();
+    assertion_log_read_after_returns_only_records_committed_after_the_given_id();
+    assertion_log_read_after_beyond_available_records_returns_empty();
+    assertion_log_read_after_recovers_tail_checksum_mismatch_as_torn_write();
+    assertion_log_record_count_hint_matches_appended_record_count();
 
     std::cout << "All assertion_log tests passed.\n";
 }

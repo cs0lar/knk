@@ -1,8 +1,10 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <stdexcept>
+#include <system_error>
 
 #include "kernel/assertion_log.hpp"
 #include "kernel/checksum.hpp"
@@ -62,46 +64,14 @@ bool read_and_validate_header(std::ifstream &in) {
     return true;
 }
 
-} // namespace
+constexpr size_t FRAME_SIZE = sizeof(uint32_t) + sizeof(Assertion) + sizeof(uint32_t);
 
-AssertionLog::AssertionLog(std::filesystem::path path) : path_(std::move(path)) {}
-
-void AssertionLog::append(const Assertion &assertion) {
-    std::filesystem::create_directories(path_.parent_path());
-
-    bool file_is_new = !std::filesystem::exists(path_) || std::filesystem::file_size(path_) == 0;
-
-    std::ofstream out(path_, std::ios::binary | std::ios::app);
-    if (!out) {
-        throw std::runtime_error("failed to open fact log for append");
-    }
-
-    if (file_is_new) {
-        write_header(out);
-    }
-
-    uint32_t record_size = ASSERTION_RECORD_SIZE;
-    uint32_t crc = crc32(&assertion, sizeof(assertion));
-
-    write_or_throw(out, reinterpret_cast<const char *>(&record_size), sizeof(record_size));
-    write_or_throw(out, reinterpret_cast<const char *>(&assertion), sizeof(assertion));
-    write_or_throw(out, reinterpret_cast<const char *>(&crc), sizeof(crc));
-
-    out.close();
-    fsync_file(path_);
-}
-
-std::vector<Assertion> AssertionLog::read_all() const {
+// Shared tail-tolerant per-record read loop used by both read_all() (starting right after the
+// header) and read_after() (starting at a seeked-to offset further into the file). Corruption
+// policy is identical regardless of start position: a bad record_size always throws, a checksum
+// mismatch is dropped silently only if nothing valid-length follows it.
+std::vector<Assertion> read_records(std::ifstream &in) {
     std::vector<Assertion> assertions;
-
-    std::ifstream in(path_, std::ios::binary);
-    if (!in) {
-        return assertions;
-    }
-
-    if (!read_and_validate_header(in)) {
-        return assertions;
-    }
 
     while (true) {
         uint32_t record_size = 0;
@@ -150,6 +120,81 @@ std::vector<Assertion> AssertionLog::read_all() const {
     }
 
     return assertions;
+}
+
+} // namespace
+
+AssertionLog::AssertionLog(std::filesystem::path path) : path_(std::move(path)) {}
+
+void AssertionLog::append(const Assertion &assertion) {
+    std::filesystem::create_directories(path_.parent_path());
+
+    bool file_is_new = !std::filesystem::exists(path_) || std::filesystem::file_size(path_) == 0;
+
+    std::ofstream out(path_, std::ios::binary | std::ios::app);
+    if (!out) {
+        throw std::runtime_error("failed to open fact log for append");
+    }
+
+    if (file_is_new) {
+        write_header(out);
+    }
+
+    uint32_t record_size = ASSERTION_RECORD_SIZE;
+    uint32_t crc = crc32(&assertion, sizeof(assertion));
+
+    write_or_throw(out, reinterpret_cast<const char *>(&record_size), sizeof(record_size));
+    write_or_throw(out, reinterpret_cast<const char *>(&assertion), sizeof(assertion));
+    write_or_throw(out, reinterpret_cast<const char *>(&crc), sizeof(crc));
+
+    out.close();
+    fsync_file(path_);
+}
+
+std::vector<Assertion> AssertionLog::read_all() const {
+    std::ifstream in(path_, std::ios::binary);
+    if (!in) {
+        return {};
+    }
+
+    if (!read_and_validate_header(in)) {
+        return {};
+    }
+
+    return read_records(in);
+}
+
+std::vector<Assertion> AssertionLog::read_after(AssertionId last_seen_id) const {
+    if (last_seen_id == 0) {
+        return read_all();
+    }
+
+    std::ifstream in(path_, std::ios::binary);
+    if (!in) {
+        return {};
+    }
+
+    auto offset = static_cast<std::streamoff>(HEADER_SIZE + last_seen_id * FRAME_SIZE);
+
+    in.seekg(0, std::ios::end);
+    auto file_size = in.tellg();
+    if (file_size < 0 || offset >= file_size) {
+        return {};
+    }
+
+    in.seekg(offset, std::ios::beg);
+
+    return read_records(in);
+}
+
+AssertionId AssertionLog::record_count_hint() const {
+    std::error_code error;
+    auto file_size = std::filesystem::file_size(path_, error);
+    if (error || file_size < HEADER_SIZE) {
+        return 0;
+    }
+
+    return (file_size - HEADER_SIZE) / FRAME_SIZE;
 }
 
 } // namespace knk

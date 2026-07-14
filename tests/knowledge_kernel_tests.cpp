@@ -755,6 +755,101 @@ void crash_between_assertion_append_and_index_append_recovers_via_checkpoint() {
     cleanup(root);
 }
 
+void write_snapshot_then_restart_uses_snapshot_and_replays_only_the_tail() {
+    auto root = test_root("write_snapshot_then_restart_uses_snapshot_and_replays_only_the_tail");
+
+    AssertionId first_id = 0;
+    AssertionId superseding_id = 0;
+    {
+        KnowledgeKernel kernel(StorageConfig{root});
+
+        first_id = kernel.commit(ALICE, WORKS_AT, ACME, JAN_1_2023, OPEN_ENDED, JUL_1_2024, 0.95);
+        kernel.commit(BETA, WORKS_AT, GAMMA, JAN_1_2023, OPEN_ENDED, JUL_1_2024, 0.90);
+
+        kernel.write_snapshot();
+
+        // Committed after the snapshot, and supersedes an assertion the snapshot already covers --
+        // exercises restore_assertion() mutating the status of a snapshot-seeded assertion.
+        superseding_id =
+            kernel.commit_superseding(ALICE, WORKS_AT, UNIVERSITY, JUL_1_2024, OPEN_ENDED, JUL_2_2024, 0.95, first_id);
+    }
+
+    KnowledgeKernel reopened(StorageConfig{root});
+
+    auto alice_current = reopened.current(ALICE);
+    assert(alice_current.size() == 1);
+    assert(alice_current[0].id == superseding_id);
+    assert(alice_current[0].object == UNIVERSITY);
+
+    auto beta_current = reopened.current(BETA);
+    assert(beta_current.size() == 1);
+    assert(beta_current[0].object == GAMMA);
+
+    auto history = reopened.commit_history(ALICE, WORKS_AT);
+    assert(history.size() == 2);
+    assert(history[0].id == first_id && history[0].status == AssertionStatus::Superseded);
+    assert(history[1].id == superseding_id && history[1].status == AssertionStatus::Active);
+
+    cleanup(root);
+}
+
+void stale_or_corrupt_snapshot_falls_back_to_full_replay() {
+    auto root = test_root("stale_or_corrupt_snapshot_falls_back_to_full_replay");
+
+    {
+        KnowledgeKernel kernel(StorageConfig{root});
+
+        kernel.commit(ALICE, WORKS_AT, ACME, JAN_1_2023, JUL_1_2024, JUL_1_2024, 0.95);
+        kernel.commit(ALICE, WORKS_AT, BETA, JUL_1_2024, OPEN_ENDED, JUL_2_2024, 0.90);
+    }
+
+    {
+        std::ofstream out(StorageConfig{root}.snapshot_path(), std::ios::binary | std::ios::trunc);
+        out.write("garbage!", 8);
+    }
+
+    KnowledgeKernel recovered_kernel(StorageConfig{root});
+
+    auto assertions = recovered_kernel.assertions_for_subject(ALICE);
+    assert(assertions.size() == 2);
+
+    auto current = recovered_kernel.current(ALICE);
+    assert(current.size() == 1);
+    assert(current[0].object == BETA);
+
+    cleanup(root);
+}
+
+void snapshot_ahead_of_log_is_ignored() {
+    auto root = test_root("snapshot_ahead_of_log_is_ignored");
+
+    {
+        KnowledgeKernel kernel(StorageConfig{root});
+        kernel.commit(ALICE, WORKS_AT, ACME, JAN_1_2023, OPEN_ENDED, JUL_1_2024, 0.95);
+    }
+
+    // Write a snapshot claiming to cover 5 assertions when the log only ever had 1 -- this must be
+    // ignored rather than trusted (record_count_hint() catches it), or startup would silently seed
+    // assertions_ with 4 assertions that never existed.
+    {
+        StorageEngine storage(StorageConfig{root});
+        std::vector<Assertion> bogus_assertions;
+        for (AssertionId id = 1; id <= 5; ++id) {
+            bogus_assertions.push_back(
+                Assertion{id, ALICE, WORKS_AT, ACME, JAN_1_2023, OPEN_ENDED, JUL_1_2024, 0.95, AssertionStatus::Active});
+        }
+        storage.write_snapshot(5, bogus_assertions);
+    }
+
+    KnowledgeKernel recovered_kernel(StorageConfig{root});
+
+    auto assertions = recovered_kernel.assertions_for_subject(ALICE);
+    assert(assertions.size() == 1);
+    assert(assertions[0].id == 1);
+
+    cleanup(root);
+}
+
 } // namespace
 
 int main() {
@@ -789,6 +884,9 @@ int main() {
     superseded_assertion_remains_excluded_from_current_after_restart();
     corrupt_current_index_falls_back_to_replay_and_self_heals();
     crash_between_assertion_append_and_index_append_recovers_via_checkpoint();
+    write_snapshot_then_restart_uses_snapshot_and_replays_only_the_tail();
+    stale_or_corrupt_snapshot_falls_back_to_full_replay();
+    snapshot_ahead_of_log_is_ignored();
 
     std::cout << "All assertion_kernel tests passed.\n";
     return 0;
