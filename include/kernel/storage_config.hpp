@@ -1,13 +1,25 @@
 #pragma once
 
+#include <cstdio>
 #include <filesystem>
+#include <string>
 
 namespace knk {
 
 struct StorageConfig {
     std::filesystem::path root;
 
-    std::filesystem::path assertion_log_path() const { return root / "assertions.log"; }
+    // Soft capacity bound per assertion-log segment file, not a tuned performance number -- nothing
+    // above AssertionLog observes segment boundaries, so this is a storage-layout default.
+    size_t max_records_per_segment = 100'000;
+
+    std::filesystem::path segment_directory() const { return root / "segments"; }
+
+    std::filesystem::path segment_path(size_t segment_index) const {
+        char buffer[11];
+        std::snprintf(buffer, sizeof(buffer), "%010zu", segment_index);
+        return segment_directory() / (std::string(buffer) + ".seg");
+    }
 
     std::filesystem::path index_directory() const { return root / "indexes"; }
 

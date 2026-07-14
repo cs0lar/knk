@@ -4,7 +4,7 @@
 namespace knk {
 
 StorageEngine::StorageEngine(StorageConfig config)
-    : config_(std::move(config)), assertion_log_(config_.assertion_log_path()),
+    : config_(std::move(config)), assertion_log_(config_.segment_directory(), config_.max_records_per_segment),
       observed_time_index_log_(config_.observed_time_index_path()), subject_index_log_(config_.subject_index_path()),
       current_index_log_(config_.current_index_path()), checkpoint_(config_.checkpoint_path()),
       snapshot_store_(config_.snapshot_path()) {

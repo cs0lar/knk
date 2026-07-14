@@ -1,13 +1,18 @@
 # Storage Format
 
-This document describes the on-disk binary format shared by all four persisted logs:
-`assertions.log` (`AssertionLog`), `indexes/subject.idx` (`SubjectIndexLog`),
-`indexes/current.idx` (`CurrentIndexLog`), and `indexes/observed_time.idx` (`ObservedTimeIndexLog`).
+This document describes the on-disk binary format shared by all four persisted logs: the assertion
+log (`AssertionLog`, the `segments/` directory — see "Segmented assertion log" below),
+`indexes/subject.idx` (`SubjectIndexLog`), `indexes/current.idx` (`CurrentIndexLog`), and
+`indexes/observed_time.idx` (`ObservedTimeIndexLog`).
 
-All four logs use the identical framing described below; only the record payload struct differs
-per log.
+All four logs use the identical per-file framing described below (a header followed by record
+frames); only the record payload struct differs per log, and only the assertion log spreads that
+framing across multiple files instead of one — the three index logs remain single files.
 
 ## File layout
+
+Every individual file involved (each assertion-log segment file, and each of the three index log
+files) follows this same layout:
 
 ```
 [ file header, 8 bytes ]
@@ -36,6 +41,10 @@ unambiguously means zero records were ever durably completed. A full 8-byte head
 magic or an unrecognized version is still treated as corrupt and `read_all()` throws
 `std::runtime_error` — a torn write cannot produce a full-length-but-wrong header, so this is a
 genuine format mismatch (e.g. a stale pre-checksum file), not a crash artifact.
+
+(For the assertion log specifically, "torn header" tolerance only applies to the active/last
+segment file — see "Segmented assertion log" below for why a torn header in an earlier segment is
+instead unambiguous corruption.)
 
 There is no migration path from pre-checksum log files (files without this header). This is a
 breaking on-disk format change — existing local data directories must be deleted and rebuilt from
@@ -69,6 +78,8 @@ scratch (the log is always rebuildable by replaying `assertions.log`, or from sc
   artifact. This is a deliberate policy choice: it accepts that a corrupted-but-truly-last record
   is indistinguishable from a torn write (the same ambiguity already inherent in tolerating short
   trailing frames), in exchange for automatic recovery from ordinary crashes.
+  (For the assertion log, "nothing follows" means nothing follows anywhere in the log, not just
+  within one segment file — see "Segmented assertion log" below.)
 
 ### Record payloads
 
@@ -78,6 +89,54 @@ scratch (the log is always rebuildable by replaying `assertions.log`, or from sc
 - `SubjectIndexLog`: `SubjectIndexRecord` — `{subject, assertion_id}`.
 - `CurrentIndexLog`: `CurrentIndexRecord` — `{subject, predicate, assertion_id, active}`.
 - `ObservedTimeIndexLog`: `ObservedTimeIndexRecord` — `{subject, observed_at, assertion_id}`.
+
+## Segmented assertion log
+
+Unlike the three index logs, the assertion log (`AssertionLog`) is not a single file. It is a
+directory of fixed-capacity segment files:
+
+```
+segments/
+  0000000000.seg   (ids 1..max_records_per_segment)
+  0000000001.seg   (ids max_records_per_segment+1..2*max_records_per_segment)
+  ...
+```
+
+`StorageConfig::max_records_per_segment` (default 100,000 — a storage-layout placeholder, not a
+tuned performance number, since nothing above `AssertionLog` can observe segment boundaries) is
+fixed per data directory: segment index `k` deterministically holds ids
+`[k*max_records_per_segment + 1, (k+1)*max_records_per_segment]`. Each segment file uses the exact
+same header + record-frame format described above; only the layout of *which file* a given id lives
+in is new.
+
+**Why this arithmetic is exact, not a hint.** `append()` checks capacity *before* writing a record,
+so a segment is only ever rolled from after its previous record was already fully written and
+fsynced in an earlier, separate call. This guarantees every non-active (already-rolled-from) segment
+holds *exactly* `max_records_per_segment` complete records — never fewer, never torn. Only the
+single currently-active (highest-index) segment can ever be short (still filling) or have a torn
+trailing frame from a crash. This is what lets `read_after()` and `record_count_hint()` skip or size
+whole historical segments via pure index arithmetic, with no manifest or segment-metadata file:
+
+- `read_after(last_seen_id)` skips any segment whose entire id range is `<= last_seen_id` without
+  opening it, seeks within the (at most one) segment straddling `last_seen_id` using the same
+  byte-offset trick as a single-file log (just relative to that segment's own starting id), and
+  reads every later segment in full.
+- `record_count_hint()` is `highest_segment_index * max_records_per_segment` (exact, for every
+  earlier segment) plus a file-size-based estimate for just the active segment (same technique as a
+  single-file log, scoped to one file).
+
+**Corruption tolerance generalizes to "only the active segment is tail-tolerant."** A torn header,
+an incomplete trailing record, or a checksum mismatch with nothing following it is silently dropped
+only in the active (last) segment — exactly as it would be in a single-file log. The same anomaly in
+an earlier, already-rolled-from segment always throws instead: since a non-active segment is
+guaranteed complete by construction (see above), a torn-looking trailing frame there cannot be an
+ordinary crash artifact — it's unambiguous corruption. Concretely, this means `AssertionLog`'s shared
+read loop takes a `tolerate_trailing_anomaly` flag that's true only when reading the segment that is
+currently the highest-indexed one on disk.
+
+**This is a breaking, non-migrated on-disk format change**, same precedent as the checksum format
+change earlier in this document: there is no migration from a pre-segment single `assertions.log`
+file. Existing local data directories must be deleted and rebuilt from scratch.
 
 ## Durability
 
@@ -179,8 +238,10 @@ framing errors, so it is caught by the same recovery paths:
   `IndexManager`, replays `assertions.log` in full, rewrites (self-heals) all three index files, and
   persists the new checkpoint.
 - `AssertionLog` is not wrapped in a recovery path — a corrupted assertion log remains a fatal,
-  uncaught startup error, *except* when the corruption is a tail-tolerant torn write (see the
-  checksum-mismatch tail-tolerance policy above), which is silently and safely dropped instead.
-  There is no recovery path for genuine (non-tail) `assertions.log` corruption because it is the
-  system's one source of truth — nothing else to rebuild it from — so that case is deliberately
-  left as a loud, fatal error requiring operator intervention (e.g. restore from backup).
+  uncaught startup error, *except* when the corruption is a tail-tolerant torn write in the active
+  segment (see "Segmented assertion log" above), which is silently and safely dropped instead. A
+  torn-looking anomaly in a non-active segment always throws, since it's proven impossible under
+  normal operation. There is no recovery path for genuine (non-tail) `assertions.log` corruption
+  because it is the system's one source of truth — nothing else to rebuild it from — so that case is
+  deliberately left as a loud, fatal error requiring operator intervention (e.g. restore from
+  backup).
