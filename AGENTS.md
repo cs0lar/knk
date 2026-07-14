@@ -66,250 +66,249 @@ Core responsibilities :
 
 Current focus :
 
-	* ✅ AssertionLog
-	* ✅ StorageEngine
-	* ✅ Recovery from assertion log on `KnowledgeKernel` startup
-	* ✅ Durable-before-visible commit ordering
-	* ✅ IndexManager scaffold compiled and directly tested
-	* ✅ Initial IndexManager integration into `KnowledgeKernel`
-	* ✅ Public supersession and retraction commit APIs
+* ✅ AssertionLog
+* ✅ StorageEngine
+* ✅ Recovery from assertion log on `KnowledgeKernel` startup
+* ✅ Durable-before-visible commit ordering
+* ✅ IndexManager scaffold compiled and directly tested
+* ✅ Initial IndexManager integration into `KnowledgeKernel`
+* ✅ Public supersession and retraction commit APIs
 
-	The current source of truth is the append - only assertion log.
+The current source of truth is the append - only assertion log.
 
 Startup should :
 
-	```text
-	read assertion log
-	→ replay records in commit order
-	→ reconstruct in - memory assertions
-	→ rebuild indexes
-	```
+```text
+read assertion log
+→ replay records in commit order
+→ reconstruct in - memory assertions
+→ rebuild indexes
+```
 
 Runtime commit should :
 
-	```text
-	construct assertion
-	→ append to durable log
-	→ apply to in - memory state
-	→ update indexes
-	```
+```text
+construct assertion
+→ append to durable log
+→ apply to in - memory state
+→ update indexes
+```
 
-	Never update memory before the log write succeeds.
+Never update memory before the log write succeeds.
 
 Current implementation status :
 
-	* Phase 1 in-memory temporal queries are implemented in `KnowledgeKernel`.
-	* `commit`, `commit_superseding`, `commit_retraction`, failed durable append behavior, `get`, subject lookup, current open-ended lookup, valid-time lookup, observed-time lookup, valid-at-known-at lookup, timeline/history lookups, and recovery across kernel instances are covered by standard-library tests.
-	* Assertions are appended to `assertions.log` through `StorageEngine` and `AssertionLog` before being applied to memory.
-	* Startup recovery reads the assertion log and replays records in commit order.
-	* Replay restores `next_id_` by advancing past the largest replayed assertion ID.
-	* Recovery tests currently live in `tests/knowledge_kernel_tests.cpp`, not a separate `tests/recovery_tests.cpp`.
-	* `AssertionLog` writes a simple size-prefixed binary record using raw `Assertion` bytes. It validates record size (throwing `std::runtime_error` on a mismatch) and ignores an incomplete trailing assertion payload; both behaviors are covered by `tests/assertion_log_tests.cpp` (`assertion_log_rejects_invalid_record_size`, `assertion_log_ignores_incomplete_trailing_record`).
-	* `IndexManager` is scaffolded in `include/kernel/index_manager.hpp` and `src/index_manager.cpp`, compiled into the `kernel` target, and covered by `tests/index_manager_tests.cpp`.
-	* `IndexManager` currently maintains subject, predicate, current assertion ID, and observed-time indexes. Current assertion indexing includes only active open-ended assertions. Retraction records are kept in the subject/audit index but are not indexed as current facts. Predicate indexing tracks predicates that still have at least one current assertion for a subject.
-	* `IndexManager::observed_before(subject, t)` (first Phase 3 index, added ahead of the rest of that phase) returns assertion IDs for a subject with `observed_at <= t`, kept sorted by `observed_at` via sorted insertion in `add`. Like the subject index, it retains superseded/retracted/retraction records; status filtering stays the caller's responsibility. `KnowledgeKernel::known_at` and `KnowledgeKernel::valid_at_known_at` now query this index instead of scanning all of a subject's assertions.
-	* `IndexManager::mark_superseded` and `IndexManager::mark_retracted` remove assertion IDs from the current index without removing them from the subject/audit index. They remove a subject/predicate entry from the predicate index only when no current assertions remain for that key.
-	* `KnowledgeKernel` now owns an `IndexManager` and routes subject lookup, current lookup, valid-time lookup, observed-time lookup, and valid-at-known-at lookup through assertion IDs returned by `IndexManager`.
-	* `KnowledgeKernel` no longer owns separate `subject_index_` and `current_index_` maps.
-	* The public current lookup is `current(subject)` and returns active open-ended assertions for all current predicates of that subject by using `IndexManager::predicates_for_subject` and `IndexManager::current_assertions`.
-	* `KnowledgeKernel` constructs a fresh internal `IndexManager` during startup and rebuilds it from the assertion log; externally supplied index state is not accepted as a source of truth.
-	* `KnowledgeKernel::commit_superseding` commits an active replacement assertion with `supersedes_id` and marks the target assertion as `Superseded`.
-	* `KnowledgeKernel::commit_retraction` commits an assertion-like audit record with status `Retraction` and `retracts_id`, and marks the target assertion as `Retracted`.
-	* Retraction targets are validated before append so failed retractions do not persist invalid log records or burn assertion IDs.
-	* Timeline/history query support currently exists as three public methods: `valid_time_timeline(subject, predicate)` returns active assertions sorted by valid time, `observed_time_timeline(subject, predicate)` returns active assertions sorted by observed time, and `commit_history(subject, predicate)` returns all recorded assertions for the subject/predicate sorted by assertion ID.
-	* Core types, `AssertionStatus`, storage classes, and `KnowledgeKernel` now live in the `knk` namespace.
-	* Verified on 2026-07-09: `cmake --build build && ctest --test-dir build --output-on-failure` passes with the current CMake targets after replay and conflicting-active-assertion regression tests.
+* Phase 1 in-memory temporal queries are implemented in `KnowledgeKernel`.
+* `commit`, `commit_superseding`, `commit_retraction`, failed durable append behavior, `get`, subject lookup, current open-ended lookup, valid-time lookup, observed-time lookup, valid-at-known-at lookup, timeline/history lookups, and recovery across kernel instances are covered by standard-library tests.
+* Assertions are appended to `assertions.log` through `StorageEngine` and `AssertionLog` before being applied to memory.
+* Startup recovery reads the assertion log and replays records in commit order.
+* Replay restores `next_id_` by advancing past the largest replayed assertion ID.
+* Recovery tests currently live in `tests/knowledge_kernel_tests.cpp`, not a separate `tests/recovery_tests.cpp`.
+* `AssertionLog` writes a simple size-prefixed binary record using raw `Assertion` bytes. It validates record size (throwing `std::runtime_error` on a mismatch) and ignores an incomplete trailing assertion payload; both behaviors are covered by `tests/assertion_log_tests.cpp` (`assertion_log_rejects_invalid_record_size`, `assertion_log_ignores_incomplete_trailing_record`).
+* `IndexManager` is scaffolded in `include/kernel/index_manager.hpp` and `src/index_manager.cpp`, compiled into the `kernel` target, and covered by `tests/index_manager_tests.cpp`.
+* `IndexManager` currently maintains subject, predicate, current assertion ID, and observed-time indexes. Current assertion indexing includes only active open-ended assertions. Retraction records are kept in the subject/audit index but are not indexed as current facts. Predicate indexing tracks predicates that still have at least one current assertion for a subject.
+* `IndexManager::observed_before(subject, t)` (first Phase 3 index, added ahead of the rest of that phase) returns assertion IDs for a subject with `observed_at <= t`, kept sorted by `observed_at` via sorted insertion in `add`. Like the subject index, it retains superseded/retracted/retraction records; status filtering stays the caller's responsibility. `KnowledgeKernel::known_at` and `KnowledgeKernel::valid_at_known_at` now query this index instead of scanning all of a subject's assertions.
+* `IndexManager::mark_superseded` and `IndexManager::mark_retracted` remove assertion IDs from the current index without removing them from the subject/audit index. They remove a subject/predicate entry from the predicate index only when no current assertions remain for that key.
+* `KnowledgeKernel` now owns an `IndexManager` and routes subject lookup, current lookup, valid-time lookup, observed-time lookup, and valid-at-known-at lookup through assertion IDs returned by `IndexManager`.
+* `KnowledgeKernel` no longer owns separate `subject_index_` and `current_index_` maps.
+* The public current lookup is `current(subject)` and returns active open-ended assertions for all current predicates of that subject by using `IndexManager::predicates_for_subject` and `IndexManager::current_assertions`.
+* `KnowledgeKernel` constructs a fresh internal `IndexManager` during startup and rebuilds it from the assertion log; externally supplied index state is not accepted as a source of truth.
+* `KnowledgeKernel::commit_superseding` commits an active replacement assertion with `supersedes_id` and marks the target assertion as `Superseded`.
+* `KnowledgeKernel::commit_retraction` commits an assertion-like audit record with status `Retraction` and `retracts_id`, and marks the target assertion as `Retracted`.
+* Retraction targets are validated before append so failed retractions do not persist invalid log records or burn assertion IDs.
+* Timeline/history query support currently exists as three public methods: `valid_time_timeline(subject, predicate)` returns active assertions sorted by valid time, `observed_time_timeline(subject, predicate)` returns active assertions sorted by observed time, and `commit_history(subject, predicate)` returns all recorded assertions for the subject/predicate sorted by assertion ID.
+* Core types, `AssertionStatus`, storage classes, and `KnowledgeKernel` now live in the `knk` namespace.
+* Verified on 2026-07-09: `cmake --build build && ctest --test-dir build --output-on-failure` passes with the current CMake targets after replay and conflicting-active-assertion regression tests.
 
 ### Phase 3 — Persistent indexes/current phase
 
 Future work :
 
-	* Subject index ✅ (persisted to disk; see implementation status below)
-	* Predicate index ✅ (derived from the persisted current-state index; see implementation status below)
-	* Current - state index ✅ (persisted to disk; see implementation status below)
-	* Observed - time index ✅ (persisted to disk; see implementation status below)
+* ✅ Predicate index (derived from the persisted current-state index; see implementation status below)
+* ✅ Current - state index (persisted to disk; see implementation status below)
+* ✅ Observed - time index (persisted to disk; see implementation status below)
 
-	Indexes are derived acceleration structures. They must be rebuildable from the assertion log.
+Indexes are derived acceleration structures. They must be rebuildable from the assertion log.
 
-	If persistent indexes are missing or corrupted, the kernel should still recover from the log.
+If persistent indexes are missing or corrupted, the kernel should still recover from the log.
 
-	All four Phase 3 indexes are now durable. This closes out the "remaining Phase 3 work" note that used to be
-	here.
+All four Phase 3 indexes are now durable. This closes out the "remaining Phase 3 work" note that used to be
+here.
 
 Current implementation status :
 
-	* Three index logs are persisted alongside `assertions.log`, each using the same size-prefixed binary record
-	  format (missing file -> empty; mismatched size prefix -> throws `std::runtime_error`; incomplete trailing
-	  record -> ignored) and each exposing `overwrite_all` for self-heal only — everything else is append-only:
-	    * `ObservedTimeIndexLog` (`include/kernel/observed_time_index_log.hpp`, `src/observed_time_index_log.cpp`)
-	      persists `{subject, observed_at, assertion_id}` to `indexes/observed_time.idx`.
-	    * `SubjectIndexLog` (`include/kernel/subject_index_log.hpp`, `src/subject_index_log.cpp`) persists
-	      `{subject, assertion_id}` to `indexes/subject.idx`.
-	    * `CurrentIndexLog` (`include/kernel/current_index_log.hpp`, `src/current_index_log.cpp`) persists
-	      `{subject, predicate, assertion_id, active}` to `indexes/current.idx`. Unlike the other two, entries here
-	      can later become false (the current-state index removes an entry when an assertion is superseded or
-	      retracted), so this log is append-only in the tombstone sense: becoming current appends an `active = true`
-	      record, ceasing to be current appends a second `active = false` record for the same `(subject, predicate,
-	      assertion_id)` rather than mutating the first record in place.
-	    * There is deliberately no separate persisted predicate-index file. `predicate_index_` is only ever a
-	      projection of `current_index_`'s keys (which subjects have at least one current predicate), so replaying
-	      `current.idx` alone is sufficient to rebuild both `current_index_` and `predicate_index_` together — see
-	      `IndexManager::restore_current_index_entry`.
-	* `StorageEngine` owns all three index logs alongside `AssertionLog` and exposes matching
-	  `append_*`/`load_*`/`rewrite_*` methods for each (`append_observed_time_entry`/`load_observed_time_index`/
-	  `rewrite_observed_time_index`, and the `subject`/`current` equivalents).
-	* `IndexManager` has exactly one assertion-indexing entry point, `add(const Assertion&)`, used for every commit
-	  and every full-replay record — there is no `add_without_*` variant. It is a three-line composition of three
-	  narrower `restore_*` primitives (`restore_current_index_entry`, `restore_subject_entry`,
-	  `restore_observed_time_entry`), each of which operates on raw persisted-record fields rather than a full
-	  `Assertion` and is also used standalone to seed an index directly from its own file at startup. A free
-	  function `is_current_assertion(const Assertion&)` (an assertion is current iff `status == Active` and
-	  `valid_to == OPEN_ENDED`) is shared between `IndexManager::add` and `KnowledgeKernel`'s commit paths so the
-	  eligibility rule lives in one place. `IndexManager::observed_time_entries()`, `subject_index_entries()`, and
-	  `current_index_entries()` each return a flat snapshot of their index (the last one only ever contains
-	  currently-active entries, since removed ones are erased from `current_index_` in memory) for self-heal
-	  rewrites.
-	* `KnowledgeKernel` likewise has exactly one replay-application method, `apply(const Assertion&)`, used for both
-	  the commit path and full-log replay; it always calls `index_manager_.add`. A separate private
-	  `restore_assertion(const Assertion&)` rebuilds only `assertions_`/`next_id_`/superseded-or-retracted status —
-	  it never touches `IndexManager` — and is used solely on the fast startup path described below.
-	* `KnowledgeKernel`'s constructor tries to load all three persisted index files independently (each in its own
-	  try/catch, so a diagnostic could in principle identify which one is corrupt), but treats them as all-or-
-	  nothing: if any one is missing or corrupt, the whole partially-restored `IndexManager` is discarded and
-	  `assertions.log` is replayed in full through `apply` (rebuilding every index uniformly, even ones that loaded
-	  fine), after which fresh snapshots of all three are written via `rewrite_observed_time_index`/
-	  `rewrite_subject_index`/`rewrite_current_index` so the next startup can take the fast path. If all three
-	  loaded successfully, `assertions.log` is still walked once (to rebuild `assertions_`, `next_id_`, and
-	  superseded/retracted status, none of which live in the index files), but via `restore_assertion` — the
-	  already-restored indexes are never re-populated. This all-or-nothing choice trades a bit of redundant rebuild
-	  work on partial corruption for avoiding a combinatorial `apply`/`add` variant per subset of indexes; it is a
-	  deliberate Phase 3 simplification, not a performance claim (see "Performance Rules").
-	* `commit`, `commit_superseding`, and `commit_retraction` each append to the observed-time and subject index
-	  logs (as before), and now also append to the current index log, before calling `apply` — durable-before-
-	  visible covers all three persisted indexes. `commit` appends one current-index record for the new assertion
-	  (`active = is_current_assertion(assertion)`). `commit_superseding` appends one such record for the new
-	  assertion plus an `active = false` tombstone for the superseded target. `commit_retraction` appends only the
-	  `active = false` tombstone for the retracted target, since a `Retraction`-status record can never itself be
-	  current.
-	* Covered by `tests/observed_time_index_log_tests.cpp`, `tests/subject_index_log_tests.cpp`, and
-	  `tests/current_index_log_tests.cpp` (each: append/read round trip, missing file, invalid record size,
-	  incomplete trailing record, `overwrite_all`); additions to `tests/index_manager_tests.cpp`
-	  (`is_current_assertion_requires_active_status_and_open_ended_valid_to`,
-	  `restore_current_index_entry_reproduces_current_index_out_of_band`,
-	  `restore_current_index_entry_removal_of_unknown_assertion_is_a_noop`, `restore_subject_entry_...`,
-	  `restore_observed_time_entry_...`, and the three `*_entries_returns_a_flat_snapshot_of_the_index` tests); and
-	  additions to `tests/knowledge_kernel_tests.cpp` covering cross-kernel restore, corruption fallback plus
-	  self-heal for each of the three index files individually
-	  (`corrupt_observed_time_index_falls_back_to_replay_and_self_heals`,
-	  `corrupt_subject_index_falls_back_to_replay_and_self_heals`,
-	  `corrupt_current_index_falls_back_to_replay_and_self_heals`) and in combination
-	  (`corrupt_all_persisted_indexes_falls_back_to_full_replay_and_self_heals`), and
-	  `superseded_assertion_remains_excluded_from_current_after_restart` (the two-tombstone supersede path survives
-	  a kernel restart).
+* Three index logs are persisted alongside `assertions.log`, each using the same size-prefixed binary record
+ format (missing file -> empty; mismatched size prefix -> throws `std::runtime_error`; incomplete trailing
+ record -> ignored) and each exposing `overwrite_all` for self-heal only — everything else is append-only:
+ * `ObservedTimeIndexLog` (`include/kernel/observed_time_index_log.hpp`, `src/observed_time_index_log.cpp`)
+   persists `{subject, observed_at, assertion_id}` to `indexes/observed_time.idx`.
+ * `SubjectIndexLog` (`include/kernel/subject_index_log.hpp`, `src/subject_index_log.cpp`) persists
+   `{subject, assertion_id}` to `indexes/subject.idx`.
+ * `CurrentIndexLog` (`include/kernel/current_index_log.hpp`, `src/current_index_log.cpp`) persists
+   `{subject, predicate, assertion_id, active}` to `indexes/current.idx`. Unlike the other two, entries here
+   can later become false (the current-state index removes an entry when an assertion is superseded or
+   retracted), so this log is append-only in the tombstone sense: becoming current appends an `active = true`
+   record, ceasing to be current appends a second `active = false` record for the same `(subject, predicate,
+   assertion_id)` rather than mutating the first record in place.
+ * There is deliberately no separate persisted predicate-index file. `predicate_index_` is only ever a
+   projection of `current_index_`'s keys (which subjects have at least one current predicate), so replaying
+   `current.idx` alone is sufficient to rebuild both `current_index_` and `predicate_index_` together — see
+   `IndexManager::restore_current_index_entry`.
+* `StorageEngine` owns all three index logs alongside `AssertionLog` and exposes matching
+ `append_*`/`load_*`/`rewrite_*` methods for each (`append_observed_time_entry`/`load_observed_time_index`/
+ `rewrite_observed_time_index`, and the `subject`/`current` equivalents).
+* `IndexManager` has exactly one assertion-indexing entry point, `add(const Assertion&)`, used for every commit
+ and every full-replay record — there is no `add_without_*` variant. It is a three-line composition of three
+ narrower `restore_*` primitives (`restore_current_index_entry`, `restore_subject_entry`,
+ `restore_observed_time_entry`), each of which operates on raw persisted-record fields rather than a full
+ `Assertion` and is also used standalone to seed an index directly from its own file at startup. A free
+ function `is_current_assertion(const Assertion&)` (an assertion is current iff `status == Active` and
+ `valid_to == OPEN_ENDED`) is shared between `IndexManager::add` and `KnowledgeKernel`'s commit paths so the
+ eligibility rule lives in one place. `IndexManager::observed_time_entries()`, `subject_index_entries()`, and
+ `current_index_entries()` each return a flat snapshot of their index (the last one only ever contains
+ currently-active entries, since removed ones are erased from `current_index_` in memory) for self-heal
+ rewrites.
+* `KnowledgeKernel` likewise has exactly one replay-application method, `apply(const Assertion&)`, used for both
+ the commit path and full-log replay; it always calls `index_manager_.add`. A separate private
+ `restore_assertion(const Assertion&)` rebuilds only `assertions_`/`next_id_`/superseded-or-retracted status —
+ it never touches `IndexManager` — and is used solely on the fast startup path described below.
+* `KnowledgeKernel`'s constructor tries to load all three persisted index files independently (each in its own
+ try/catch, so a diagnostic could in principle identify which one is corrupt), but treats them as all-or-
+ nothing: if any one is missing or corrupt, the whole partially-restored `IndexManager` is discarded and
+ `assertions.log` is replayed in full through `apply` (rebuilding every index uniformly, even ones that loaded
+ fine), after which fresh snapshots of all three are written via `rewrite_observed_time_index`/
+ `rewrite_subject_index`/`rewrite_current_index` so the next startup can take the fast path. If all three
+ loaded successfully, `assertions.log` is still walked once (to rebuild `assertions_`, `next_id_`, and
+ superseded/retracted status, none of which live in the index files), but via `restore_assertion` — the
+ already-restored indexes are never re-populated. This all-or-nothing choice trades a bit of redundant rebuild
+ work on partial corruption for avoiding a combinatorial `apply`/`add` variant per subset of indexes; it is a
+ deliberate Phase 3 simplification, not a performance claim (see "Performance Rules").
+* `commit`, `commit_superseding`, and `commit_retraction` each append to the observed-time and subject index
+ logs (as before), and now also append to the current index log, before calling `apply` — durable-before-
+ visible covers all three persisted indexes. `commit` appends one current-index record for the new assertion
+ (`active = is_current_assertion(assertion)`). `commit_superseding` appends one such record for the new
+ assertion plus an `active = false` tombstone for the superseded target. `commit_retraction` appends only the
+ `active = false` tombstone for the retracted target, since a `Retraction`-status record can never itself be
+ current.
+* Covered by `tests/observed_time_index_log_tests.cpp`, `tests/subject_index_log_tests.cpp`, and
+ `tests/current_index_log_tests.cpp` (each: append/read round trip, missing file, invalid record size,
+ incomplete trailing record, `overwrite_all`); additions to `tests/index_manager_tests.cpp`
+ (`is_current_assertion_requires_active_status_and_open_ended_valid_to`,
+ `restore_current_index_entry_reproduces_current_index_out_of_band`,
+ `restore_current_index_entry_removal_of_unknown_assertion_is_a_noop`, `restore_subject_entry_...`,
+ `restore_observed_time_entry_...`, and the three `*_entries_returns_a_flat_snapshot_of_the_index` tests); and
+ additions to `tests/knowledge_kernel_tests.cpp` covering cross-kernel restore, corruption fallback plus
+ self-heal for each of the three index files individually
+ (`corrupt_observed_time_index_falls_back_to_replay_and_self_heals`,
+ `corrupt_subject_index_falls_back_to_replay_and_self_heals`,
+ `corrupt_current_index_falls_back_to_replay_and_self_heals`) and in combination
+ (`corrupt_all_persisted_indexes_falls_back_to_full_replay_and_self_heals`), and
+ `superseded_assertion_remains_excluded_from_current_after_restart` (the two-tombstone supersede path survives
+ a kernel restart).
 
 ### Phase 4 — Storage engine internals
 
 Future work :
 
-	* Segment files
-	* WAL
-	* Checksums ✅ (per-record CRC32; see implementation status below)
-	* Crash recovery ✅ (fsync durability, tail-tolerant corruption policy, index checkpoint; see implementation
-	  status below)
-	* Snapshots
+* Segment files
+* WAL
+* ✅ Checksums (per-record CRC32; see implementation status below)
+* ✅ Crash recovery (fsync durability, tail-tolerant corruption policy, index checkpoint; see implementation
+ status below)
+* Snapshots
 
-	At this phase, the log should evolve from a simple file into a segmented storage subsystem with integrity checks and controlled recovery.
+At this phase, the log should evolve from a simple file into a segmented storage subsystem with integrity checks and controlled recovery.
 
 Current implementation status :
 
-	* All four logs (`AssertionLog`, `SubjectIndexLog`, `CurrentIndexLog`, `ObservedTimeIndexLog`) share an identical
-	  framed format: an 8-byte file header (`"KNK1"` magic + `uint32_t` format version, written once per file)
-	  followed by repeated `[uint32_t record_size][raw struct bytes][uint32_t crc32]` frames. The shared CRC-32
-	  (IEEE 802.3 polynomial) implementation lives in `include/kernel/checksum.hpp`/`src/checksum.cpp`; each log
-	  otherwise keeps its own read/write loop rather than sharing a generic framer, matching the existing duplication
-	  style across the four log types.
-	* Corruption policy (revised by the Crash recovery work below from the original all-throw checksums design): a
-	  mismatched `record_size` always throws `std::runtime_error` (framing is unrecoverable once size is wrong). A
-	  torn header (fewer than 8 bytes, from a crash on the very first-ever append) is treated the same as an empty
-	  file, not thrown. A checksum mismatch on a fully-present frame is tail-tolerant: silently dropped if nothing
-	  follows it in the file (indistinguishable from a crash mid-append, same treatment as a short/truncated
-	  trailing frame), but still throws if valid-length data follows it (data can't validly follow a torn write, so
-	  that is unambiguous real corruption). A full 8-byte header with the wrong magic/version still always throws
-	  (a torn write cannot produce a full-length-but-wrong header).
-	* Durability: every `append()` closes its stream and then fsyncs the file (`knk::fsync_file`,
-	  `include/kernel/durability.hpp`) before returning, so a commit isn't durable until it reaches physical disk,
-	  not just the OS page cache. `overwrite_all()` (the three index logs' self-heal rewrite) writes via
-	  `knk::write_file_atomically` (temp file, fsync, atomic rename, fsync parent directory), so a crash mid-rewrite
-	  can never leave a half-written index file. Both are POSIX-only, an accepted limitation for early local
-	  development, same treatment as the raw-struct-serialization limitation already documented.
-	* Index checkpoint: `indexes/checkpoint` (`include/kernel/index_checkpoint.hpp`/`src/index_checkpoint.cpp`)
-	  closes a cross-log atomicity gap found while implementing this: `commit`/`commit_superseding`/
-	  `commit_retraction` append to `assertions.log` before the three index logs, so a crash in between leaves
-	  `assertions.log` with a record none of the index logs know about — and none of their `read_all()` calls throw
-	  in that case (the entry is simply missing, indistinguishable from never existing). The checkpoint persists the
-	  highest `AssertionId` whose index writes are confirmed complete, written as the last step of each commit's
-	  storage-append sequence; unlike the four data logs it never throws on read (missing/corrupt both degrade to
-	  `0`, since it's purely a startup-fast-path hint, not authoritative data). `KnowledgeKernel`'s constructor
-	  trusts the persisted indexes only if every index file loaded cleanly *and* the checkpoint matches the highest
-	  id in `assertions.log`; otherwise it takes the existing full-replay-and-self-heal path unchanged, additionally
-	  persisting the new checkpoint afterward.
-	* `AssertionLog` reads remain unwrapped in any recovery path — a corrupted assertion log is still a fatal,
-	  uncaught startup error, *except* when the corruption is tail-tolerant (a torn trailing write), which is now
-	  silently and safely dropped like the index logs. Non-tail corruption stays fatal deliberately: `assertions.log`
-	  is the one source of truth, so there is nothing to rebuild it from, and silently discarding real history would
-	  be worse than refusing to start.
-	* See `docs/storage_format.md` for the full format spec, durability model, and checkpoint format. Covered by
-	  `tests/checksum_tests.cpp`, `tests/durability_tests.cpp`, and `tests/index_checkpoint_tests.cpp`; each of the
-	  four log test files has `..._recovers_partial_header_as_empty_log`,
-	  `..._recovers_tail_checksum_mismatch_as_torn_write`, and
-	  `..._rejects_checksum_mismatch_when_followed_by_more_data` tests; and
-	  `crash_between_assertion_append_and_index_append_recovers_via_checkpoint` in
-	  `tests/knowledge_kernel_tests.cpp` exercises the cross-log atomicity gap directly (bypassing `commit()` via a
-	  raw `StorageEngine::append_assertion` call, then confirming a reopened kernel still surfaces the assertion via
-	  `assertions_for_subject`/`current`).
+* All four logs (`AssertionLog`, `SubjectIndexLog`, `CurrentIndexLog`, `ObservedTimeIndexLog`) share an identical
+ framed format: an 8-byte file header (`"KNK1"` magic + `uint32_t` format version, written once per file)
+ followed by repeated `[uint32_t record_size][raw struct bytes][uint32_t crc32]` frames. The shared CRC-32
+ (IEEE 802.3 polynomial) implementation lives in `include/kernel/checksum.hpp`/`src/checksum.cpp`; each log
+ otherwise keeps its own read/write loop rather than sharing a generic framer, matching the existing duplication
+ style across the four log types.
+* Corruption policy (revised by the Crash recovery work below from the original all-throw checksums design): a
+ mismatched `record_size` always throws `std::runtime_error` (framing is unrecoverable once size is wrong). A
+ torn header (fewer than 8 bytes, from a crash on the very first-ever append) is treated the same as an empty
+ file, not thrown. A checksum mismatch on a fully-present frame is tail-tolerant: silently dropped if nothing
+ follows it in the file (indistinguishable from a crash mid-append, same treatment as a short/truncated
+ trailing frame), but still throws if valid-length data follows it (data can't validly follow a torn write, so
+ that is unambiguous real corruption). A full 8-byte header with the wrong magic/version still always throws
+ (a torn write cannot produce a full-length-but-wrong header).
+* Durability: every `append()` closes its stream and then fsyncs the file (`knk::fsync_file`,
+ `include/kernel/durability.hpp`) before returning, so a commit isn't durable until it reaches physical disk,
+ not just the OS page cache. `overwrite_all()` (the three index logs' self-heal rewrite) writes via
+ `knk::write_file_atomically` (temp file, fsync, atomic rename, fsync parent directory), so a crash mid-rewrite
+ can never leave a half-written index file. Both are POSIX-only, an accepted limitation for early local
+ development, same treatment as the raw-struct-serialization limitation already documented.
+* Index checkpoint: `indexes/checkpoint` (`include/kernel/index_checkpoint.hpp`/`src/index_checkpoint.cpp`)
+ closes a cross-log atomicity gap found while implementing this: `commit`/`commit_superseding`/
+ `commit_retraction` append to `assertions.log` before the three index logs, so a crash in between leaves
+ `assertions.log` with a record none of the index logs know about — and none of their `read_all()` calls throw
+ in that case (the entry is simply missing, indistinguishable from never existing). The checkpoint persists the
+ highest `AssertionId` whose index writes are confirmed complete, written as the last step of each commit's
+ storage-append sequence; unlike the four data logs it never throws on read (missing/corrupt both degrade to
+ `0`, since it's purely a startup-fast-path hint, not authoritative data). `KnowledgeKernel`'s constructor
+ trusts the persisted indexes only if every index file loaded cleanly *and* the checkpoint matches the highest
+ id in `assertions.log`; otherwise it takes the existing full-replay-and-self-heal path unchanged, additionally
+ persisting the new checkpoint afterward.
+* `AssertionLog` reads remain unwrapped in any recovery path — a corrupted assertion log is still a fatal,
+ uncaught startup error, *except* when the corruption is tail-tolerant (a torn trailing write), which is now
+ silently and safely dropped like the index logs. Non-tail corruption stays fatal deliberately: `assertions.log`
+ is the one source of truth, so there is nothing to rebuild it from, and silently discarding real history would
+ be worse than refusing to start.
+* See `docs/storage_format.md` for the full format spec, durability model, and checkpoint format. Covered by
+ `tests/checksum_tests.cpp`, `tests/durability_tests.cpp`, and `tests/index_checkpoint_tests.cpp`; each of the
+ four log test files has `..._recovers_partial_header_as_empty_log`,
+ `..._recovers_tail_checksum_mismatch_as_torn_write`, and
+ `..._rejects_checksum_mismatch_when_followed_by_more_data` tests; and
+ `crash_between_assertion_append_and_index_append_recovers_via_checkpoint` in
+ `tests/knowledge_kernel_tests.cpp` exercises the cross-log atomicity gap directly (bypassing `commit()` via a
+ raw `StorageEngine::append_assertion` call, then confirming a reopened kernel still surfaces the assertion via
+ `assertions_for_subject`/`current`).
 
 ### Phase 5 — Performance
 
 Future work :
 
-	* SIMD scanning
-	* Memory - mapped segments
-	* Lock - free readers
-	* NUMA - aware allocator
-	* Background compaction
-	* Bloom filters
-	* Compression
+* SIMD scanning
+* Memory - mapped segments
+* Lock - free readers
+* NUMA - aware allocator
+* Background compaction
+* Bloom filters
+* Compression
 
-	Do not introduce advanced performance features before the correctness model is stable.
+Do not introduce advanced performance features before the correctness model is stable.
 
-	-- -
+-- -
 
 ## Architectural Principles
 
 ### 1. The log is the source of truth
 
-	The assertion log records committed knowledge changes.
+The assertion log records committed knowledge changes.
 
-	In - memory vectors, indexes, and caches are derived state.
+In - memory vectors, indexes, and caches are derived state.
 
-	Do not make indexes authoritative.
+Do not make indexes authoritative.
 
 ### 2. Append-only first
 
-	Prefer append - only writes.
+Prefer append - only writes.
 
-	Do not mutate records on disk in place.
+Do not mutate records on disk in place.
 
-	In - memory state may mark old assertions as superseded or retracted during replay, but the durable log should preserve history.
+In - memory state may mark old assertions as superseded or retracted during replay, but the durable log should preserve history.
 
 ### 3. Durable-before-visible
 
-	A committed assertion must be persisted before it becomes visible in memory.
+A committed assertion must be persisted before it becomes visible in memory.
 
 Correct order :
 
-	```cpp
-	storage_.append_assertion(assertion);
+```cpp
+storage_.append_assertion(assertion);
 apply_assertion(assertion);
 ```
 
@@ -611,36 +610,36 @@ means the assertion remains valid until closed, superseded, or retracted.
 
 The assertion log should do only this:
 
-	```text
-	append assertion records
-	read assertion records
-	```
+```text
+append assertion records
+read assertion records
+```
 
 It should not:
 
-	* Rebuild indexes.
-	* Interpret bitemporal semantics.
-	* Decide which assertion is current.
-	* Resolve supersession.
-	* Read environment variables.
+* Rebuild indexes.
+* Interpret bitemporal semantics.
+* Decide which assertion is current.
+* Resolve supersession.
+* Read environment variables.
 
 ### StorageEngine
 
-	The storage engine coordinates durable storage.
+The storage engine coordinates durable storage.
 
 It may own:
 
-	```text
-	AssertionLog
-	PayloadStore
-	SegmentManager
-	SnapshotManager
-	```
+```text
+AssertionLog
+PayloadStore
+SegmentManager
+SnapshotManager
+```
 
 Current responsibilities:
 
-	```cpp
-	append_assertion(const Assertion& assertion);
+```cpp
+append_assertion(const Assertion& assertion);
 load_assertions() const;
 ```
 
@@ -829,19 +828,19 @@ For now:
 
 * Throw `std::runtime_error` for unrecoverable storage errors.
 * Return `std::optional` for missing assertions.
-  * Return empty vectors for valid empty query results.
+* Return empty vectors for valid empty query results.
 
-      Later phases may introduce typed error handling.
+Later phases may introduce typed error handling.
 
 Do not silently ignore :
 
-      * Invalid record sizes.
-      * Corrupt files.
-      * ID collisions.
-      * Invalid supersession targets.
-      * Invalid retraction targets.
+* Invalid record sizes.
+* Corrupt files.
+* ID collisions.
+* Invalid supersession targets.
+* Invalid retraction targets.
 
-      Incomplete trailing log records may be ignored only if the behavior is documented and tested.
+Incomplete trailing log records may be ignored only if the behavior is documented and tested.
 
 -- -
 
@@ -853,19 +852,19 @@ If changing on - disk layout:
 
 1. Document the new format in `docs / storage_format.md`.
 2. Add a version field or magic header if appropriate.
-  3. Add read / write tests.
-  4. Add corruption tests.
-  5. Avoid breaking old tests silently.
+3. Add read / write tests.
+4. Add corruption tests.
+5. Avoid breaking old tests silently.
 
 Do not use raw `reinterpret_cast` serialization long term without documenting its limitations:
 
-  * Padding
-  * Endianness
-  * Compiler ABI
-  * Enum size
-  * Struct layout
+* Padding
+* Endianness
+* Compiler ABI
+* Enum size
+* Struct layout
 
-  For early local development it is acceptable, but Phase 4 should replace it with explicit serialization.
+For early local development it is acceptable, but Phase 4 should replace it with explicit serialization.
 
 -- -
 
@@ -935,22 +934,22 @@ How is it tested ?
 
 Unless explicitly instructed, do not implement :
 
-  ```text
-  SQL
-  HTTP API
-  LLM extraction
-  voice ingestion
-  distributed consensus
-  persistent B - trees
-  complex graph traversal
-  RDF compatibility
-  ontology reasoning
-  custom memory allocators
-  compression
-  replication
-  ```
+```text
+SQL
+HTTP API
+LLM extraction
+voice ingestion
+distributed consensus
+persistent B - trees
+complex graph traversal
+RDF compatibility
+ontology reasoning
+custom memory allocators
+compression
+replication
+```
 
-  The kernel must be correct and recoverable before it becomes broad.
+The kernel must be correct and recoverable before it becomes broad.
 
 -- -
 
@@ -964,10 +963,10 @@ When making changes :
 4. Preserve public API unless asked to change it.
 5. Add or update tests.
 6. Run build and tests if possible.
-  7. Explain what changed.
-  8. Mention any tradeoffs or unfinished work.
+7. Explain what changed.
+8. Mention any tradeoffs or unfinished work.
 
-  A good pull request should be small enough to understand in one sitting.
+A good pull request should be small enough to understand in one sitting.
 
 -- -
 
@@ -977,17 +976,17 @@ The Knowledge Kernel should eventually answer questions like :
 
 ```text
 What do we currently know about Alice ?
-  What did we know about Alice on 2024 - 01 - 01 ?
-  What was true on 2024 - 01 - 01 according to what we knew on 2024 - 07 - 02 ?
-  What changed since yesterday ?
-  Why does the kernel believe this assertion ?
-  Which assertions conflict ?
-  Which assertion superseded this one ?
-  Which source produced this claim ?
-  ```
+What did we know about Alice on 2024 - 01 - 01 ?
+What was true on 2024 - 01 - 01 according to what we knew on 2024 - 07 - 02 ?
+What changed since yesterday ?
+Why does the kernel believe this assertion ?
+Which assertions conflict ?
+Which assertion superseded this one ?
+Which source produced this claim ?
+```
 
-  Every implementation decision should support this long - term direction.
+Every implementation decision should support this long - term direction.
 
-  The kernel is not merely storing facts.
+The kernel is not merely storing facts.
 
-  It is preserving the history of how knowledge changes.
+It is preserving the history of how knowledge changes.
