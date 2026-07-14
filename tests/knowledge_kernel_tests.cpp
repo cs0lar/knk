@@ -82,9 +82,12 @@ void failed_commit_does_not_burn_id() {
     auto root = test_root("failed_commit_does_not_burn_id");
 
     KnowledgeKernel kernel(StorageConfig{root});
-    auto log_path = StorageConfig{root}.assertion_log_path();
+    // Assertion id 1 always lands in segment index 0, regardless of max_records_per_segment. The
+    // segments/ directory doesn't exist yet (no commit has created it), so create_directories (not
+    // create_directory) is needed to create both it and the sabotage directory at the segment path.
+    auto log_path = StorageConfig{root}.segment_path(0);
 
-    std::filesystem::create_directory(log_path);
+    std::filesystem::create_directories(log_path);
 
     bool failed = false;
     try {
@@ -835,8 +838,8 @@ void snapshot_ahead_of_log_is_ignored() {
         StorageEngine storage(StorageConfig{root});
         std::vector<Assertion> bogus_assertions;
         for (AssertionId id = 1; id <= 5; ++id) {
-            bogus_assertions.push_back(
-                Assertion{id, ALICE, WORKS_AT, ACME, JAN_1_2023, OPEN_ENDED, JUL_1_2024, 0.95, AssertionStatus::Active});
+            bogus_assertions.push_back(Assertion{id, ALICE, WORKS_AT, ACME, JAN_1_2023, OPEN_ENDED, JUL_1_2024, 0.95,
+                                                 AssertionStatus::Active});
         }
         storage.write_snapshot(5, bogus_assertions);
     }

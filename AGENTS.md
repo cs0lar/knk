@@ -210,8 +210,9 @@ Current implementation status :
 
 Future work :
 
-* Segment files
-* WAL
+* ✅ Segment files (`AssertionLog` only; see implementation status below)
+* WAL (no separate task — `AssertionLog`'s append-only + fsync-before-return + durable-before-visible
+ ordering already is a WAL in every functional sense; nothing left to add)
 * ✅ Checksums (per-record CRC32; see implementation status below)
 * ✅ Crash recovery (fsync durability, tail-tolerant corruption policy, index checkpoint; see implementation
  status below)
@@ -288,6 +289,38 @@ Current implementation status :
  and additions to `tests/knowledge_kernel_tests.cpp`
  (`write_snapshot_then_restart_uses_snapshot_and_replays_only_the_tail`,
  `stale_or_corrupt_snapshot_falls_back_to_full_replay`, `snapshot_ahead_of_log_is_ignored`).
+* Segment files: `AssertionLog` no longer stores assertions in a single `assertions.log` file. It
+ manages a directory of fixed-capacity segment files (`segments/0000000000.seg`,
+ `segments/0000000001.seg`, ...; `StorageConfig::segment_directory()`/`segment_path(size_t)`), sized by
+ `StorageConfig::max_records_per_segment` (default 100,000 — a storage-layout placeholder, not a tuned
+ performance number). Scope is `AssertionLog` only, per explicit user confirmation — the three index logs
+ stay single-file, since they're derived/rebuildable and already self-heal via `overwrite_all`. Segment
+ index `k` deterministically holds ids `[k*max_records_per_segment + 1, (k+1)*max_records_per_segment]`;
+ this is exact, not a hint, because `append()` checks capacity before writing, so a segment is only ever
+ rolled from after its previous record was already fully appended and fsynced in an earlier call —
+ meaning every non-active segment is guaranteed exactly `max_records_per_segment` complete records, and
+ only the single active (highest-index) segment can ever be short or have a torn trailing frame. This
+ lets `read_after`/`record_count_hint` skip or size whole historical segments via pure index arithmetic,
+ with no manifest/segment-metadata file. The shared per-record read loop's tail-tolerance now takes a
+ `tolerate_trailing_anomaly` flag, true only for the active/last segment on disk — the same anomaly in an
+ earlier, already-rolled-from segment always throws, since it's proven impossible under normal operation
+ there. `AssertionLog`'s constructor seeds its active-segment record count from a file-size estimate (not
+ a full parse), matching `record_count_hint()`'s existing "never throw during construction" philosophy —
+ a full parse there was tried first but rejected because it made corrupted active-segment content throw
+ during construction instead of lazily on `read_all()`/`read_after()`, breaking existing recovery-test
+ expectations. `AssertionLog`'s public interface (`append`/`read_all`/`read_after`/`record_count_hint`) is
+ unchanged, so `StorageEngine`/`KnowledgeKernel`/the snapshot feature needed no changes beyond the
+ constructor call site. This is a breaking, non-migrated on-disk format change, same precedent as the
+ checksum format change — existing local data directories must be deleted and rebuilt from scratch. See
+ `docs/storage_format.md`'s "Segmented assertion log" section. Covered by additions to
+ `tests/assertion_log_tests.cpp` (`assertion_log_rolls_over_to_a_new_segment_when_capacity_is_reached`,
+ `assertion_log_read_all_spans_multiple_segments_in_order`,
+ `assertion_log_read_after_skips_whole_segments_before_the_seek_point`,
+ `assertion_log_read_after_seeks_within_the_straddling_segment`,
+ `assertion_log_record_count_hint_spans_multiple_segments`,
+ `assertion_log_tail_checksum_mismatch_in_the_active_segment_is_tolerated`,
+ `assertion_log_checksum_mismatch_in_a_non_active_segment_throws`), plus the existing single-segment
+ corruption/read tests adapted to the directory-based constructor and per-segment file paths.
 
 ### Phase 5 — Performance
 
