@@ -322,7 +322,145 @@ Current implementation status :
  `assertion_log_checksum_mismatch_in_a_non_active_segment_throws`), plus the existing single-segment
  corruption/read tests adapted to the directory-based constructor and per-segment file paths.
 
-### Phase 5 — Performance
+### Phase 5 — Entity/Predicate Catalog and Payload Store
+
+Future work :
+
+* Entity/predicate name catalog (label ↔ id)
+* Literal value catalog (typed scalar ↔ id)
+* Payload store (large content ↔ id)
+* Catalog/payload persistence and replay on startup
+* Public `KnowledgeKernel` API for interning and resolving names, values, and payloads
+
+Assertions currently carry only opaque `EntityId`/`PredicateId` values. Nothing in the kernel persists what those
+ids mean, so every one of the "Current North Star" queries ("What do we currently know about Alice?") is
+unanswerable through the public API without an out-of-band mapping the caller has to invent and maintain
+themselves. Nor is every subject or object a *named* thing in the first place — some are plain values (a number, a
+sentence) and some are large content (a whole document), neither of which behaves like "Alice" or "Acme Corp." This
+phase closes both gaps without introducing a query language, ontology, or graph traversal — those stay out of
+scope per "Do Not Do Yet".
+
+Design :
+
+* `Assertion` and its on-disk format are unchanged by this phase: `subject`/`predicate`/`object` remain
+ `EntityId`/`PredicateId` exactly as today. This phase is purely additive — no breaking format change, unlike the
+ Phase 4 segment/checksum work.
+* A `Catalog` component (naming follows `IndexManager`'s precedent: short, explicit) handles two kinds of
+ interning, both idempotent/content-addressed — the same input always resolves to the same id :
+  * Names : short human-assigned labels for entities and predicates ("Alice", "works_at", "Acme Corp").
+  * Values : typed scalar literals that need identity but aren't named by a person — integers, floats, booleans,
+    timestamps, short strings/sentences.
+* Large content (whole documents, arbitrary blobs) does not fit the Catalog's small fixed-record framed-log format
+ and is not deduplicated by content in this phase. A `PayloadStore` holds arbitrary-size byte content addressed
+ directly by `EntityId` : the entity for a document is minted first (an id allocation, same mechanism as
+ name/value interning), then its bytes are written to `PayloadStore` keyed by that id. Payloads have no reverse
+ "content -> id" lookup, since document content isn't compared for equality in this phase.
+* Both the Catalog and the PayloadStore are **authoritative**, not derived/rebuildable indexes like the Phase 3
+ indexes — the assertion log only ever stores ids, so nothing else in the system can reconstruct what an id
+ means. Both therefore follow `AssertionLog`'s corruption policy (non-tail corruption is fatal) rather than the
+ tail-tolerant self-heal behavior used for the Phase 3/4 index logs.
+* Storage layout : `catalog/entities.log` and `catalog/predicates.log` (framed, small fixed-ish records — id plus
+ a value-kind discriminator plus an inline scalar or short string), and a `payloads/` area for content that
+ doesn't fit a fixed-size record (one file per payload, or an append-only log with offsets — an implementation
+ detail to settle when this phase starts).
+* `StorageEngine` owns the catalog logs and the payload store, exposing `append_entity_mapping`/`load_entities`
+ and the predicate equivalent, plus `write_payload(EntityId, content)`/`read_payload(EntityId)`, matching the
+ existing `append_*`/`load_*` pattern used for the Phase 3 indexes.
+* `KnowledgeKernel` owns the in-memory `Catalog`, replays it (and payload metadata) at startup independently of
+ assertion-log replay, and exposes it publicly, e.g. :
+
+ ```cpp
+ EntityId intern_entity(std::string_view name);
+ PredicateId intern_predicate(std::string_view name);
+ EntityId intern_value(Value value); // Value = variant<int64_t, double, bool, Timestamp, std::string>
+ EntityId intern_document(std::span<const std::byte> content);
+
+ std::optional<EntityId> find_entity(std::string_view name) const;
+ std::optional<PredicateId> find_predicate(std::string_view name) const;
+ std::optional<std::string> entity_name(EntityId id) const;
+ std::optional<std::string> predicate_name(PredicateId id) const;
+ std::optional<std::vector<std::byte>> document_content(EntityId id) const;
+ ```
+
+* Out of scope for this phase : name-based overloads of `commit`/`commit_superseding`/`commit_retraction`
+ (callers intern first, then commit with ids, same as today), content-hash-based payload deduplication,
+ renaming or deleting catalog entries, and streaming/partial reads of large payloads. These may become their own
+ follow-up once the base catalog and payload store are in place.
+
+Minimum tests to add, following the existing per-log pattern (round trip, missing file, invalid record size,
+incomplete trailing record) plus :
+
+* `interning_the_same_name_twice_returns_the_same_id`
+* `interning_the_same_value_twice_returns_the_same_id`
+* `unknown_name_lookup_returns_nullopt`
+* `catalog_is_preserved_across_kernel_restarts`
+* `corrupt_catalog_is_fatal_on_startup` (documents the deliberate divergence from the Phase 3 indexes' self-heal
+ behavior)
+* `payload_round_trips_large_content`
+* `payload_is_preserved_across_kernel_restarts`
+* `corrupt_payload_is_fatal_on_startup`
+
+Current implementation status (Catalog only — `PayloadStore` is still future work):
+
+* `Value` (`include/kernel/value.hpp`, header-only) is a tagged struct, not `std::variant`, with
+ `ValueKind` in `{Text, Int64, Double, Bool, Timestamp}`, defaulted C++20 member-wise `operator==`,
+ and a `std::hash<knk::Value>` specialization so it can be used directly as an `unordered_map` key.
+* `EntityCatalogLog` (`include/kernel/entity_catalog_log.hpp`/`src/entity_catalog_log.cpp`) persists
+ `{EntityId, Value}` to `catalog/entities.log`; `PredicateCatalogLog`
+ (`include/kernel/predicate_catalog_log.hpp`/`src/predicate_catalog_log.cpp`) persists
+ `{PredicateId, name}` to `catalog/predicates.log`. Both reuse the shared `KNK1` header +
+ `[record_size][payload][crc32]` framing and `crc32`/`fsync_file` from the existing logs, but are
+ the first **variable-length** record payloads in the codebase — see `docs/storage_format.md`'s new
+ "Entity/predicate catalog" section for the exact byte layout and the one new corruption category
+ (a length prefix inconsistent with the remaining payload bytes, which always throws, no tail
+ tolerance). Neither log has `overwrite_all`: both are authoritative, like `AssertionLog`, so
+ non-tail corruption is always a thrown `std::runtime_error`, never self-healed.
+* `Catalog` (`include/kernel/catalog.hpp`/`src/catalog.cpp`) is the in-memory counterpart —
+ `add_entity`/`add_predicate` are the single mutation entry point used identically for a fresh
+ interning commit and for full replay at startup (there is no `IndexManager`-style dual
+ add/restore path, since Catalog has exactly one source of truth: its own log files). Each advances
+ `next_entity_id_`/`next_predicate_id_` to `max(next_*, id + 1)`, mirroring how `next_id_` is
+ restored by replaying `assertions.log`.
+* `KnowledgeKernel` gained a `Catalog catalog_` member and public
+ `intern_entity`/`intern_value`/`intern_predicate` (durable-before-visible: append to the
+ corresponding catalog log, then `catalog_.add_*`, exactly like `commit`'s
+ append-then-apply ordering) plus `find_entity`/`find_value`/`find_predicate`/`entity_name`/
+ `entity_value`/`predicate_name` lookups. `intern_entity(name)` is sugar for
+ `intern_value(Value::of_text(name))`; `entity_name(id)` returns `nullopt` unless the interned
+ `Value` is `Text`.
+* Catalog replay in `KnowledgeKernel`'s constructor is a small, unconditional, **uncaught** block
+ (reads both catalog logs via `StorageEngine::load_entity_catalog`/`load_predicate_catalog` and
+ calls `catalog_.add_entity`/`add_predicate`) placed before the existing
+ snapshot/checkpoint/tail-vs-full-replay branching — deliberately outside that branching's
+ try/catch-and-self-heal machinery, since Catalog has no relationship to `assertions.log` to fall
+ back to.
+* `StorageConfig` gained `catalog_directory()` (`root/catalog`), `entity_catalog_path()`
+ (`catalog/entities.log`), and `predicate_catalog_path()` (`catalog/predicates.log`).
+ `StorageEngine` owns both catalog logs and exposes matching `append_entity_catalog_entry`/
+ `load_entity_catalog` and `append_predicate_catalog_entry`/`load_predicate_catalog` (no
+ `rewrite_*`, consistent with there being no self-heal).
+* Accepted limitation, documented rather than solved: Catalog-minted `EntityId`s share the same id
+ space as caller-chosen `EntityId`s (e.g. `src/main.cpp`'s `EntityId alice = 1;`). Avoiding
+ collisions between the two is the caller's responsibility, same as it already is for all
+ `EntityId` usage today.
+* Covered by `tests/entity_catalog_log_tests.cpp` and `tests/predicate_catalog_log_tests.cpp`
+ (round trip across all `ValueKind`s for the entity log; missing file; invalid/undersized record
+ size; invalid header; partial header; tail checksum mismatch; non-tail checksum mismatch;
+ incomplete trailing record; and a catalog-specific malformed-length-prefix test with a
+ hand-computed valid checksum), `tests/catalog_tests.cpp` (add/find/next-id behavior for both id
+ spaces, plus a test confirming a `Text` value and an `Int64` value with "the same" content resolve
+ to different ids), and additions to `tests/knowledge_kernel_tests.cpp`
+ (`intern_entity_is_idempotent_and_returns_the_same_id_for_the_same_name`,
+ `intern_value_is_idempotent_for_numeric_and_text_values`,
+ `find_entity_returns_nullopt_for_an_unknown_name`, `entity_name_resolves_a_previously_interned_name`,
+ `predicate_name_resolves_a_previously_interned_predicate`,
+ `catalog_is_preserved_across_kernel_restarts`, `corrupt_entity_catalog_is_fatal_on_startup`,
+ `corrupt_predicate_catalog_is_fatal_on_startup`).
+* Verified on 2026-07-15: `cmake --build build && ctest --test-dir build --output-on-failure`
+ passes (13/13 test binaries), and `kernel_demo` still runs unchanged (no existing public API was
+ removed).
+
+### Phase 6 — Performance
 
 Future work :
 

@@ -853,6 +853,160 @@ void snapshot_ahead_of_log_is_ignored() {
     cleanup(root);
 }
 
+void intern_entity_is_idempotent_and_returns_the_same_id_for_the_same_name() {
+    auto root = test_root("intern_entity_is_idempotent_and_returns_the_same_id_for_the_same_name");
+    KnowledgeKernel kernel(StorageConfig{root});
+
+    auto alice_id = kernel.intern_entity("Alice");
+    auto alice_id_again = kernel.intern_entity("Alice");
+    auto bob_id = kernel.intern_entity("Bob");
+
+    assert(alice_id == alice_id_again);
+    assert(alice_id != bob_id);
+
+    cleanup(root);
+}
+
+void intern_value_is_idempotent_for_numeric_and_text_values() {
+    auto root = test_root("intern_value_is_idempotent_for_numeric_and_text_values");
+    KnowledgeKernel kernel(StorageConfig{root});
+
+    auto forty_two_id = kernel.intern_value(Value::of_int64(42));
+    auto forty_two_id_again = kernel.intern_value(Value::of_int64(42));
+
+    assert(forty_two_id == forty_two_id_again);
+
+    // A Value::of_text("42") and a Value::of_int64(42) share no meaningful content-equality --
+    // they are different kinds, so must resolve to different ids.
+    auto forty_two_text_id = kernel.intern_value(Value::of_text("42"));
+    assert(forty_two_text_id != forty_two_id);
+
+    cleanup(root);
+}
+
+void find_entity_returns_nullopt_for_an_unknown_name() {
+    auto root = test_root("find_entity_returns_nullopt_for_an_unknown_name");
+    KnowledgeKernel kernel(StorageConfig{root});
+
+    kernel.intern_entity("Alice");
+
+    assert(!kernel.find_entity("Bob").has_value());
+
+    cleanup(root);
+}
+
+void entity_name_resolves_a_previously_interned_name() {
+    auto root = test_root("entity_name_resolves_a_previously_interned_name");
+    KnowledgeKernel kernel(StorageConfig{root});
+
+    auto alice_id = kernel.intern_entity("Alice");
+
+    auto name = kernel.entity_name(alice_id);
+    assert(name.has_value());
+    assert(*name == "Alice");
+
+    // A non-Text value has no name to resolve.
+    auto number_id = kernel.intern_value(Value::of_int64(42));
+    assert(!kernel.entity_name(number_id).has_value());
+
+    cleanup(root);
+}
+
+void predicate_name_resolves_a_previously_interned_predicate() {
+    auto root = test_root("predicate_name_resolves_a_previously_interned_predicate");
+    KnowledgeKernel kernel(StorageConfig{root});
+
+    auto works_at_id = kernel.intern_predicate("works_at");
+
+    auto name = kernel.predicate_name(works_at_id);
+    assert(name.has_value());
+    assert(*name == "works_at");
+
+    assert(kernel.find_predicate("works_at") == std::optional<PredicateId>(works_at_id));
+    assert(!kernel.find_predicate("lives_in").has_value());
+
+    cleanup(root);
+}
+
+void catalog_is_preserved_across_kernel_restarts() {
+    auto root = test_root("catalog_is_preserved_across_kernel_restarts");
+
+    EntityId alice_id;
+    PredicateId works_at_id;
+
+    {
+        KnowledgeKernel kernel(StorageConfig{root});
+        alice_id = kernel.intern_entity("Alice");
+        works_at_id = kernel.intern_predicate("works_at");
+    }
+
+    KnowledgeKernel reopened_kernel(StorageConfig{root});
+
+    // Interning an already-seen name after restart must return the same id as before -- the
+    // catalog is authoritative, not rebuilt from assertions.log, so this is the regression test
+    // that would catch a replay bug silently minting a second id for the same name.
+    assert(reopened_kernel.intern_entity("Alice") == alice_id);
+    assert(reopened_kernel.intern_predicate("works_at") == works_at_id);
+
+    auto name = reopened_kernel.entity_name(alice_id);
+    assert(name.has_value());
+    assert(*name == "Alice");
+
+    auto predicate_name = reopened_kernel.predicate_name(works_at_id);
+    assert(predicate_name.has_value());
+    assert(*predicate_name == "works_at");
+
+    cleanup(root);
+}
+
+void corrupt_entity_catalog_is_fatal_on_startup() {
+    auto root = test_root("corrupt_entity_catalog_is_fatal_on_startup");
+
+    {
+        KnowledgeKernel kernel(StorageConfig{root});
+        kernel.intern_entity("Alice");
+    }
+
+    auto catalog_path = StorageConfig{root}.entity_catalog_path();
+    write_corrupt_record_size_after_valid_header(catalog_path);
+
+    bool threw = false;
+    try {
+        KnowledgeKernel recovered_kernel(StorageConfig{root});
+    } catch (const std::runtime_error &) {
+        threw = true;
+    }
+
+    // Unlike the Phase 3 indexes, there is no self-heal fallback -- the catalog is its own source
+    // of truth, so non-tail corruption must surface as a fatal, uncaught startup error.
+    assert(threw);
+
+    cleanup(root);
+}
+
+void corrupt_predicate_catalog_is_fatal_on_startup() {
+    auto root = test_root("corrupt_predicate_catalog_is_fatal_on_startup");
+
+    {
+        KnowledgeKernel kernel(StorageConfig{root});
+        kernel.intern_predicate("works_at");
+    }
+
+    auto catalog_path = StorageConfig{root}.predicate_catalog_path();
+    write_corrupt_record_size_after_valid_header(catalog_path);
+
+    bool threw = false;
+    try {
+        KnowledgeKernel recovered_kernel(StorageConfig{root});
+    } catch (const std::runtime_error &) {
+        threw = true;
+    }
+
+    assert(threw);
+
+    cleanup(root);
+}
+
 } // namespace
 
 int main() {
@@ -890,6 +1044,14 @@ int main() {
     write_snapshot_then_restart_uses_snapshot_and_replays_only_the_tail();
     stale_or_corrupt_snapshot_falls_back_to_full_replay();
     snapshot_ahead_of_log_is_ignored();
+    intern_entity_is_idempotent_and_returns_the_same_id_for_the_same_name();
+    intern_value_is_idempotent_for_numeric_and_text_values();
+    find_entity_returns_nullopt_for_an_unknown_name();
+    entity_name_resolves_a_previously_interned_name();
+    predicate_name_resolves_a_previously_interned_predicate();
+    catalog_is_preserved_across_kernel_restarts();
+    corrupt_entity_catalog_is_fatal_on_startup();
+    corrupt_predicate_catalog_is_fatal_on_startup();
 
     std::cout << "All assertion_kernel tests passed.\n";
     return 0;

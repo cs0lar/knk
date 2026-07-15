@@ -17,6 +17,9 @@ add_library(kernel
     src/durability.cpp
     src/index_checkpoint.cpp
     src/snapshot_store.cpp
+    src/entity_catalog_log.cpp
+    src/predicate_catalog_log.cpp
+    src/catalog.cpp
 )
 
 target_include_directories(kernel
@@ -28,6 +31,14 @@ add_executable(kernel_demo
 )
 
 target_link_libraries(kernel_demo
+    PRIVATE kernel
+)
+
+add_executable(catalog_usage_example
+    examples/catalog_usage.cpp
+)
+
+target_link_libraries(catalog_usage_example
     PRIVATE kernel
 )
 
@@ -73,6 +84,18 @@ add_executable(snapshot_store_tests
     tests/snapshot_store_tests.cpp
 )
 
+add_executable(entity_catalog_log_tests
+    tests/entity_catalog_log_tests.cpp
+)
+
+add_executable(predicate_catalog_log_tests
+    tests/predicate_catalog_log_tests.cpp
+)
+
+add_executable(catalog_tests
+    tests/catalog_tests.cpp
+)
+
 target_link_libraries(knowledge_kernel_tests
     PRIVATE kernel
 )
@@ -110,6 +133,18 @@ target_link_libraries(index_checkpoint_tests
 )
 
 target_link_libraries(snapshot_store_tests
+    PRIVATE kernel
+)
+
+target_link_libraries(entity_catalog_log_tests
+    PRIVATE kernel
+)
+
+target_link_libraries(predicate_catalog_log_tests
+    PRIVATE kernel
+)
+
+target_link_libraries(catalog_tests
     PRIVATE kernel
 )
 
@@ -161,4 +196,19 @@ add_test(
 add_test(
     NAME snapshot_store_tests
     COMMAND snapshot_store_tests
+)
+
+add_test(
+    NAME entity_catalog_log_tests
+    COMMAND entity_catalog_log_tests
+)
+
+add_test(
+    NAME predicate_catalog_log_tests
+    COMMAND predicate_catalog_log_tests
+)
+
+add_test(
+    NAME catalog_tests
+    COMMAND catalog_tests
 )

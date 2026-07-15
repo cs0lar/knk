@@ -15,6 +15,20 @@
 namespace knk {
 
 KnowledgeKernel::KnowledgeKernel(StorageConfig config) : storage_(config), index_manager_() {
+    // Catalog replay is deliberately not part of the snapshot/checkpoint/tail-vs-full-replay
+    // branching below: assertions.log never stores names or values, so there is nothing to
+    // rebuild this mapping from if entities.log/predicates.log is missing or corrupt. Unlike that
+    // branching's try/catch-and-self-heal handling of the derived Phase 3 indexes, a non-tail-
+    // corrupt catalog file throws std::runtime_error straight out of this constructor -- a fatal
+    // startup error, the same treatment AssertionLog itself gets.
+    for (const auto &record : storage_.load_entity_catalog()) {
+        catalog_.add_entity(record.id, record.value);
+    }
+
+    for (const auto &record : storage_.load_predicate_catalog()) {
+        catalog_.add_predicate(record.id, record.name);
+    }
+
     // A snapshot only ever benefits the "indexes trusted" fast path below: the full-rebuild fallback
     // path must apply() every record from id 1 to rebuild IndexManager from scratch regardless, and
     // pre-seeding assertions_ from a snapshot while also apply()-ing those same records would
@@ -416,5 +430,60 @@ std::vector<Assertion> KnowledgeKernel::commit_history(EntityId subject, Predica
 
     return result;
 }
+
+EntityId KnowledgeKernel::intern_entity(std::string_view name) {
+    return intern_value(Value::of_text(std::string(name)));
+}
+
+EntityId KnowledgeKernel::intern_value(const Value &value) {
+    if (auto existing = catalog_.find_entity(value)) {
+        return *existing;
+    }
+
+    EntityId id = catalog_.next_entity_id();
+
+    storage_.append_entity_catalog_entry(id, value);
+    catalog_.add_entity(id, value);
+
+    return id;
+}
+
+PredicateId KnowledgeKernel::intern_predicate(std::string_view name) {
+    std::string key(name);
+
+    if (auto existing = catalog_.find_predicate(key)) {
+        return *existing;
+    }
+
+    PredicateId id = catalog_.next_predicate_id();
+
+    storage_.append_predicate_catalog_entry(id, key);
+    catalog_.add_predicate(id, key);
+
+    return id;
+}
+
+std::optional<EntityId> KnowledgeKernel::find_entity(std::string_view name) const {
+    return find_value(Value::of_text(std::string(name)));
+}
+
+std::optional<EntityId> KnowledgeKernel::find_value(const Value &value) const { return catalog_.find_entity(value); }
+
+std::optional<PredicateId> KnowledgeKernel::find_predicate(std::string_view name) const {
+    return catalog_.find_predicate(std::string(name));
+}
+
+std::optional<std::string> KnowledgeKernel::entity_name(EntityId id) const {
+    auto value = catalog_.entity_value(id);
+    if (!value.has_value() || value->kind != ValueKind::Text) {
+        return std::nullopt;
+    }
+
+    return value->text;
+}
+
+std::optional<Value> KnowledgeKernel::entity_value(EntityId id) const { return catalog_.entity_value(id); }
+
+std::optional<std::string> KnowledgeKernel::predicate_name(PredicateId id) const { return catalog_.predicate_name(id); }
 
 } // namespace knk
