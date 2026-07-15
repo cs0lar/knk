@@ -34,6 +34,12 @@ struct StorageConfig {
     std::filesystem::path snapshot_path() const { return root / "snapshot"; }
 
     std::filesystem::path payload_directory() const { return root / "payloads"; }
+
+    std::filesystem::path catalog_directory() const { return root / "catalog"; }
+
+    std::filesystem::path entity_catalog_path() const { return catalog_directory() / "entities.log"; }
+
+    std::filesystem::path predicate_catalog_path() const { return catalog_directory() / "predicates.log"; }
 };
 
 } // namespace knk

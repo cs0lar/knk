@@ -1,18 +1,22 @@
 # Storage Format
 
-This document describes the on-disk binary format shared by all four persisted logs: the assertion
+This document describes the on-disk binary format shared by all six persisted logs: the assertion
 log (`AssertionLog`, the `segments/` directory — see "Segmented assertion log" below),
-`indexes/subject.idx` (`SubjectIndexLog`), `indexes/current.idx` (`CurrentIndexLog`), and
-`indexes/observed_time.idx` (`ObservedTimeIndexLog`).
+`indexes/subject.idx` (`SubjectIndexLog`), `indexes/current.idx` (`CurrentIndexLog`),
+`indexes/observed_time.idx` (`ObservedTimeIndexLog`), and `catalog/entities.log`/
+`catalog/predicates.log` (`EntityCatalogLog`/`PredicateCatalogLog` — see "Entity/predicate catalog"
+below).
 
-All four logs use the identical per-file framing described below (a header followed by record
-frames); only the record payload struct differs per log, and only the assertion log spreads that
-framing across multiple files instead of one — the three index logs remain single files.
+All six logs use the identical per-file header + record-frame layout described below; what differs
+per log is the record payload — fixed-size raw structs for the first four, explicitly serialized
+variable-length payloads for the two catalog logs (see "Entity/predicate catalog") — and only the
+assertion log spreads that framing across multiple files instead of one; every other log remains a
+single file.
 
 ## File layout
 
-Every individual file involved (each assertion-log segment file, and each of the three index log
-files) follows this same layout:
+Every individual file involved (each assertion-log segment file, each of the three index log files,
+and each of the two catalog log files) follows this same layout:
 
 ```
 [ file header, 8 bytes ]
@@ -59,9 +63,11 @@ scratch (the log is always rebuildable by replaying `assertions.log`, or from sc
 [ uint32_t crc32 ]
 ```
 
-- `record_size` is redundant with the record's compile-time `sizeof(...)` (all four record types
-  are fixed-size) and exists purely as an early sanity check; a mismatch throws
-  `std::runtime_error`.
+- For the four fixed-size record types, `record_size` is redundant with the record's compile-time
+  `sizeof(...)` and exists purely as an early sanity check; a mismatch throws
+  `std::runtime_error`. The two catalog logs have variable-length payloads instead (see
+  "Entity/predicate catalog"), so `record_size` there is load-bearing, not redundant — but the same
+  "any framing inconsistency always throws, never tail-tolerant" rule still applies to it.
 - `crc32` is the CRC-32 (IEEE 802.3 polynomial, `0xEDB88320`, same table-based algorithm as zlib)
   of the payload bytes only — it does not cover `record_size`. See `include/kernel/checksum.hpp`.
 - On read, if a frame is truncated anywhere (short `record_size`, short payload, or short `crc32`),
@@ -89,6 +95,55 @@ scratch (the log is always rebuildable by replaying `assertions.log`, or from sc
 - `SubjectIndexLog`: `SubjectIndexRecord` — `{subject, assertion_id}`.
 - `CurrentIndexLog`: `CurrentIndexRecord` — `{subject, predicate, assertion_id, active}`.
 - `ObservedTimeIndexLog`: `ObservedTimeIndexRecord` — `{subject, observed_at, assertion_id}`.
+- `EntityCatalogLog`/`PredicateCatalogLog`: variable-length, explicitly serialized — see
+  "Entity/predicate catalog" below.
+
+## Entity/predicate catalog
+
+`catalog/entities.log` (`EntityCatalogLog`) and `catalog/predicates.log` (`PredicateCatalogLog`)
+persist the `EntityId`/`PredicateId` <-> name/value mappings used by `KnowledgeKernel::intern_entity`/
+`intern_value`/`intern_predicate`. They reuse the exact same 8-byte header and
+`[record_size][payload][crc32]` framing as the other four logs, but are the **first variable-length**
+record payloads in the codebase — every other log's payload is a fixed-size raw struct where
+`record_size == sizeof(Record)`; these two serialize fields explicitly instead.
+
+`EntityCatalogRecord` payload bytes: `[EntityId id (8)][uint8_t kind (1)][kind-specific payload]`,
+where `kind` is `ValueKind` (`include/kernel/value.hpp`) and the payload is:
+
+- `Text`: `[uint32_t length][length bytes]`
+- `Int64` / `Timestamp`: `[int64_t]` (8 bytes)
+- `Double`: `[double]` (8 bytes)
+- `Bool`: `[uint8_t]` (1 byte)
+
+`PredicateCatalogRecord` payload bytes are always text: `[PredicateId id (8)][uint32_t
+length][length bytes]`.
+
+Because the payload is self-describing rather than a fixed size, there is one more way for a frame
+to be malformed beyond the shared rules above: a `record_size` smaller than the minimum possible
+payload (9 bytes for entities, 12 for predicates), or a length prefix that does not exactly consume
+the remaining payload bytes. Both always throw `std::runtime_error`, no tail tolerance — the same
+treatment as a `record_size` mismatch in the fixed-size logs, since there is no safe resync point
+once framing or internal structure is inconsistent.
+
+**These two logs are authoritative, not derived/rebuildable indexes.** Unlike the three Phase 3
+index logs, nothing in `assertions.log` records what an `EntityId`/`PredicateId` means — assertions
+only ever store the ids themselves — so there is no way to reconstruct a lost or corrupt catalog
+mapping by replaying the assertion log. Consequently:
+
+- Neither log has an `overwrite_all` method; there is no self-heal path.
+- Non-tail corruption is fatal, uncaught `std::runtime_error` propagating straight out of
+  `KnowledgeKernel`'s constructor — the same treatment `AssertionLog` gets, not the Phase 3 indexes'
+  catch-and-rebuild behavior (see "Recovery behavior" below).
+- Tail-tolerant behavior (a torn header, an incomplete trailing frame, or a checksum mismatch with
+  nothing following it) is unchanged from the other logs — that's about surviving an ordinary crash
+  mid-append, which is orthogonal to whether the log is derived or authoritative.
+
+`EntityId`s minted by `EntityCatalogLog` share the same id space as `EntityId`s a caller assigns
+directly without ever interning them (e.g. `src/main.cpp`'s `EntityId alice = 1;`). Avoiding
+collisions between manually chosen ids and catalog-interned ids is the caller's responsibility, same
+as it already is for all `EntityId` usage today; this phase adds an optional sub-allocator for the
+subset of entities a caller chooses to intern by name/value, not a new authority over the whole
+`EntityId` space.
 
 ## Segmented assertion log
 
@@ -245,3 +300,8 @@ framing errors, so it is caught by the same recovery paths:
   because it is the system's one source of truth — nothing else to rebuild it from — so that case is
   deliberately left as a loud, fatal error requiring operator intervention (e.g. restore from
   backup).
+- `EntityCatalogLog`/`PredicateCatalogLog` get the same treatment as `AssertionLog`, for the same
+  reason: they are each their own source of truth for what an `EntityId`/`PredicateId` means, with
+  nothing else to rebuild them from. `KnowledgeKernel`'s constructor reads both, uncaught, before the
+  index/checkpoint/snapshot logic described above even runs — non-tail corruption in either file is a
+  fatal startup error, not a self-heal candidate.

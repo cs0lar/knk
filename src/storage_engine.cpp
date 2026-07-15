@@ -7,10 +7,12 @@ StorageEngine::StorageEngine(StorageConfig config)
     : config_(std::move(config)), assertion_log_(config_.segment_directory(), config_.max_records_per_segment),
       observed_time_index_log_(config_.observed_time_index_path()), subject_index_log_(config_.subject_index_path()),
       current_index_log_(config_.current_index_path()), checkpoint_(config_.checkpoint_path()),
-      snapshot_store_(config_.snapshot_path()) {
+      snapshot_store_(config_.snapshot_path()), entity_catalog_log_(config_.entity_catalog_path()),
+      predicate_catalog_log_(config_.predicate_catalog_path()) {
     std::filesystem::create_directories(config_.root);
     std::filesystem::create_directories(config_.index_directory());
     std::filesystem::create_directories(config_.payload_directory());
+    std::filesystem::create_directories(config_.catalog_directory());
 }
 
 void StorageEngine::append_assertion(const Assertion &assertion) { assertion_log_.append(assertion); }
@@ -64,6 +66,20 @@ void StorageEngine::write_snapshot(AssertionId last_snapshotted_id, const std::v
 }
 
 std::optional<SnapshotData> StorageEngine::load_snapshot() const { return snapshot_store_.read(); }
+
+void StorageEngine::append_entity_catalog_entry(EntityId id, const Value &value) {
+    entity_catalog_log_.append(EntityCatalogRecord{id, value});
+}
+
+std::vector<EntityCatalogRecord> StorageEngine::load_entity_catalog() const { return entity_catalog_log_.read_all(); }
+
+void StorageEngine::append_predicate_catalog_entry(PredicateId id, const std::string &name) {
+    predicate_catalog_log_.append(PredicateCatalogRecord{id, name});
+}
+
+std::vector<PredicateCatalogRecord> StorageEngine::load_predicate_catalog() const {
+    return predicate_catalog_log_.read_all();
+}
 
 const StorageConfig &StorageEngine::config() const { return config_; }
 

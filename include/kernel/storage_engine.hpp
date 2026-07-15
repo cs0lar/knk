@@ -7,13 +7,16 @@
 #include "kernel/assertion.hpp"
 #include "kernel/assertion_log.hpp"
 #include "kernel/current_index_log.hpp"
+#include "kernel/entity_catalog_log.hpp"
 #include "kernel/ids.hpp"
 #include "kernel/index_checkpoint.hpp"
 #include "kernel/observed_time_index_log.hpp"
+#include "kernel/predicate_catalog_log.hpp"
 #include "kernel/snapshot_store.hpp"
 #include "kernel/storage_config.hpp"
 #include "kernel/subject_index_log.hpp"
 #include "kernel/time.hpp"
+#include "kernel/value.hpp"
 
 namespace knk {
 
@@ -55,6 +58,14 @@ class StorageEngine {
 
     std::optional<SnapshotData> load_snapshot() const;
 
+    void append_entity_catalog_entry(EntityId id, const Value &value);
+
+    std::vector<EntityCatalogRecord> load_entity_catalog() const;
+
+    void append_predicate_catalog_entry(PredicateId id, const std::string &name);
+
+    std::vector<PredicateCatalogRecord> load_predicate_catalog() const;
+
     const StorageConfig &config() const;
 
   private:
@@ -65,6 +76,8 @@ class StorageEngine {
     CurrentIndexLog current_index_log_;
     IndexCheckpoint checkpoint_;
     SnapshotStore snapshot_store_;
+    EntityCatalogLog entity_catalog_log_;
+    PredicateCatalogLog predicate_catalog_log_;
 };
 
 } // namespace knk
