@@ -8,7 +8,7 @@ StorageEngine::StorageEngine(StorageConfig config)
       observed_time_index_log_(config_.observed_time_index_path()), subject_index_log_(config_.subject_index_path()),
       current_index_log_(config_.current_index_path()), checkpoint_(config_.checkpoint_path()),
       snapshot_store_(config_.snapshot_path()), entity_catalog_log_(config_.entity_catalog_path()),
-      predicate_catalog_log_(config_.predicate_catalog_path()) {
+      predicate_catalog_log_(config_.predicate_catalog_path()), payload_store_(config_.payload_directory()) {
     std::filesystem::create_directories(config_.root);
     std::filesystem::create_directories(config_.index_directory());
     std::filesystem::create_directories(config_.payload_directory());
@@ -80,6 +80,14 @@ void StorageEngine::append_predicate_catalog_entry(PredicateId id, const std::st
 std::vector<PredicateCatalogRecord> StorageEngine::load_predicate_catalog() const {
     return predicate_catalog_log_.read_all();
 }
+
+void StorageEngine::write_payload(EntityId id, std::span<const std::byte> content) {
+    payload_store_.write(id, content);
+}
+
+std::optional<std::vector<std::byte>> StorageEngine::load_payload(EntityId id) const { return payload_store_.read(id); }
+
+std::vector<EntityId> StorageEngine::existing_payload_ids() const { return payload_store_.existing_ids(); }
 
 const StorageConfig &StorageEngine::config() const { return config_; }
 

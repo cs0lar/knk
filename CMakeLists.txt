@@ -20,6 +20,7 @@ add_library(kernel
     src/entity_catalog_log.cpp
     src/predicate_catalog_log.cpp
     src/catalog.cpp
+    src/payload_store.cpp
 )
 
 target_include_directories(kernel
@@ -27,7 +28,7 @@ target_include_directories(kernel
 )
 
 add_executable(kernel_demo
-    src/main.cpp
+    examples/knowledge_kernel_demo.cpp
 )
 
 target_link_libraries(kernel_demo
@@ -96,6 +97,10 @@ add_executable(catalog_tests
     tests/catalog_tests.cpp
 )
 
+add_executable(payload_store_tests
+    tests/payload_store_tests.cpp
+)
+
 target_link_libraries(knowledge_kernel_tests
     PRIVATE kernel
 )
@@ -145,6 +150,10 @@ target_link_libraries(predicate_catalog_log_tests
 )
 
 target_link_libraries(catalog_tests
+    PRIVATE kernel
+)
+
+target_link_libraries(payload_store_tests
     PRIVATE kernel
 )
 
@@ -211,4 +220,9 @@ add_test(
 add_test(
     NAME catalog_tests
     COMMAND catalog_tests
+)
+
+add_test(
+    NAME payload_store_tests
+    COMMAND payload_store_tests
 )

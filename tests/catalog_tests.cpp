@@ -64,6 +64,37 @@ void next_entity_id_advances_past_the_highest_added_id() {
     assert(catalog.next_entity_id() == 6);
 }
 
+void allocate_entity_id_advances_the_counter_without_adding_a_mapping() {
+    Catalog catalog;
+
+    catalog.add_entity(1, Value::of_text("Alice"));
+
+    EntityId document_id = catalog.allocate_entity_id();
+    assert(document_id == 2);
+    assert(catalog.next_entity_id() == 3);
+
+    // No name/value was ever associated with the allocated id.
+    assert(!catalog.entity_value(document_id).has_value());
+
+    EntityId next_document_id = catalog.allocate_entity_id();
+    assert(next_document_id == 3);
+
+    catalog.add_entity(4, Value::of_text("Bob"));
+    assert(catalog.next_entity_id() == 5);
+}
+
+void note_allocated_entity_id_advances_past_the_given_id_without_adding_a_mapping() {
+    Catalog catalog;
+
+    catalog.note_allocated_entity_id(4);
+    assert(catalog.next_entity_id() == 5);
+    assert(!catalog.entity_value(4).has_value());
+
+    // Noting a lower id than already observed is a no-op.
+    catalog.note_allocated_entity_id(1);
+    assert(catalog.next_entity_id() == 5);
+}
+
 void add_predicate_then_find_predicate_returns_the_id() {
     Catalog catalog;
 
@@ -115,6 +146,8 @@ int main() {
     entity_value_returns_the_interned_value_for_a_known_id();
     distinct_value_kinds_with_similar_content_are_distinct_entities();
     next_entity_id_advances_past_the_highest_added_id();
+    allocate_entity_id_advances_the_counter_without_adding_a_mapping();
+    note_allocated_entity_id_advances_past_the_given_id_without_adding_a_mapping();
     add_predicate_then_find_predicate_returns_the_id();
     find_predicate_for_unknown_name_returns_nullopt();
     predicate_name_returns_the_interned_name_for_a_known_id();

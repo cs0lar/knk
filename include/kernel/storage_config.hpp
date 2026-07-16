@@ -4,6 +4,8 @@
 #include <filesystem>
 #include <string>
 
+#include "kernel/ids.hpp"
+
 namespace knk {
 
 struct StorageConfig {
@@ -34,6 +36,10 @@ struct StorageConfig {
     std::filesystem::path snapshot_path() const { return root / "snapshot"; }
 
     std::filesystem::path payload_directory() const { return root / "payloads"; }
+
+    std::filesystem::path payload_path(EntityId id) const {
+        return payload_directory() / (std::to_string(id) + ".payload");
+    }
 
     std::filesystem::path catalog_directory() const { return root / "catalog"; }
 

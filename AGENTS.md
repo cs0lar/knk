@@ -326,11 +326,11 @@ Current implementation status :
 
 Future work :
 
-* Entity/predicate name catalog (label ↔ id)
-* Literal value catalog (typed scalar ↔ id)
-* Payload store (large content ↔ id)
-* Catalog/payload persistence and replay on startup
-* Public `KnowledgeKernel` API for interning and resolving names, values, and payloads
+* ✅ Entity/predicate name catalog (label ↔ id)
+* ✅ Literal value catalog (typed scalar ↔ id)
+* ✅ Payload store (large content ↔ id; see implementation status below)
+* ✅ Catalog/payload persistence and replay on startup
+* ✅ Public `KnowledgeKernel` API for interning and resolving names, values, and payloads
 
 Assertions currently carry only opaque `EntityId`/`PredicateId` values. Nothing in the kernel persists what those
 ids mean, so every one of the "Current North Star" queries ("What do we currently know about Alice?") is
@@ -400,7 +400,7 @@ incomplete trailing record) plus :
 * `payload_is_preserved_across_kernel_restarts`
 * `corrupt_payload_is_fatal_on_startup`
 
-Current implementation status (Catalog only — `PayloadStore` is still future work):
+Current implementation status:
 
 * `Value` (`include/kernel/value.hpp`, header-only) is a tagged struct, not `std::variant`, with
  `ValueKind` in `{Text, Int64, Double, Bool, Timestamp}`, defaulted C++20 member-wise `operator==`,
@@ -440,7 +440,8 @@ Current implementation status (Catalog only — `PayloadStore` is still future w
  `load_entity_catalog` and `append_predicate_catalog_entry`/`load_predicate_catalog` (no
  `rewrite_*`, consistent with there being no self-heal).
 * Accepted limitation, documented rather than solved: Catalog-minted `EntityId`s share the same id
- space as caller-chosen `EntityId`s (e.g. `src/main.cpp`'s `EntityId alice = 1;`). Avoiding
+ space as caller-chosen `EntityId`s (e.g. `examples/knowledge_kernel_demo.cpp`'s
+ `EntityId external_feed = 9000;`). Avoiding
  collisions between the two is the caller's responsibility, same as it already is for all
  `EntityId` usage today.
 * Covered by `tests/entity_catalog_log_tests.cpp` and `tests/predicate_catalog_log_tests.cpp`
@@ -456,9 +457,47 @@ Current implementation status (Catalog only — `PayloadStore` is still future w
  `predicate_name_resolves_a_previously_interned_predicate`,
  `catalog_is_preserved_across_kernel_restarts`, `corrupt_entity_catalog_is_fatal_on_startup`,
  `corrupt_predicate_catalog_is_fatal_on_startup`).
-* Verified on 2026-07-15: `cmake --build build && ctest --test-dir build --output-on-failure`
- passes (13/13 test binaries), and `kernel_demo` still runs unchanged (no existing public API was
- removed).
+* `PayloadStore` (`include/kernel/payload_store.hpp`/`src/payload_store.cpp`) persists arbitrary-size
+ byte content one-file-per-payload at `payloads/<id>.payload`, with no manifest — `existing_ids()`
+ discovers what's on disk by scanning the directory's filenames, the same "derive everything from
+ directory contents" approach the segmented assertion log uses. Each file uses a small standalone
+ format (`[4-byte magic "KNKD"][uint32 version][uint64 content length][content bytes][uint32 crc32]`,
+ crc over content only) and is always written in full via `write_file_atomically`, never appended to
+ — like `indexes/checkpoint`/`snapshot`, so a crash mid-write can never leave a torn file visible at
+ the real path. Unlike those two hint-only files, though, `read()` always throws on any anomaly in a
+ present file rather than degrading gracefully: since a present file is guaranteed fully-formed, any
+ anomaly is genuine corruption, and `PayloadStore` is authoritative (see `docs/storage_format.md`'s
+ new "Payload store" section).
+* `Catalog` gained `allocate_entity_id()` (mints a fresh id from the same counter `add_entity` uses,
+ for `intern_document`, but records no name/value mapping — a document has nothing to put in
+ `entity_ids_`/`entity_values_`) and `note_allocated_entity_id(id)` (advances the counter past a
+ document id discovered by replaying `PayloadStore` at startup, the out-of-band counterpart needed
+ because document ids have no `entities.log` record to replay from).
+* `KnowledgeKernel` gained `intern_document(std::span<const std::byte>)` (mints via
+ `Catalog::allocate_entity_id`, then `storage_.write_payload`) and
+ `document_content(EntityId) const` (`storage_.load_payload`, returns `nullopt` only if nothing was
+ ever interned for that id). `StorageConfig` gained `payload_path(EntityId)`; `StorageEngine` gained
+ `write_payload`/`load_payload`/`existing_payload_ids`, matching the existing `append_*`/`load_*`
+ pattern (no `rewrite_*`, consistent with there being no self-heal).
+* `KnowledgeKernel`'s constructor extends the uncaught catalog-replay block (same one that loads
+ `entities.log`/`predicates.log`) with a loop over `storage_.existing_payload_ids()` that calls
+ `storage_.load_payload(id)` for each — reading (not just listing) every payload at startup so
+ corruption is caught eagerly, matching `corrupt_payload_is_fatal_on_startup` — and feeds each id
+ into `catalog_.note_allocated_entity_id` to restore id-space continuity across restarts.
+* Covered by `tests/payload_store_tests.cpp` (round trip incl. empty content, missing id returns
+ `nullopt`, write replaces a prior payload for the same id, `existing_ids` lists every written
+ payload and is empty when the directory doesn't exist, and three corruption throws: invalid header,
+ inconsistent length field, checksum mismatch), additions to `tests/catalog_tests.cpp`
+ (`allocate_entity_id_advances_the_counter_without_adding_a_mapping`,
+ `note_allocated_entity_id_advances_past_the_given_id_without_adding_a_mapping`), and additions to
+ `tests/knowledge_kernel_tests.cpp` (`payload_round_trips_large_content`,
+ `intern_document_mints_ids_from_the_shared_entity_id_space`,
+ `payload_is_preserved_across_kernel_restarts`, `corrupt_payload_is_fatal_on_startup`).
+* Verified on 2026-07-16: `cmake --build build && ctest --test-dir build --output-on-failure`
+ passes (14/14 test binaries). `src/main.cpp` was removed; `kernel_demo` now builds from
+ `examples/knowledge_kernel_demo.cpp`, a comprehensive walkthrough of commit/query semantics,
+ supersession, retraction, audit/timeline history, Catalog interning, PayloadStore documents, and
+ recovery across a restart, run and manually inspected end to end.
 
 ### Phase 6 — Performance
 
