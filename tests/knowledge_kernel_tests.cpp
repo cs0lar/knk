@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cerrno>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -1007,6 +1008,99 @@ void corrupt_predicate_catalog_is_fatal_on_startup() {
     cleanup(root);
 }
 
+std::vector<std::byte> make_content(const std::string &text) {
+    std::vector<std::byte> content(text.size());
+    for (size_t i = 0; i < text.size(); ++i) {
+        content[i] = static_cast<std::byte>(text[i]);
+    }
+    return content;
+}
+
+void payload_round_trips_large_content() {
+    auto root = test_root("payload_round_trips_large_content");
+    KnowledgeKernel kernel(StorageConfig{root});
+
+    std::string large(1'000'000, 'x');
+    auto content = make_content(large);
+
+    auto id = kernel.intern_document(content);
+
+    auto loaded = kernel.document_content(id);
+    assert(loaded.has_value());
+    assert(*loaded == content);
+
+    cleanup(root);
+}
+
+void intern_document_mints_ids_from_the_shared_entity_id_space() {
+    auto root = test_root("intern_document_mints_ids_from_the_shared_entity_id_space");
+    KnowledgeKernel kernel(StorageConfig{root});
+
+    auto alice_id = kernel.intern_entity("Alice");
+    auto document_id = kernel.intern_document(make_content("a document"));
+    auto bob_id = kernel.intern_entity("Bob");
+
+    assert(document_id != alice_id);
+    assert(document_id != bob_id);
+
+    cleanup(root);
+}
+
+void payload_is_preserved_across_kernel_restarts() {
+    auto root = test_root("payload_is_preserved_across_kernel_restarts");
+
+    EntityId document_id;
+    auto content = make_content("preserved across restarts");
+
+    {
+        KnowledgeKernel kernel(StorageConfig{root});
+        document_id = kernel.intern_document(content);
+    }
+
+    KnowledgeKernel reopened_kernel(StorageConfig{root});
+
+    auto loaded = reopened_kernel.document_content(document_id);
+    assert(loaded.has_value());
+    assert(*loaded == content);
+
+    // The document id must not be reused by a later interning call after restart -- id-space
+    // continuity is restored from PayloadStore, not just entities.log.
+    auto next_id = reopened_kernel.intern_entity("Alice");
+    assert(next_id != document_id);
+
+    cleanup(root);
+}
+
+void corrupt_payload_is_fatal_on_startup() {
+    auto root = test_root("corrupt_payload_is_fatal_on_startup");
+
+    EntityId document_id;
+    {
+        KnowledgeKernel kernel(StorageConfig{root});
+        document_id = kernel.intern_document(make_content("valid"));
+    }
+
+    auto payload_path = StorageConfig{root}.payload_path(document_id);
+    {
+        std::fstream io(payload_path, std::ios::binary | std::ios::in | std::ios::out);
+        io.seekp(0);
+        io.write("XXXX", 4);
+    }
+
+    bool threw = false;
+    try {
+        KnowledgeKernel recovered_kernel(StorageConfig{root});
+    } catch (const std::runtime_error &) {
+        threw = true;
+    }
+
+    // Like the catalog logs, PayloadStore is authoritative with nothing to rebuild it from, so
+    // corruption must surface as a fatal, uncaught startup error rather than a self-heal.
+    assert(threw);
+
+    cleanup(root);
+}
+
 } // namespace
 
 int main() {
@@ -1052,6 +1146,10 @@ int main() {
     catalog_is_preserved_across_kernel_restarts();
     corrupt_entity_catalog_is_fatal_on_startup();
     corrupt_predicate_catalog_is_fatal_on_startup();
+    payload_round_trips_large_content();
+    intern_document_mints_ids_from_the_shared_entity_id_space();
+    payload_is_preserved_across_kernel_restarts();
+    corrupt_payload_is_fatal_on_startup();
 
     std::cout << "All assertion_kernel tests passed.\n";
     return 0;

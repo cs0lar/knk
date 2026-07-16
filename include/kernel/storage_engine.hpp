@@ -1,7 +1,9 @@
 #pragma once
 
+#include <cstddef>
 #include <filesystem>
 #include <optional>
+#include <span>
 #include <vector>
 
 #include "kernel/assertion.hpp"
@@ -11,6 +13,7 @@
 #include "kernel/ids.hpp"
 #include "kernel/index_checkpoint.hpp"
 #include "kernel/observed_time_index_log.hpp"
+#include "kernel/payload_store.hpp"
 #include "kernel/predicate_catalog_log.hpp"
 #include "kernel/snapshot_store.hpp"
 #include "kernel/storage_config.hpp"
@@ -66,6 +69,12 @@ class StorageEngine {
 
     std::vector<PredicateCatalogRecord> load_predicate_catalog() const;
 
+    void write_payload(EntityId id, std::span<const std::byte> content);
+
+    std::optional<std::vector<std::byte>> load_payload(EntityId id) const;
+
+    std::vector<EntityId> existing_payload_ids() const;
+
     const StorageConfig &config() const;
 
   private:
@@ -78,6 +87,7 @@ class StorageEngine {
     SnapshotStore snapshot_store_;
     EntityCatalogLog entity_catalog_log_;
     PredicateCatalogLog predicate_catalog_log_;
+    PayloadStore payload_store_;
 };
 
 } // namespace knk

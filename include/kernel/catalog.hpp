@@ -18,6 +18,19 @@ class Catalog {
     void add_entity(EntityId id, const Value &value);
     void add_predicate(PredicateId id, const std::string &name);
 
+    // Mints a fresh EntityId for a document (PayloadStore-backed content), sharing the same id
+    // counter/space as add_entity's name/value ids but recording no name/value mapping for it --
+    // a document has no reverse "content -> id" lookup, so there is nothing to put in entity_ids_/
+    // entity_values_. The counter still needs to survive restarts, so a replayed document id is
+    // fed back in via note_allocated_entity_id below.
+    EntityId allocate_entity_id();
+
+    // Advances next_entity_id_ past a document id discovered by replaying PayloadStore's contents
+    // at startup, without adding any name/value mapping -- the id-space-continuity half of
+    // allocate_entity_id's bump, replayed out of band since documents aren't stored in
+    // entities.log.
+    void note_allocated_entity_id(EntityId id);
+
     std::optional<EntityId> find_entity(const Value &value) const;
     std::optional<PredicateId> find_predicate(const std::string &name) const;
 

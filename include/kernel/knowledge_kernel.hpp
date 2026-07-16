@@ -1,6 +1,8 @@
 #pragma once
 
+#include <cstddef>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -78,6 +80,10 @@ class KnowledgeKernel {
     std::optional<Value> entity_value(EntityId id) const;
 
     std::optional<std::string> predicate_name(PredicateId id) const;
+
+    EntityId intern_document(std::span<const std::byte> content);
+
+    std::optional<std::vector<std::byte>> document_content(EntityId id) const;
 
   private:
     void restore_assertion(const Assertion &assertion);

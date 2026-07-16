@@ -16,6 +16,14 @@ void Catalog::add_predicate(PredicateId id, const std::string &name) {
     next_predicate_id_ = std::max(next_predicate_id_, id + 1);
 }
 
+EntityId Catalog::allocate_entity_id() {
+    EntityId id = next_entity_id_;
+    next_entity_id_ = id + 1;
+    return id;
+}
+
+void Catalog::note_allocated_entity_id(EntityId id) { next_entity_id_ = std::max(next_entity_id_, id + 1); }
+
 std::optional<EntityId> Catalog::find_entity(const Value &value) const {
     auto it = entity_ids_.find(value);
     if (it == entity_ids_.end()) {

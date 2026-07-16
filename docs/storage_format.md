@@ -139,11 +139,51 @@ mapping by replaying the assertion log. Consequently:
   mid-append, which is orthogonal to whether the log is derived or authoritative.
 
 `EntityId`s minted by `EntityCatalogLog` share the same id space as `EntityId`s a caller assigns
-directly without ever interning them (e.g. `src/main.cpp`'s `EntityId alice = 1;`). Avoiding
+directly without ever interning them (e.g. `examples/knowledge_kernel_demo.cpp`'s
+`EntityId external_feed = 9000;`). Avoiding
 collisions between manually chosen ids and catalog-interned ids is the caller's responsibility, same
 as it already is for all `EntityId` usage today; this phase adds an optional sub-allocator for the
 subset of entities a caller chooses to intern by name/value, not a new authority over the whole
 `EntityId` space.
+
+## Payload store
+
+`payloads/` (`PayloadStore`) holds arbitrary-size byte content addressed by `EntityId`, for content
+too large or unstructured to fit the catalog's small fixed-ish framed-log records (whole documents,
+arbitrary blobs). Unlike every log described above, it is **not** a single file: it is one file per
+payload, `payloads/<id>.payload`, with no manifest — `existing_ids()` discovers what's on disk purely
+by scanning the directory's filenames, the same "derive everything from directory contents" precedent
+used by the segmented assertion log below.
+
+Each payload file is always written in full via `write_file_atomically` (temp file, fsync, atomic
+rename, fsync parent directory), never appended to — the same mechanism `indexes/checkpoint` and
+`snapshot` use. This matters for its corruption model: because a crash mid-write can never leave a
+half-written file visible at the real path, a file that exists at `payloads/<id>.payload` is
+guaranteed to be either fully-formed or entirely absent. There is therefore no "torn write" category
+to tail-tolerate here, unlike the append-only logs — any anomaly found in a present file is genuine
+corruption, and `read()` always throws rather than degrading to "no usable data."
+
+Format: `[4-byte magic "KNKD"][4-byte uint32 version][8-byte uint64 content length][length bytes of
+content][4-byte uint32 crc32]`, where the crc32 covers the content bytes only. The length is
+validated against the actual file size before the content buffer is allocated, so a corrupted length
+field can never drive a huge allocation — the same defensive check `snapshot`'s `record_count` uses.
+
+**`PayloadStore` is authoritative, not a derived/rebuildable index**, for the same reason the entity/
+predicate catalog logs are: `assertions.log` never stores payload content, so there is nothing to
+rebuild a lost or corrupt payload from. Consequently there is no `overwrite_all`/self-heal path, and
+non-tail corruption is a fatal, uncaught `std::runtime_error` — `KnowledgeKernel`'s constructor reads
+(not just lists) every payload found on disk at startup via `existing_ids()`, so a corrupt payload
+file is detected and thrown eagerly at startup, not lazily on first access.
+
+`EntityId`s minted for documents (`KnowledgeKernel::intern_document`, via `Catalog::allocate_entity_id`)
+share the same id counter/space as `EntityId`s minted by `intern_entity`/`intern_value`, but — unlike
+those — have no corresponding record in `catalog/entities.log`: a document has no name or scalar value
+to intern, only content, so there is nothing meaningful to write there. This means the counter's
+continuity across restarts can't rely on replaying `entities.log` alone; `KnowledgeKernel`'s
+constructor also feeds every id discovered via `PayloadStore::existing_ids()` back into
+`Catalog::note_allocated_entity_id`, which advances the same counter `add_entity` does but without
+recording any name/value mapping. Skipping this step would let a restart mint a document id that
+collides with a document id issued before the restart.
 
 ## Segmented assertion log
 

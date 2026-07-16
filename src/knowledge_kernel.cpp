@@ -29,6 +29,16 @@ KnowledgeKernel::KnowledgeKernel(StorageConfig config) : storage_(config), index
         catalog_.add_predicate(record.id, record.name);
     }
 
+    // Document ids share Catalog's entity id counter but have no entities.log record to replay (see
+    // Catalog::allocate_entity_id), so id-space continuity across restarts is restored here instead
+    // by scanning PayloadStore directly. Reading each payload (rather than just listing ids) also
+    // validates it -- corrupt payload content is a fatal startup error, uncaught like the two catalog
+    // logs above, since PayloadStore is likewise authoritative with nothing to rebuild it from.
+    for (EntityId id : storage_.existing_payload_ids()) {
+        storage_.load_payload(id);
+        catalog_.note_allocated_entity_id(id);
+    }
+
     // A snapshot only ever benefits the "indexes trusted" fast path below: the full-rebuild fallback
     // path must apply() every record from id 1 to rebuild IndexManager from scratch regardless, and
     // pre-seeding assertions_ from a snapshot while also apply()-ing those same records would
@@ -485,5 +495,17 @@ std::optional<std::string> KnowledgeKernel::entity_name(EntityId id) const {
 std::optional<Value> KnowledgeKernel::entity_value(EntityId id) const { return catalog_.entity_value(id); }
 
 std::optional<std::string> KnowledgeKernel::predicate_name(PredicateId id) const { return catalog_.predicate_name(id); }
+
+EntityId KnowledgeKernel::intern_document(std::span<const std::byte> content) {
+    EntityId id = catalog_.allocate_entity_id();
+
+    storage_.write_payload(id, content);
+
+    return id;
+}
+
+std::optional<std::vector<std::byte>> KnowledgeKernel::document_content(EntityId id) const {
+    return storage_.load_payload(id);
+}
 
 } // namespace knk
