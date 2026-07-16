@@ -499,7 +499,168 @@ Current implementation status:
  supersession, retraction, audit/timeline history, Catalog interning, PayloadStore documents, and
  recovery across a restart, run and manually inspected end to end.
 
-### Phase 6 — Performance
+### Phase 6 — Provenance & Agentic Interface
+
+Future work :
+
+* Provenance log (`AssertionId` -> source `EntityId` + method, "which source produced this claim?")
+* `explain(AssertionId)` — walk the supersession/retraction chain to its root
+* Conflict detection (`find_conflicts`) — overlapping active assertions for the same subject/predicate
+* `KernelCommand`/`KernelResult` — a closed, serializable command layer over the existing public API
+
+This phase gives everything else in the roadmap two things it depends on: a durable notion of *who or
+what asserted this and why*, and a stable, serializable way for an agent to call into the kernel
+without linking against the raw C++ API. Neither requirement is new — both are direct gaps against the
+"Current North Star" below (no way to answer "which source produced this claim?" or "which assertions
+conflict?" today) — but closing them is prerequisite groundwork for Phase 7 and Phase 8, which is why
+this phase comes first.
+
+Design :
+
+* `ProvenanceLog` (`include/kernel/provenance_log.hpp`/`src/provenance_log.cpp`) persists
+ `{AssertionId, EntityId source, Timestamp recorded_at, std::string method}` to
+ `provenance/provenance.log`, reusing the shared `KNK1` header + `[record_size][payload][crc32]`
+ framing (variable-length payload, same precedent as `EntityCatalogLog`'s `Text` case). Deliberately
+ a side-log keyed by `AssertionId`, not a new field on `Assertion` — this keeps the raw-struct
+ on-disk format untouched (no second breaking format change, unlike the Phase 4 segment/checksum
+ work). Authoritative like the catalog logs: nothing in `assertions.log` encodes this, so non-tail
+ corruption is fatal on startup, with no `overwrite_all`/self-heal.
+* `source` is just an `EntityId` — a person, an ingestion pipeline, an agent, or a predictor model
+ (Phase 8) is interned into `Catalog` exactly like any other entity, so resolving "which source
+ produced this claim" reuses `entity_name`/`entity_value` for free instead of inventing a second
+ identity system.
+* `KnowledgeKernel` gains `record_provenance(AssertionId, EntityId source, std::string method)`,
+ `provenance_for(AssertionId) -> optional<ProvenanceRecord>`, and `explain(AssertionId) ->
+ vector<Assertion>` (walks `supersedes_id`/`retracts_id` back to the root assertion, resolving each
+ hop's provenance) — this is the concrete answer to "why does the kernel believe this."
+* `find_conflicts(EntityId subject, PredicateId predicate) -> vector<std::pair<Assertion, Assertion>>`
+ is pure read-side logic over the existing `assertions_for_subject`/current-index lookups — any two
+ `Active`, time-overlapping assertions for the same subject/predicate with a different object. No new
+ storage. This is also the detection primitive Phase 7's entity-merge tooling is expected to consume.
+* `KernelCommand`/`KernelResult` (`include/kernel/kernel_command.hpp`/`kernel_result.hpp`): a closed
+ `std::variant` covering every existing public `KnowledgeKernel` method (commit/commit_superseding/
+ commit_retraction, each query method, intern_entity/predicate/value/document, find_conflicts,
+ explain, ...), plus `KnowledgeKernel::execute(const KernelCommand&) -> KernelResult`, a thin 1:1
+ dispatch switch, not new business logic. This is explicitly not a query language: every command
+ mirrors an existing method exactly, reified as data so a boundary (in-process today; MCP/HTTP/gRPC
+ could wrap it later without redesigning the kernel) can serialize a call instead of doing direct
+ method dispatch. No network transport is added in this phase.
+
+Minimum tests to add, following the existing per-log pattern (round trip, missing file, invalid record
+size, incomplete trailing record) plus :
+
+* `provenance_is_recorded_and_resolves_to_a_source_entity`
+* `explain_walks_the_supersession_chain_to_its_root`
+* `find_conflicts_detects_overlapping_active_assertions_for_the_same_subject_predicate`
+* `provenance_is_preserved_across_kernel_restarts`
+* `corrupt_provenance_log_is_fatal_on_startup`
+* one round-trip test per `KernelCommand` variant, confirming `execute()` returns the same result as
+ calling the mirrored method directly
+
+### Phase 7 — Self-Improvement: Merge & Prune
+
+Future work :
+
+* Entity merge (`merge_entities`) — one-way, append-only redirect for deduplicating entities
+* `Catalog::resolve(EntityId)` — transitive redirect resolution at the query boundary
+* Segment archival (`archive_segments_before`) — compaction, not deletion
+
+Design :
+
+* `merge_entities(EntityId keep, EntityId absorb)` is backed by a new durable, append-only
+ `EntityMergeLog` (`catalog/entity_merges.log`, same framing and authoritative-corruption treatment
+ as the other catalog logs: `{EntityId absorbed, EntityId surviving, Timestamp merged_at}`).
+ `Catalog` gains `resolve(EntityId) -> EntityId`, following redirects transitively (merging A into B,
+ then B into C, makes `resolve(A) == C`). Every query-path method that takes a caller-supplied
+ `EntityId` resolves through it first. Per an explicit design decision, this is one-way and
+ forward-only: a merge that turns out wrong is corrected by a *new* merge/correction recorded going
+ forward, never by mutating or reversing the original redirect record — consistent with the
+ append-only philosophy the rest of the kernel already follows.
+* **Assertions are never rewritten by a merge.** `assertions_` keeps the original subject/object ids
+ exactly as committed; `resolve()` is applied only at the query boundary. This mirrors how
+ `IndexManager` never mutates historical index entries, only adds tombstones.
+* Assertion-level consolidation (combining two corroborating assertions into one) is deliberately
+ *not* a new primitive: it is expressed as the existing `commit_superseding` with a synthesized,
+ combined confidence value. Documented explicitly so this phase doesn't grow a second, competing
+ correction mechanism alongside supersession.
+* **Pruning means compaction/archival, never deletion.** This extends the existing Phase 4 segmented
+ `AssertionLog` design rather than replacing it: `archive_segments_before(AssertionId)` moves
+ already-rolled-from segments (guaranteed complete and immutable once rolled, per the existing
+ segment invariant) into `segments/archive/` — still fully readable by `read_all`/`read_after`, just
+ not paged into the hot working set by default. This does not shrink queryable history: audit and
+ timeline queries still see archived segments. True, irreversible deletion is an explicit **non-goal**
+ of this phase, not deferred future work — the "log is source of truth, never shrinks" principle
+ stays intact, and any future request for real erasure (e.g. for compliance) needs its own explicit
+ decision, not a quiet extension of pruning.
+
+Minimum tests to add :
+
+* `resolve_follows_a_merge_redirect`
+* `resolve_collapses_transitive_merge_chains`
+* `resolve_is_identity_for_an_unmerged_id`
+* `merge_entities_makes_queries_for_the_absorbed_id_resolve_to_the_surviving_id`
+* `merged_entity_redirect_is_preserved_across_kernel_restarts`
+* `assertions_are_not_rewritten_by_a_merge`
+* `archive_segments_before_moves_only_fully_rolled_segments`
+* `archived_segments_remain_readable_via_read_all`
+
+### Phase 8 — Anticipatory Layer: Prediction & Causal Hypotheses
+
+Future work :
+
+* `AssertionStatus::Hypothesis` — a labeled, provenance-required status for machine-suggested facts
+* `commit_hypothesis` / `hypotheses_for` — writing and listing open predictions
+* Bounded local graph traversal (`neighbors`, `co_occurring_predicates`) — feature extraction for
+ external prediction/causal-inference tooling, not a query language
+
+Per an explicit design decision, the kernel stays a *substrate* for this phase: it stores and clearly
+labels machine-suggested knowledge and exposes just enough bounded read access for an external
+predictor to do its actual modeling, but the prediction/causal-inference computation itself
+(embeddings, graph neural nets, Granger-causality-style temporal inference, or anything else with real
+statistical machinery) lives outside the kernel, in whatever process is acting as the agent. This keeps
+the kernel small and correctness-first rather than turning it into an ML system.
+
+Design :
+
+* `AssertionStatus` gains a `Hypothesis` value. This is purely additive to the enum (same underlying
+ size), so — unlike adding a new field to `Assertion` would — it does **not** break the on-disk
+ raw-struct format. Hypothesis-status records are excluded from `current`/`valid_at`/`known_at`/
+ `valid_at_known_at` by default, the same treatment `Superseded`/`Retracted`/`Retraction` already get.
+* `commit_hypothesis(...)` mirrors `commit`'s signature, tags status `Hypothesis`, and *requires* a
+ source `EntityId` parameter (internally calling Phase 6's `record_provenance`) — an unsourced
+ hypothesis is a contradiction in terms for this design, so there is no optional-provenance path for
+ hypotheses the way there is for ordinary commits.
+* Promotion is not a new primitive either: a confirmed hypothesis is promoted via ordinary `commit` or
+ `commit_superseding`. The original hypothesis record is left untouched in `commit_history`, which
+ gives a free audit trail of "the kernel predicted X, and X was later confirmed or rejected" without
+ any new storage.
+* `hypotheses_for(EntityId subject) -> vector<Assertion>` mirrors `current` but selects
+ Hypothesis-status records.
+* `neighbors(EntityId subject, size_t max_hops = 1)` and `co_occurring_predicates(EntityId subject)`
+ are built entirely from existing `IndexManager`/`assertions_for_subject` primitives — no new
+ storage. Deliberately capped at a small, fixed hop count with no path queries and no joins: this is
+ feature extraction for an external model, not a general graph query language, and the cap is what
+ keeps it from becoming the "complex graph traversal" the Do Not Do Yet list otherwise forbids (see
+ below).
+* No new storage for causal reasoning either: a causal hypothesis is just
+ `commit_hypothesis(cause, may_cause_predicate, effect, ...)`, discoverable like any other hypothesis.
+ The already-public `observed_time_timeline`/`valid_time_timeline` are what an external
+ causal-inference tool consumes to *produce* that hypothesis in the first place — this phase adds the
+ vocabulary for writing the result back in a labeled, queryable, confirmable/retractable way, not a
+ causal inference algorithm.
+
+This phase requires narrowing (not removing) two "Do Not Do Yet" items — see that section below for
+the exact wording.
+
+Minimum tests to add :
+
+* `commit_hypothesis_is_excluded_from_current_and_valid_at`
+* `hypotheses_for_returns_open_predictions`
+* `promoting_a_hypothesis_preserves_it_in_commit_history`
+* `neighbors_respects_max_hops`
+* `commit_hypothesis_requires_a_source_and_records_provenance`
+
+### Phase 9 — Performance
 
 Future work :
 
@@ -524,6 +685,14 @@ The assertion log records committed knowledge changes.
 In - memory vectors, indexes, and caches are derived state.
 
 Do not make indexes authoritative.
+
+There is a second, recognized category distinct from both: **authoritative metadata logs**
+(`Catalog`'s `EntityCatalogLog`/`PredicateCatalogLog`, Phase 6's `ProvenanceLog`, Phase 7's
+`EntityMergeLog`). These are not derived from `assertions.log` — it never stores names, values,
+provenance, or merge decisions, so there is nothing to rebuild them from — but they are also not
+indexes over assertion data. They get `AssertionLog`'s corruption treatment (non-tail corruption is
+fatal, no self-heal) rather than the Phase 3 indexes' catch-and-rebuild treatment, precisely because
+each is its own source of truth for the metadata it holds.
 
 ### 2. Append-only first
 
@@ -1031,7 +1200,7 @@ Avoid unnecessary dependencies during Phases 1 and 2.
 
 Prefer clear code over clever code.
 
-Do not introduce templates, custom allocators, memory mapping, SIMD, or lock - free structures before Phase 5.
+Do not introduce templates, custom allocators, memory mapping, SIMD, or lock - free structures before Phase 9.
 
 Use explicit names:
 
@@ -1104,7 +1273,7 @@ For early local development it is acceptable, but Phase 4 should replace it with
 
 Do not optimize before correctness.
 
-Phase 5 performance work must be benchmark - driven.
+Phase 9 performance work must be benchmark - driven.
 
 Before adding an optimization:
 
@@ -1181,6 +1350,21 @@ compression
 replication
 ```
 
+Two of these items are narrowed, not lifted, by Phase 8 (see "Current Roadmap" above) :
+
+* **complex graph traversal** stays forbidden as a general capability. Phase 8's `neighbors`/
+ `co_occurring_predicates` are the one named, explicitly bounded exception (small fixed hop count, no
+ path queries, no joins) — a general graph query language is still out of scope.
+* **LLM extraction** has always meant *the kernel performing NLP extraction from raw text*. It does
+ not mean *an external agent or LLM writing already-structured assertions through the public API* —
+ that has always been in scope; Phase 6's `KernelCommand` layer and Phase 8's `commit_hypothesis` are
+ both just structured calls into the existing commit machinery, not extraction happening inside the
+ kernel. Written down explicitly here because Phase 8 is where the ambiguity would otherwise bite.
+
+**HTTP API** stays fully out of scope: Phase 6 adds a serializable command layer but deliberately no
+network transport. Revisiting this item is its own future decision, not implied by anything in the
+current roadmap.
+
 The kernel must be correct and recoverable before it becomes broad.
 
 -- -
@@ -1215,7 +1399,15 @@ Why does the kernel believe this assertion ?
 Which assertions conflict ?
 Which assertion superseded this one ?
 Which source produced this claim ?
+What does the kernel currently predict about Alice ?
+What existing evidence supports or contradicts a given hypothesis ?
 ```
+
+Until Phase 6, "Why does the kernel believe this assertion?", "Which assertions conflict?", and
+"Which source produced this claim?" were aspirational — nothing in the kernel could answer them
+(no provenance existed at all, and there was no conflict-detection query). Phase 6's `explain`,
+`find_conflicts`, and `provenance_for` close that gap. The last two questions above are new, added
+for Phase 8's `hypotheses_for`/`commit_history` combination.
 
 Every implementation decision should support this long - term direction.
 
