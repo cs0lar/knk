@@ -518,8 +518,8 @@ This phase gives everything else in the roadmap two things it depends on: a dura
 what asserted this and why*, and a stable, serializable way for an agent to call into the kernel
 without linking against the raw C++ API. Neither requirement is new — both are direct gaps against the
 "Current North Star" below (no way to answer "which source produced this claim?" or "which assertions
-conflict?" today) — but closing them is prerequisite groundwork for Phase 7 and Phase 8, which is why
-this phase comes first.
+conflict?" today) — but closing them is prerequisite groundwork for Phase 7 and Phase 8 (in either
+order), which is why this phase comes first.
 
 Design :
 
@@ -532,7 +532,7 @@ Design :
  work). Authoritative like the catalog logs: nothing in `assertions.log` encodes this, so non-tail
  corruption is fatal on startup, with no `overwrite_all`/self-heal.
 * `source` is just an `EntityId` — a person, an ingestion pipeline, an agent, or a predictor model
- (Phase 8) is interned into `Catalog` exactly like any other entity, so resolving "which source
+ (Phase 7) is interned into `Catalog` exactly like any other entity, so resolving "which source
  produced this claim" reuses `entity_name`/`entity_value` for free instead of inventing a second
  identity system.
 * `KnowledgeKernel` gains `record_provenance(AssertionId, EntityId source, std::string method)`,
@@ -542,7 +542,7 @@ Design :
 * `find_conflicts(EntityId subject, PredicateId predicate) -> vector<std::pair<Assertion, Assertion>>`
  is pure read-side logic over the existing `assertions_for_subject`/current-index lookups — any two
  `Active`, time-overlapping assertions for the same subject/predicate with a different object. No new
- storage. This is also the detection primitive Phase 7's entity-merge tooling is expected to consume.
+ storage. This is also the detection primitive Phase 8's entity-merge tooling is expected to consume.
 * `KernelCommand`/`KernelResult` (`include/kernel/kernel_command.hpp`/`kernel_result.hpp`): a closed
  `std::variant` covering every existing public `KnowledgeKernel` method (commit/commit_superseding/
  commit_retraction, each query method, intern_entity/predicate/value/document, find_conflicts,
@@ -646,54 +646,14 @@ Current implementation status :
 * Verified on 2026-07-18: `cmake --build build && ctest --test-dir build --output-on-failure` passes
  (16/16 test binaries).
 
-### Phase 7 — Self-Improvement: Merge & Prune
+### Phase 7 — Anticipatory Layer: Prediction & Causal Hypotheses
 
-Future work :
-
-* Entity merge (`merge_entities`) — one-way, append-only redirect for deduplicating entities
-* `Catalog::resolve(EntityId)` — transitive redirect resolution at the query boundary
-* Segment archival (`archive_segments_before`) — compaction, not deletion
-
-Design :
-
-* `merge_entities(EntityId keep, EntityId absorb)` is backed by a new durable, append-only
- `EntityMergeLog` (`catalog/entity_merges.log`, same framing and authoritative-corruption treatment
- as the other catalog logs: `{EntityId absorbed, EntityId surviving, Timestamp merged_at}`).
- `Catalog` gains `resolve(EntityId) -> EntityId`, following redirects transitively (merging A into B,
- then B into C, makes `resolve(A) == C`). Every query-path method that takes a caller-supplied
- `EntityId` resolves through it first. Per an explicit design decision, this is one-way and
- forward-only: a merge that turns out wrong is corrected by a *new* merge/correction recorded going
- forward, never by mutating or reversing the original redirect record — consistent with the
- append-only philosophy the rest of the kernel already follows.
-* **Assertions are never rewritten by a merge.** `assertions_` keeps the original subject/object ids
- exactly as committed; `resolve()` is applied only at the query boundary. This mirrors how
- `IndexManager` never mutates historical index entries, only adds tombstones.
-* Assertion-level consolidation (combining two corroborating assertions into one) is deliberately
- *not* a new primitive: it is expressed as the existing `commit_superseding` with a synthesized,
- combined confidence value. Documented explicitly so this phase doesn't grow a second, competing
- correction mechanism alongside supersession.
-* **Pruning means compaction/archival, never deletion.** This extends the existing Phase 4 segmented
- `AssertionLog` design rather than replacing it: `archive_segments_before(AssertionId)` moves
- already-rolled-from segments (guaranteed complete and immutable once rolled, per the existing
- segment invariant) into `segments/archive/` — still fully readable by `read_all`/`read_after`, just
- not paged into the hot working set by default. This does not shrink queryable history: audit and
- timeline queries still see archived segments. True, irreversible deletion is an explicit **non-goal**
- of this phase, not deferred future work — the "log is source of truth, never shrinks" principle
- stays intact, and any future request for real erasure (e.g. for compliance) needs its own explicit
- decision, not a quiet extension of pruning.
-
-Minimum tests to add :
-
-* `resolve_follows_a_merge_redirect`
-* `resolve_collapses_transitive_merge_chains`
-* `resolve_is_identity_for_an_unmerged_id`
-* `merge_entities_makes_queries_for_the_absorbed_id_resolve_to_the_surviving_id`
-* `merged_entity_redirect_is_preserved_across_kernel_restarts`
-* `assertions_are_not_rewritten_by_a_merge`
-* `archive_segments_before_moves_only_fully_rolled_segments`
-* `archived_segments_remain_readable_via_read_all`
-
-### Phase 8 — Anticipatory Layer: Prediction & Causal Hypotheses
+Reordered ahead of the former Phase 7 (now Phase 8, Self-Improvement: Merge & Prune): this phase is
+small (an additive enum value plus a few bounded read methods, no new storage format) and directly
+closes the last two "Current North Star" questions ("What does the kernel currently predict about
+Alice?", "What existing evidence supports or contradicts a given hypothesis?"), whereas merge/prune is
+data-hygiene work that earns its keep once real multi-source usage is generating duplicate entities.
+Do the higher North-Star-leverage, lower-cost phase first.
 
 Future work :
 
@@ -749,6 +709,53 @@ Minimum tests to add :
 * `neighbors_respects_max_hops`
 * `commit_hypothesis_requires_a_source_and_records_provenance`
 
+### Phase 8 — Self-Improvement: Merge & Prune
+
+Future work :
+
+* Entity merge (`merge_entities`) — one-way, append-only redirect for deduplicating entities
+* `Catalog::resolve(EntityId)` — transitive redirect resolution at the query boundary
+* Segment archival (`archive_segments_before`) — compaction, not deletion
+
+Design :
+
+* `merge_entities(EntityId keep, EntityId absorb)` is backed by a new durable, append-only
+ `EntityMergeLog` (`catalog/entity_merges.log`, same framing and authoritative-corruption treatment
+ as the other catalog logs: `{EntityId absorbed, EntityId surviving, Timestamp merged_at}`).
+ `Catalog` gains `resolve(EntityId) -> EntityId`, following redirects transitively (merging A into B,
+ then B into C, makes `resolve(A) == C`). Every query-path method that takes a caller-supplied
+ `EntityId` resolves through it first. Per an explicit design decision, this is one-way and
+ forward-only: a merge that turns out wrong is corrected by a *new* merge/correction recorded going
+ forward, never by mutating or reversing the original redirect record — consistent with the
+ append-only philosophy the rest of the kernel already follows.
+* **Assertions are never rewritten by a merge.** `assertions_` keeps the original subject/object ids
+ exactly as committed; `resolve()` is applied only at the query boundary. This mirrors how
+ `IndexManager` never mutates historical index entries, only adds tombstones.
+* Assertion-level consolidation (combining two corroborating assertions into one) is deliberately
+ *not* a new primitive: it is expressed as the existing `commit_superseding` with a synthesized,
+ combined confidence value. Documented explicitly so this phase doesn't grow a second, competing
+ correction mechanism alongside supersession.
+* **Pruning means compaction/archival, never deletion.** This extends the existing Phase 4 segmented
+ `AssertionLog` design rather than replacing it: `archive_segments_before(AssertionId)` moves
+ already-rolled-from segments (guaranteed complete and immutable once rolled, per the existing
+ segment invariant) into `segments/archive/` — still fully readable by `read_all`/`read_after`, just
+ not paged into the hot working set by default. This does not shrink queryable history: audit and
+ timeline queries still see archived segments. True, irreversible deletion is an explicit **non-goal**
+ of this phase, not deferred future work — the "log is source of truth, never shrinks" principle
+ stays intact, and any future request for real erasure (e.g. for compliance) needs its own explicit
+ decision, not a quiet extension of pruning.
+
+Minimum tests to add :
+
+* `resolve_follows_a_merge_redirect`
+* `resolve_collapses_transitive_merge_chains`
+* `resolve_is_identity_for_an_unmerged_id`
+* `merge_entities_makes_queries_for_the_absorbed_id_resolve_to_the_surviving_id`
+* `merged_entity_redirect_is_preserved_across_kernel_restarts`
+* `assertions_are_not_rewritten_by_a_merge`
+* `archive_segments_before_moves_only_fully_rolled_segments`
+* `archived_segments_remain_readable_via_read_all`
+
 ### Phase 9 — Performance
 
 Future work :
@@ -776,7 +783,7 @@ In - memory vectors, indexes, and caches are derived state.
 Do not make indexes authoritative.
 
 There is a second, recognized category distinct from both: **authoritative metadata logs**
-(`Catalog`'s `EntityCatalogLog`/`PredicateCatalogLog`, Phase 6's `ProvenanceLog`, Phase 7's
+(`Catalog`'s `EntityCatalogLog`/`PredicateCatalogLog`, Phase 6's `ProvenanceLog`, Phase 8's
 `EntityMergeLog`). These are not derived from `assertions.log` — it never stores names, values,
 provenance, or merge decisions, so there is nothing to rebuild them from — but they are also not
 indexes over assertion data. They get `AssertionLog`'s corruption treatment (non-tail corruption is
@@ -1439,16 +1446,16 @@ compression
 replication
 ```
 
-Two of these items are narrowed, not lifted, by Phase 8 (see "Current Roadmap" above) :
+Two of these items are narrowed, not lifted, by Phase 7 (see "Current Roadmap" above) :
 
-* **complex graph traversal** stays forbidden as a general capability. Phase 8's `neighbors`/
+* **complex graph traversal** stays forbidden as a general capability. Phase 7's `neighbors`/
  `co_occurring_predicates` are the one named, explicitly bounded exception (small fixed hop count, no
  path queries, no joins) — a general graph query language is still out of scope.
 * **LLM extraction** has always meant *the kernel performing NLP extraction from raw text*. It does
  not mean *an external agent or LLM writing already-structured assertions through the public API* —
- that has always been in scope; Phase 6's `KernelCommand` layer and Phase 8's `commit_hypothesis` are
+ that has always been in scope; Phase 6's `KernelCommand` layer and Phase 7's `commit_hypothesis` are
  both just structured calls into the existing commit machinery, not extraction happening inside the
- kernel. Written down explicitly here because Phase 8 is where the ambiguity would otherwise bite.
+ kernel. Written down explicitly here because Phase 7 is where the ambiguity would otherwise bite.
 
 **HTTP API** stays fully out of scope: Phase 6 adds a serializable command layer but deliberately no
 network transport. Revisiting this item is its own future decision, not implied by anything in the
@@ -1496,7 +1503,7 @@ Until Phase 6, "Why does the kernel believe this assertion?", "Which assertions 
 "Which source produced this claim?" were aspirational — nothing in the kernel could answer them
 (no provenance existed at all, and there was no conflict-detection query). Phase 6's `explain`,
 `find_conflicts`, and `provenance_for` close that gap. The last two questions above are new, added
-for Phase 8's `hypotheses_for`/`commit_history` combination.
+for Phase 7's `hypotheses_for`/`commit_history` combination.
 
 Every implementation decision should support this long - term direction.
 
