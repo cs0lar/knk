@@ -503,7 +503,8 @@ Current implementation status:
 
 Future work :
 
-* Provenance log (`AssertionId` -> source `EntityId` + method, "which source produced this claim?")
+* ✅ Provenance log (`AssertionId` -> source `EntityId` + method, "which source produced this claim?";
+ see implementation status below)
 * ✅ `explain(AssertionId)` — walk the supersession/retraction chain to its root (see implementation
  status below)
 * ✅ Conflict detection (`find_conflicts`) — overlapping active assertions for the same
@@ -561,6 +562,40 @@ size, incomplete trailing record) plus :
 
 Current implementation status :
 
+* `ProvenanceLog` (`include/kernel/provenance_log.hpp`/`src/provenance_log.cpp`) persists
+ `{AssertionId assertion_id, EntityId source, Timestamp recorded_at, std::string method}` to
+ `provenance/provenance.log`, reusing the shared `KNK1` header + `[record_size][payload][crc32]`
+ framing with a variable-length payload (same precedent as `PredicateCatalogLog`'s `Text` case; see
+ `docs/storage_format.md`'s new "Provenance log" section for the exact byte layout). Authoritative
+ like the catalog logs: no `overwrite_all`/self-heal, and non-tail corruption is a fatal thrown
+ `std::runtime_error`.
+* `StorageConfig` gained `provenance_directory()` (`root/provenance`) and `provenance_log_path()`
+ (`provenance/provenance.log`). `StorageEngine` owns the log and exposes
+ `append_provenance_entry(assertion_id, source, recorded_at, method)`/`load_provenance()` (no
+ `rewrite_*`, consistent with there being no self-heal).
+* `KnowledgeKernel` gained a `std::unordered_map<AssertionId, ProvenanceRecord> provenance_` member,
+ `record_provenance(AssertionId, EntityId source, Timestamp recorded_at, std::string method)`
+ (durable-before-visible: validate the target assertion exists, then append to the log, then update
+ the map), and `provenance_for(AssertionId) -> optional<ProvenanceRecord>`. Replay lives in the same
+ uncaught, authoritative constructor block that loads the catalog logs and payloads, before the
+ snapshot/checkpoint branching; the log is append-only, so replaying in commit order and overwriting
+ leaves the last-recorded provenance per assertion winning.
+* **Deliberate divergence from the design sketch above:** `record_provenance` takes a caller-supplied
+ `recorded_at` `Timestamp` rather than reading a wall clock internally, matching how `observed_at` is
+ supplied to `commit` everywhere in the kernel (no code path anywhere reads a clock, keeping replay
+ deterministic). The rest of the sketch (`source` as an `EntityId`, side-log keyed by `AssertionId`,
+ authoritative corruption policy) is implemented as written.
+* `explain`, `find_conflicts`, and the `KernelCommand`/`KernelResult` layer are **not yet
+ implemented** — this status block covers only the provenance-log groundwork.
+* Covered by `tests/provenance_log_tests.cpp` (append/read round trip incl. empty method; missing
+ file; invalid/undersized record size; invalid header; partial header; tail checksum mismatch;
+ non-tail checksum mismatch; incomplete trailing record; malformed method-length prefix with a
+ hand-computed valid checksum) and additions to `tests/knowledge_kernel_tests.cpp`
+ (`provenance_is_recorded_and_resolves_to_a_source_entity`,
+ `record_provenance_rejects_an_unknown_assertion_target`,
+ `provenance_is_preserved_across_kernel_restarts`, `corrupt_provenance_log_is_fatal_on_startup`).
+* Verified on 2026-07-18: `cmake --build build && ctest --test-dir build --output-on-failure` passes
+ (15/15 test binaries).
 * `KnowledgeKernel::explain(AssertionId) -> vector<Assertion>` walks the supersession/retraction chain
  from the given assertion back to its root, one hop at a time via `supersedes_id`/`retracts_id`
  (mutually exclusive on any record, and always pointing at a smaller/earlier id, so the chain strictly

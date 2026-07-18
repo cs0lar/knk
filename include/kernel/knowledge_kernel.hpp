@@ -13,6 +13,7 @@
 #include "kernel/catalog.hpp"
 #include "kernel/ids.hpp"
 #include "kernel/index_manager.hpp"
+#include "kernel/provenance_log.hpp"
 #include "kernel/status.hpp"
 #include "kernel/storage_engine.hpp"
 #include "kernel/time.hpp"
@@ -101,6 +102,15 @@ class KnowledgeKernel {
 
     std::optional<std::vector<std::byte>> document_content(EntityId id) const;
 
+    // Records which source (an EntityId, interned in Catalog like any other entity) produced a given
+    // assertion, and by what method. recorded_at is caller-supplied, matching how observed_at is
+    // supplied to commit -- the kernel deliberately never reads a wall clock, so provenance replay
+    // stays deterministic. Validates that assertion_id refers to an existing assertion before the
+    // durable append, so a failed call never persists a dangling provenance record.
+    void record_provenance(AssertionId assertion_id, EntityId source, Timestamp recorded_at, std::string method);
+
+    std::optional<ProvenanceRecord> provenance_for(AssertionId assertion_id) const;
+
   private:
     void restore_assertion(const Assertion &assertion);
 
@@ -111,6 +121,11 @@ class KnowledgeKernel {
     IndexManager index_manager_;
 
     Catalog catalog_;
+
+    // Provenance keyed by AssertionId. Authoritative like Catalog (nothing in assertions.log encodes
+    // it), replayed from provenance.log at startup. The log is append-only, so a later record for the
+    // same assertion supersedes an earlier one; the map keeps the last one replayed.
+    std::unordered_map<AssertionId, ProvenanceRecord> provenance_;
 
     std::vector<Assertion> assertions_;
 };

@@ -15,6 +15,7 @@
 #include "kernel/observed_time_index_log.hpp"
 #include "kernel/payload_store.hpp"
 #include "kernel/predicate_catalog_log.hpp"
+#include "kernel/provenance_log.hpp"
 #include "kernel/snapshot_store.hpp"
 #include "kernel/storage_config.hpp"
 #include "kernel/subject_index_log.hpp"
@@ -75,6 +76,11 @@ class StorageEngine {
 
     std::vector<EntityId> existing_payload_ids() const;
 
+    void append_provenance_entry(AssertionId assertion_id, EntityId source, Timestamp recorded_at,
+                                 const std::string &method);
+
+    std::vector<ProvenanceRecord> load_provenance() const;
+
     const StorageConfig &config() const;
 
   private:
@@ -88,6 +94,7 @@ class StorageEngine {
     EntityCatalogLog entity_catalog_log_;
     PredicateCatalogLog predicate_catalog_log_;
     PayloadStore payload_store_;
+    ProvenanceLog provenance_log_;
 };
 
 } // namespace knk
