@@ -1288,6 +1288,152 @@ void corrupt_provenance_log_is_fatal_on_startup() {
     cleanup(root);
 }
 
+void commit_hypothesis_is_excluded_from_current_and_valid_at() {
+    auto root = test_root("commit_hypothesis_is_excluded_from_current_and_valid_at");
+    KnowledgeKernel kernel(StorageConfig{root});
+
+    auto source = kernel.intern_entity("predictor_model");
+    auto hypothesis_id = kernel.commit_hypothesis(ALICE, WORKS_AT, ACME, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.6,
+                                                  source, JUL_2_2024, "predicted_by_model");
+
+    // A real, Active fact for the same subject so current()/valid_at() have something to return --
+    // the hypothesis must not appear alongside it.
+    kernel.commit(ALICE, WORKS_AT, BETA, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.95);
+
+    for (const auto &assertion : kernel.current(ALICE)) {
+        assert(assertion.id != hypothesis_id);
+    }
+
+    for (const auto &assertion : kernel.valid_at(ALICE, JUL_2_2024)) {
+        assert(assertion.id != hypothesis_id);
+    }
+
+    for (const auto &assertion : kernel.known_at(ALICE, JUL_2_2024)) {
+        assert(assertion.id != hypothesis_id);
+    }
+
+    for (const auto &assertion : kernel.valid_at_known_at(ALICE, JUL_2_2024, JUL_2_2024)) {
+        assert(assertion.id != hypothesis_id);
+    }
+
+    // Still visible off the status-agnostic query paths.
+    auto stored = kernel.get(hypothesis_id);
+    assert(stored.has_value());
+    assert(stored->status == AssertionStatus::Hypothesis);
+
+    cleanup(root);
+}
+
+void hypotheses_for_returns_open_predictions() {
+    auto root = test_root("hypotheses_for_returns_open_predictions");
+    KnowledgeKernel kernel(StorageConfig{root});
+
+    auto source = kernel.intern_entity("predictor_model");
+    auto hypothesis_id = kernel.commit_hypothesis(ALICE, WORKS_AT, ACME, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.6,
+                                                  source, JUL_2_2024, "predicted_by_model");
+    kernel.commit(ALICE, WORKS_AT, BETA, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.95);
+
+    auto hypotheses = kernel.hypotheses_for(ALICE);
+    assert(hypotheses.size() == 1);
+    assert(hypotheses[0].id == hypothesis_id);
+    assert(hypotheses[0].status == AssertionStatus::Hypothesis);
+
+    assert(kernel.hypotheses_for(UNIVERSITY).empty());
+
+    cleanup(root);
+}
+
+void promoting_a_hypothesis_preserves_it_in_commit_history() {
+    auto root = test_root("promoting_a_hypothesis_preserves_it_in_commit_history");
+    KnowledgeKernel kernel(StorageConfig{root});
+
+    auto source = kernel.intern_entity("predictor_model");
+    auto hypothesis_id = kernel.commit_hypothesis(ALICE, WORKS_AT, ACME, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.6,
+                                                  source, JUL_2_2024, "predicted_by_model");
+
+    // Promotion is not a new primitive: an ordinary commit_superseding confirms the prediction.
+    auto confirmed_id =
+        kernel.commit_superseding(ALICE, WORKS_AT, ACME, JAN_1_2023, OPEN_ENDED, JUL_3_2024, 0.97, hypothesis_id);
+
+    auto history = kernel.commit_history(ALICE, WORKS_AT);
+    assert(history.size() == 2);
+    // commit_history is sorted by assertion id and unfiltered by status -- the original hypothesis
+    // record stays visible, giving a free "predicted, then confirmed" audit trail. Its status flips
+    // to Superseded, exactly like ordinary Active->Superseded promotion already works: "left
+    // untouched" means the record isn't deleted or rewritten, not that its status is frozen.
+    assert(history[0].id == hypothesis_id);
+    assert(history[0].status == AssertionStatus::Superseded);
+    assert(history[1].id == confirmed_id);
+    assert(history[1].status == AssertionStatus::Active);
+
+    // The promoted fact is now current; the hypothesis it replaced is not.
+    auto current = kernel.current(ALICE);
+    assert(current.size() == 1);
+    assert(current[0].id == confirmed_id);
+
+    assert(kernel.hypotheses_for(ALICE).empty());
+
+    // The prediction's provenance survives promotion untouched -- explain() on the confirmed fact
+    // walks back to the original, whose provenance still records it as a prediction.
+    auto explanation = kernel.explain(confirmed_id);
+    assert(explanation.size() == 2);
+    assert(explanation[1].id == hypothesis_id);
+    auto original_provenance = kernel.provenance_for(hypothesis_id);
+    assert(original_provenance.has_value());
+    assert(original_provenance->method == "predicted_by_model");
+
+    cleanup(root);
+}
+
+void commit_hypothesis_requires_a_source_and_records_provenance() {
+    auto root = test_root("commit_hypothesis_requires_a_source_and_records_provenance");
+    KnowledgeKernel kernel(StorageConfig{root});
+
+    auto source = kernel.intern_entity("predictor_model");
+    auto hypothesis_id = kernel.commit_hypothesis(ALICE, WORKS_AT, ACME, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.6,
+                                                  source, JUL_2_2024, "predicted_by_model");
+
+    auto record = kernel.provenance_for(hypothesis_id);
+    assert(record.has_value());
+    assert(record->source == source);
+    assert(record->recorded_at == JUL_2_2024);
+    assert(record->method == "predicted_by_model");
+
+    cleanup(root);
+}
+
+void hypothesis_is_preserved_across_kernel_restarts() {
+    auto root = test_root("hypothesis_is_preserved_across_kernel_restarts");
+
+    AssertionId hypothesis_id;
+    EntityId source;
+
+    {
+        KnowledgeKernel kernel(StorageConfig{root});
+        source = kernel.intern_entity("predictor_model");
+        hypothesis_id = kernel.commit_hypothesis(ALICE, WORKS_AT, ACME, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.6, source,
+                                                 JUL_2_2024, "predicted_by_model");
+    }
+
+    KnowledgeKernel reopened_kernel(StorageConfig{root});
+
+    auto stored = reopened_kernel.get(hypothesis_id);
+    assert(stored.has_value());
+    assert(stored->status == AssertionStatus::Hypothesis);
+
+    auto hypotheses = reopened_kernel.hypotheses_for(ALICE);
+    assert(hypotheses.size() == 1);
+    assert(hypotheses[0].id == hypothesis_id);
+
+    assert(reopened_kernel.current(ALICE).empty());
+
+    auto record = reopened_kernel.provenance_for(hypothesis_id);
+    assert(record.has_value());
+    assert(record->source == source);
+
+    cleanup(root);
+}
+
 } // namespace
 
 int main() {
@@ -1341,6 +1487,11 @@ int main() {
     record_provenance_rejects_an_unknown_assertion_target();
     provenance_is_preserved_across_kernel_restarts();
     corrupt_provenance_log_is_fatal_on_startup();
+    commit_hypothesis_is_excluded_from_current_and_valid_at();
+    hypotheses_for_returns_open_predictions();
+    promoting_a_hypothesis_preserves_it_in_commit_history();
+    commit_hypothesis_requires_a_source_and_records_provenance();
+    hypothesis_is_preserved_across_kernel_restarts();
 
     std::cout << "All assertion_kernel tests passed.\n";
     return 0;

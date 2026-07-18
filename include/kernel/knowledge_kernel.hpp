@@ -38,6 +38,18 @@ class KnowledgeKernel {
                                    Timestamp valid_to, Timestamp observed_at, double confidence,
                                    AssertionId supersedes_id);
 
+    // Commits a labeled, machine-suggested fact: mirrors commit()'s signature exactly, tags the
+    // record AssertionStatus::Hypothesis instead of Active, and always records provenance for it (an
+    // unsourced hypothesis is a contradiction in terms for this design, so source/recorded_at/method
+    // are required, not optional). Internally this is commit() followed by record_provenance() -- no
+    // new storage or durability mechanism. Hypothesis-status records are excluded from current/
+    // valid_at/known_at/valid_at_known_at by the same status check those methods already use; they
+    // remain visible via hypotheses_for, commit_history, and explain. Promotion is not a separate
+    // primitive -- promote a hypothesis via ordinary commit_superseding, same as any other assertion.
+    AssertionId commit_hypothesis(EntityId subject, PredicateId predicate, EntityId object, Timestamp valid_from,
+                                  Timestamp valid_to, Timestamp observed_at, double confidence, EntityId source,
+                                  Timestamp recorded_at, std::string method);
+
     void apply(const Assertion &assertion);
 
     // Persists a full snapshot of the current in-memory assertions_ so a future startup can skip
@@ -54,6 +66,11 @@ class KnowledgeKernel {
     std::vector<Assertion> assertions_for_subject(EntityId subject) const;
 
     std::vector<Assertion> current(EntityId subject) const;
+
+    // Mirrors current(subject) but selects Hypothesis-status records instead of Active ones. Reads
+    // off the subject index (like commit_history/valid_at), not the current-state index -- hypotheses
+    // are never added to that index, since is_current_assertion requires Active status.
+    std::vector<Assertion> hypotheses_for(EntityId subject) const;
 
     std::vector<Assertion> valid_at(EntityId subject, Timestamp valid_time) const;
 

@@ -255,6 +255,34 @@ AssertionId KnowledgeKernel::commit_superseding(EntityId subject, PredicateId pr
     return id;
 }
 
+AssertionId KnowledgeKernel::commit_hypothesis(EntityId subject, PredicateId predicate, EntityId object,
+                                               Timestamp valid_from, Timestamp valid_to, Timestamp observed_at,
+                                               double confidence, EntityId source, Timestamp recorded_at,
+                                               std::string method) {
+    AssertionId id = next_id_;
+
+    Assertion assertion{
+        id, subject, predicate, object, valid_from, valid_to, observed_at, confidence, AssertionStatus::Hypothesis};
+
+    storage_.append_assertion(assertion);
+    storage_.append_observed_time_entry(assertion.subject, assertion.observed_at, assertion.id);
+    storage_.append_subject_entry(assertion.subject, assertion.id);
+    // Always false: is_current_assertion requires Active status, so a hypothesis never enters the
+    // current-state index. The call still goes through append_current_index_entry uniformly, same as
+    // commit()/commit_superseding(), rather than special-casing hypotheses out of that log.
+    storage_.append_current_index_entry(assertion.subject, assertion.predicate, assertion.id,
+                                        is_current_assertion(assertion));
+    storage_.write_checkpoint(assertion.id);
+    apply(assertion);
+
+    // An unsourced hypothesis is a contradiction in terms for this design, so provenance is recorded
+    // unconditionally rather than left to the caller, reusing record_provenance's own durable-before-
+    // visible append instead of duplicating it here.
+    record_provenance(id, source, recorded_at, std::move(method));
+
+    return id;
+}
+
 std::optional<Assertion> KnowledgeKernel::get(AssertionId id) const {
     if (id == 0 || id >= next_id_) {
         return std::nullopt;
@@ -295,6 +323,19 @@ std::vector<Assertion> KnowledgeKernel::current(EntityId subject) const {
             if (assertion.has_value()) {
                 result.push_back(*assertion);
             }
+        }
+    }
+
+    return result;
+}
+
+std::vector<Assertion> KnowledgeKernel::hypotheses_for(EntityId subject) const {
+    std::vector<Assertion> result;
+
+    for (AssertionId id : index_manager_.assertions_for_subject(subject)) {
+        auto assertion = get(id);
+        if (assertion.has_value() && assertion->status == AssertionStatus::Hypothesis) {
+            result.push_back(*assertion);
         }
     }
 
