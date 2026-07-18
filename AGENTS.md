@@ -509,7 +509,10 @@ Future work :
  status below)
 * ✅ Conflict detection (`find_conflicts`) — overlapping active assertions for the same
  subject/predicate (see implementation status below)
-* `KernelCommand`/`KernelResult` — a closed, serializable command layer over the existing public API
+* ✅ `KernelCommand`/`KernelResult` — a closed, serializable command layer over the existing public
+ API (see implementation status below)
+
+**Phase 6 is complete.** All four deliverables above are implemented, tested, and documented.
 
 This phase gives everything else in the roadmap two things it depends on: a durable notion of *who or
 what asserted this and why*, and a stable, serializable way for an agent to call into the kernel
@@ -616,8 +619,32 @@ Current implementation status :
  (`explain_walks_the_supersession_chain_to_its_root`,
  `find_conflicts_detects_overlapping_active_assertions_for_the_same_subject_predicate`,
  `find_conflicts_excludes_non_overlapping_and_resolved_assertions`).
+* `KernelCommand` (`include/kernel/kernel_command.hpp`) is a closed `std::variant` of 28 plain-data
+ command structs, one per public `KnowledgeKernel` operation (the commit family, all query methods,
+ `intern_*`, `record_provenance`, `explain`, `find_conflicts`, the `find_*`/`*_name`/`*_value`
+ lookups, `document_content`, `provenance_for`, `write_snapshot`). Each struct holds exactly the
+ arguments of the mirrored method. The internal replay hooks `apply`/`mark_superseded`/`mark_retracted`
+ are deliberately excluded — they mutate in-memory status without a durable record (bypassing
+ durable-before-visible/append-only) and exist only for replay, not as caller operations.
+* `KernelResult` (`include/kernel/kernel_result.hpp`) is a closed `std::variant` over the distinct
+ return types. Because `AssertionId`/`EntityId`/`PredicateId` are all `uint64_t` aliases, every
+ id-returning command collapses to the single `AssertionId` alternative (and the `find_entity`/
+ `find_value`/`find_predicate` optionals to `std::optional<AssertionId>`) — a variant cannot hold two
+ identical alternatives, and the caller already knows the semantic id kind from the command it issued.
+ Void-returning commands (`write_snapshot`, `record_provenance`) yield `std::monostate`.
+* `KnowledgeKernel::execute(const KernelCommand&) -> KernelResult` (`src/kernel_command.cpp`) is a thin
+ `std::visit` dispatch: one `if constexpr` branch per command type calling the mirrored method 1:1,
+ with a dependent-`static_assert` final `else` so adding a command without a branch fails to compile.
+ It is non-const (the command set includes mutations) and adds no business logic. This is explicitly
+ not a query language and adds no network transport — the commands are plain data a future boundary
+ (agent, MCP/HTTP/gRPC) could serialize, which is why they carry no behavior of their own.
+* Covered by `tests/kernel_command_tests.cpp`: one round-trip test per command variant (28 total),
+ each asserting `execute(cmd)` returns the same result as calling the mirrored method directly —
+ query commands compared on one kernel, mutating commands across two identically-seeded twin kernels.
+ `examples/knowledge_kernel_demo.cpp` gains a "Calling the kernel through the command layer" section
+ issuing a `CommitCommand` and a `CurrentCommand` through `execute`.
 * Verified on 2026-07-18: `cmake --build build && ctest --test-dir build --output-on-failure` passes
- (14/14 test binaries).
+ (16/16 test binaries).
 
 ### Phase 7 — Self-Improvement: Merge & Prune
 

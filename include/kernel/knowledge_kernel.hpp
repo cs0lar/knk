@@ -13,6 +13,8 @@
 #include "kernel/catalog.hpp"
 #include "kernel/ids.hpp"
 #include "kernel/index_manager.hpp"
+#include "kernel/kernel_command.hpp"
+#include "kernel/kernel_result.hpp"
 #include "kernel/provenance_log.hpp"
 #include "kernel/status.hpp"
 #include "kernel/storage_engine.hpp"
@@ -110,6 +112,12 @@ class KnowledgeKernel {
     void record_provenance(AssertionId assertion_id, EntityId source, Timestamp recorded_at, std::string method);
 
     std::optional<ProvenanceRecord> provenance_for(AssertionId assertion_id) const;
+
+    // Executes a reified command by dispatching 1:1 to the mirrored public method above and wrapping
+    // its return value in a KernelResult. This is a thin, closed dispatch boundary, not new business
+    // logic -- see include/kernel/kernel_command.hpp. Non-const because the command set includes
+    // mutating operations (commit, intern_*, record_provenance, ...).
+    KernelResult execute(const KernelCommand &command);
 
   private:
     void restore_assertion(const Assertion &assertion);

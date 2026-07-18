@@ -8,6 +8,7 @@
 #include <span>
 #include <string>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "kernel/knowledge_kernel.hpp"
@@ -218,6 +219,19 @@ int main() {
         auto loaded_bio = kernel.document_content(bio_document);
         std::cout << "  document_content(bio_document) round-trips " << (loaded_bio ? loaded_bio->size() : 0)
                   << " bytes\n";
+
+        // --- The reified command layer (Phase 6) --------------------------------------
+        // Every public operation above can also be issued as data through execute(), which dispatches
+        // 1:1 to the mirrored method and returns a KernelResult variant. This is what lets a future
+        // boundary (an agent, an MCP/HTTP/gRPC server) serialize a call instead of linking the C++ API.
+        std::cout << "\n== Calling the kernel through the command layer ==\n";
+        KernelResult committed =
+            kernel.execute(CommitCommand{alice, works_at, acme, 1735689600, OPEN_ENDED, 1735689600, 0.70});
+        std::cout << "  execute(CommitCommand{...}) -> assertion #" << std::get<AssertionId>(committed) << "\n";
+
+        KernelResult snapshot_of_alice = kernel.execute(CurrentCommand{alice});
+        print_facts("execute(CurrentCommand{Alice}) returns the same vector current(Alice) would:", kernel,
+                    std::get<std::vector<Assertion>>(snapshot_of_alice));
 
         // Explicit, application-triggered only -- there is no automatic snapshot cadence, so this
         // never affects commit-path latency unless the application calls it itself.
