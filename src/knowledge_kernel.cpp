@@ -39,6 +39,14 @@ KnowledgeKernel::KnowledgeKernel(StorageConfig config) : storage_(config), index
         catalog_.note_allocated_entity_id(id);
     }
 
+    // Provenance replay lives in the same uncaught, authoritative block as the catalog above:
+    // assertions.log never encodes provenance, so there is nothing to rebuild it from and a non-tail-
+    // corrupt provenance.log is a fatal startup error. The log is append-only, so replaying in commit
+    // order and overwriting leaves the last-recorded provenance per assertion winning.
+    for (const auto &record : storage_.load_provenance()) {
+        provenance_[record.assertion_id] = record;
+    }
+
     // A snapshot only ever benefits the "indexes trusted" fast path below: the full-rebuild fallback
     // path must apply() every record from id 1 to rebuild IndexManager from scratch regardless, and
     // pre-seeding assertions_ from a snapshot while also apply()-ing those same records would
@@ -506,6 +514,27 @@ EntityId KnowledgeKernel::intern_document(std::span<const std::byte> content) {
 
 std::optional<std::vector<std::byte>> KnowledgeKernel::document_content(EntityId id) const {
     return storage_.load_payload(id);
+}
+
+void KnowledgeKernel::record_provenance(AssertionId assertion_id, EntityId source, Timestamp recorded_at,
+                                        std::string method) {
+    if (assertion_id == 0 || !get(assertion_id).has_value()) {
+        throw std::runtime_error("invalid provenance target");
+    }
+
+    // Durable-before-visible: append to the log first, then apply to the in-memory map, exactly like
+    // commit's append-then-apply ordering.
+    storage_.append_provenance_entry(assertion_id, source, recorded_at, method);
+    provenance_[assertion_id] = ProvenanceRecord{assertion_id, source, recorded_at, std::move(method)};
+}
+
+std::optional<ProvenanceRecord> KnowledgeKernel::provenance_for(AssertionId assertion_id) const {
+    auto it = provenance_.find(assertion_id);
+    if (it == provenance_.end()) {
+        return std::nullopt;
+    }
+
+    return it->second;
 }
 
 } // namespace knk

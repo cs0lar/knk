@@ -1101,6 +1101,106 @@ void corrupt_payload_is_fatal_on_startup() {
     cleanup(root);
 }
 
+void provenance_is_recorded_and_resolves_to_a_source_entity() {
+    auto root = test_root("provenance_is_recorded_and_resolves_to_a_source_entity");
+    KnowledgeKernel kernel(StorageConfig{root});
+
+    // A source is just an interned entity, resolved back through entity_name for free.
+    auto source = kernel.intern_entity("ingestion_pipeline");
+    auto assertion_id = kernel.commit(ALICE, WORKS_AT, ACME, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.95);
+
+    kernel.record_provenance(assertion_id, source, JUL_2_2024, "manual_entry");
+
+    auto record = kernel.provenance_for(assertion_id);
+    assert(record.has_value());
+    assert(record->assertion_id == assertion_id);
+    assert(record->source == source);
+    assert(record->recorded_at == JUL_2_2024);
+    assert(record->method == "manual_entry");
+
+    auto source_name = kernel.entity_name(record->source);
+    assert(source_name.has_value());
+    assert(*source_name == "ingestion_pipeline");
+
+    // An assertion with no recorded provenance resolves to nullopt.
+    auto other_id = kernel.commit(ALICE, WORKS_AT, BETA, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.9);
+    assert(!kernel.provenance_for(other_id).has_value());
+
+    cleanup(root);
+}
+
+void record_provenance_rejects_an_unknown_assertion_target() {
+    auto root = test_root("record_provenance_rejects_an_unknown_assertion_target");
+    KnowledgeKernel kernel(StorageConfig{root});
+
+    auto source = kernel.intern_entity("ingestion_pipeline");
+
+    bool threw = false;
+    try {
+        kernel.record_provenance(999, source, JUL_2_2024, "manual_entry");
+    } catch (const std::runtime_error &) {
+        threw = true;
+    }
+
+    // A dangling provenance target must not persist a record; the validation mirrors how
+    // commit_retraction validates its target before appending.
+    assert(threw);
+    assert(!kernel.provenance_for(999).has_value());
+
+    cleanup(root);
+}
+
+void provenance_is_preserved_across_kernel_restarts() {
+    auto root = test_root("provenance_is_preserved_across_kernel_restarts");
+
+    AssertionId assertion_id;
+    EntityId source;
+
+    {
+        KnowledgeKernel kernel(StorageConfig{root});
+        source = kernel.intern_entity("ingestion_pipeline");
+        assertion_id = kernel.commit(ALICE, WORKS_AT, ACME, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.95);
+        kernel.record_provenance(assertion_id, source, JUL_2_2024, "manual_entry");
+    }
+
+    KnowledgeKernel reopened_kernel(StorageConfig{root});
+
+    auto record = reopened_kernel.provenance_for(assertion_id);
+    assert(record.has_value());
+    assert(record->source == source);
+    assert(record->recorded_at == JUL_2_2024);
+    assert(record->method == "manual_entry");
+
+    cleanup(root);
+}
+
+void corrupt_provenance_log_is_fatal_on_startup() {
+    auto root = test_root("corrupt_provenance_log_is_fatal_on_startup");
+
+    {
+        KnowledgeKernel kernel(StorageConfig{root});
+        auto source = kernel.intern_entity("ingestion_pipeline");
+        auto assertion_id = kernel.commit(ALICE, WORKS_AT, ACME, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.95);
+        kernel.record_provenance(assertion_id, source, JUL_2_2024, "manual_entry");
+    }
+
+    auto provenance_path = StorageConfig{root}.provenance_log_path();
+    write_corrupt_record_size_after_valid_header(provenance_path);
+
+    bool threw = false;
+    try {
+        KnowledgeKernel recovered_kernel(StorageConfig{root});
+    } catch (const std::runtime_error &) {
+        threw = true;
+    }
+
+    // Provenance is authoritative like the catalog logs -- assertions.log encodes nothing about it,
+    // so non-tail corruption must surface as a fatal, uncaught startup error, not a self-heal.
+    assert(threw);
+
+    cleanup(root);
+}
+
 } // namespace
 
 int main() {
@@ -1150,6 +1250,10 @@ int main() {
     intern_document_mints_ids_from_the_shared_entity_id_space();
     payload_is_preserved_across_kernel_restarts();
     corrupt_payload_is_fatal_on_startup();
+    provenance_is_recorded_and_resolves_to_a_source_entity();
+    record_provenance_rejects_an_unknown_assertion_target();
+    provenance_is_preserved_across_kernel_restarts();
+    corrupt_provenance_log_is_fatal_on_startup();
 
     std::cout << "All assertion_kernel tests passed.\n";
     return 0;
