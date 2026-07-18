@@ -709,6 +709,47 @@ Minimum tests to add :
 * `neighbors_respects_max_hops`
 * `commit_hypothesis_requires_a_source_and_records_provenance`
 
+Current implementation status :
+
+* `AssertionStatus` gained `Hypothesis`, purely additive to the enum (no on-disk format break).
+ Every existing query method already gated on `status == AssertionStatus::Active` (explicitly in
+ `valid_at`/`known_at`/`valid_at_known_at`/`valid_time_timeline`/`observed_time_timeline`/
+ `find_conflicts`, or indirectly via `IndexManager::is_current_assertion` for `current`), so
+ `Hypothesis`-status records are excluded from all of them with no code changes to those methods.
+ `commit_history`, `explain`, and `get` are status-agnostic and correctly surface hypotheses.
+* `KnowledgeKernel::commit_hypothesis(subject, predicate, object, valid_from, valid_to, observed_at,
+ confidence, source, recorded_at, method)` mirrors `commit`'s append/index/checkpoint/`apply`
+ sequence with `AssertionStatus::Hypothesis`, then unconditionally calls the existing
+ `record_provenance` — no duplicated provenance logic, no new storage. Accepted, documented gap: a
+ crash between the assertion becoming durable/visible and the `record_provenance` call landing can
+ leave a replayed hypothesis with no provenance record; this is the same category of gap the Phase 4
+ index checkpoint already accepts for assertion-vs-index durability, not new risk, and gets no new
+ cross-log atomicity machinery.
+* `KnowledgeKernel::hypotheses_for(EntityId subject) -> vector<Assertion>` reads
+ `index_manager_.assertions_for_subject` (the same primitive `valid_at`/`commit_history` already use)
+ and filters to `Hypothesis` status. No `IndexManager` changes — hypotheses were never added to
+ `current_index_` in the first place, since `is_current_assertion` requires `Active` status.
+* Promotion required no new code: `commit_superseding` only validates that its target id exists, not
+ the target's status, so promoting a hypothesis via ordinary `commit_superseding` already worked.
+ Promotion flips the original record's status to `Superseded`, exactly like ordinary Active-to-
+ Superseded promotion — "the original hypothesis record is left untouched" means it is never deleted
+ or rewritten (still present in `commit_history`/`explain` with its original fields), not that its
+ status field is frozen. Its provenance record (e.g. `method == "predicted_by_model"`) is unaffected
+ by promotion and remains resolvable via `provenance_for` after the fact.
+* **Deliberate scope decision:** `neighbors`/`co_occurring_predicates` (bounded graph traversal) and
+ `KernelCommand`/`KernelResult` variants for `commit_hypothesis`/`hypotheses_for` are **not yet
+ implemented** — this status block covers only the `AssertionStatus::Hypothesis`/`commit_hypothesis`/
+ `hypotheses_for` core slice, kept small and separate per `AGENTS.md`'s own "small PR" workflow rule.
+ Omitting new commands from `KernelCommand` does not break the build: `execute`'s dependent
+ `static_assert` only fires for variant alternatives that exist and go unhandled.
+* Covered by additions to `tests/knowledge_kernel_tests.cpp`:
+ `commit_hypothesis_is_excluded_from_current_and_valid_at`, `hypotheses_for_returns_open_predictions`,
+ `promoting_a_hypothesis_preserves_it_in_commit_history` (including that provenance survives
+ promotion), `commit_hypothesis_requires_a_source_and_records_provenance`, and
+ `hypothesis_is_preserved_across_kernel_restarts`.
+* Verified on 2026-07-18: `cmake --build build && ctest --test-dir build --output-on-failure` passes
+ (16/16 test binaries).
+
 ### Phase 8 — Self-Improvement: Merge & Prune
 
 Future work :
