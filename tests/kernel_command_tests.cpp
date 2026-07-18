@@ -241,6 +241,29 @@ void record_provenance_command_round_trips() {
     cleanup(root);
 }
 
+void commit_hypothesis_command_round_trips() {
+    auto root = test_root("commit_hypothesis_command_round_trips");
+    KnowledgeKernel direct(StorageConfig{root / "direct"});
+    KnowledgeKernel via(StorageConfig{root / "via"});
+
+    auto source_d = direct.intern_entity("predictor_model");
+    auto source_v = via.intern_entity("predictor_model");
+    assert(source_d == source_v);
+
+    auto d = direct.commit_hypothesis(ALICE, WORKS_AT, ACME, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.6, source_d,
+                                      JUL_2_2024, "predicted_by_model");
+    auto v = std::get<AssertionId>(via.execute(CommitHypothesisCommand{
+        ALICE, WORKS_AT, ACME, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.6, source_v, JUL_2_2024, "predicted_by_model"}));
+
+    assert(d == v);
+    assert(via.get(v)->status == AssertionStatus::Hypothesis);
+    auto provenance = via.provenance_for(v);
+    assert(provenance.has_value());
+    assert(provenance->method == "predicted_by_model");
+
+    cleanup(root);
+}
+
 // --- Query command round-trips (same kernel, direct vs execute) ------------------
 
 void get_command_round_trips() {
@@ -490,6 +513,52 @@ void provenance_for_command_round_trips() {
     cleanup(root);
 }
 
+void hypotheses_for_command_round_trips() {
+    auto root = test_root("hypotheses_for_command_round_trips");
+    KnowledgeKernel kernel(StorageConfig{root});
+
+    auto source = kernel.intern_entity("predictor_model");
+    kernel.commit_hypothesis(ALICE, WORKS_AT, ACME, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.6, source, JUL_2_2024,
+                             "predicted_by_model");
+
+    auto d = kernel.hypotheses_for(ALICE);
+    auto v = std::get<std::vector<Assertion>>(kernel.execute(HypothesesForCommand{ALICE}));
+    assert(ids(d) == ids(v));
+    assert(v.size() == 1);
+
+    cleanup(root);
+}
+
+void neighbors_command_round_trips() {
+    auto root = test_root("neighbors_command_round_trips");
+    KnowledgeKernel kernel(StorageConfig{root});
+
+    kernel.commit(ALICE, WORKS_AT, ACME, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.90);
+
+    auto d = kernel.neighbors(ALICE, 1);
+    auto v = std::get<std::vector<EntityId>>(kernel.execute(NeighborsCommand{ALICE, 1}));
+    assert(d == v);
+    assert(v.size() == 1);
+    assert(v[0] == ACME);
+
+    cleanup(root);
+}
+
+void co_occurring_predicates_command_round_trips() {
+    auto root = test_root("co_occurring_predicates_command_round_trips");
+    KnowledgeKernel kernel(StorageConfig{root});
+
+    kernel.commit(ALICE, WORKS_AT, ACME, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.90);
+
+    auto d = kernel.co_occurring_predicates(ALICE);
+    auto v = std::get<std::vector<EntityId>>(kernel.execute(CoOccurringPredicatesCommand{ALICE}));
+    assert(d == v);
+    assert(v.size() == 1);
+    assert(v[0] == WORKS_AT);
+
+    cleanup(root);
+}
+
 } // namespace
 
 int main() {
@@ -502,6 +571,7 @@ int main() {
     intern_predicate_command_round_trips();
     intern_document_command_round_trips();
     record_provenance_command_round_trips();
+    commit_hypothesis_command_round_trips();
     get_command_round_trips();
     assertions_for_subject_command_round_trips();
     current_command_round_trips();
@@ -521,6 +591,9 @@ int main() {
     predicate_name_command_round_trips();
     document_content_command_round_trips();
     provenance_for_command_round_trips();
+    hypotheses_for_command_round_trips();
+    neighbors_command_round_trips();
+    co_occurring_predicates_command_round_trips();
 
     std::cout << "All kernel_command tests passed.\n";
 }

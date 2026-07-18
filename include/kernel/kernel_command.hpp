@@ -82,6 +82,19 @@ struct RecordProvenanceCommand {
     std::string method;
 };
 
+struct CommitHypothesisCommand {
+    EntityId subject;
+    PredicateId predicate;
+    EntityId object;
+    Timestamp valid_from;
+    Timestamp valid_to;
+    Timestamp observed_at;
+    double confidence;
+    EntityId source;
+    Timestamp recorded_at;
+    std::string method;
+};
+
 // --- Query commands --------------------------------------------------------------
 
 struct GetCommand {
@@ -168,13 +181,27 @@ struct ProvenanceForCommand {
     AssertionId assertion_id;
 };
 
+struct HypothesesForCommand {
+    EntityId subject;
+};
+
+struct NeighborsCommand {
+    EntityId subject;
+    size_t max_hops;
+};
+
+struct CoOccurringPredicatesCommand {
+    EntityId subject;
+};
+
 using KernelCommand =
     std::variant<CommitCommand, CommitRetractionCommand, CommitSupersedingCommand, WriteSnapshotCommand,
                  InternEntityCommand, InternValueCommand, InternPredicateCommand, InternDocumentCommand,
-                 RecordProvenanceCommand, GetCommand, AssertionsForSubjectCommand, CurrentCommand, ValidAtCommand,
-                 KnownAtCommand, ValidAtKnownAtCommand, ValidTimeTimelineCommand, ObservedTimeTimelineCommand,
-                 CommitHistoryCommand, ExplainCommand, FindConflictsCommand, FindEntityCommand, FindValueCommand,
-                 FindPredicateCommand, EntityNameCommand, EntityValueCommand, PredicateNameCommand,
-                 DocumentContentCommand, ProvenanceForCommand>;
+                 RecordProvenanceCommand, CommitHypothesisCommand, GetCommand, AssertionsForSubjectCommand,
+                 CurrentCommand, ValidAtCommand, KnownAtCommand, ValidAtKnownAtCommand, ValidTimeTimelineCommand,
+                 ObservedTimeTimelineCommand, CommitHistoryCommand, ExplainCommand, FindConflictsCommand,
+                 FindEntityCommand, FindValueCommand, FindPredicateCommand, EntityNameCommand, EntityValueCommand,
+                 PredicateNameCommand, DocumentContentCommand, ProvenanceForCommand, HypothesesForCommand,
+                 NeighborsCommand, CoOccurringPredicatesCommand>;
 
 } // namespace knk

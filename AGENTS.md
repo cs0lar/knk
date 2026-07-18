@@ -655,11 +655,14 @@ Alice?", "What existing evidence supports or contradicts a given hypothesis?"), 
 data-hygiene work that earns its keep once real multi-source usage is generating duplicate entities.
 Do the higher North-Star-leverage, lower-cost phase first.
 
+**Phase 7 is complete.** All items below are implemented, tested, documented, and covered by the
+`KernelCommand`/`KernelResult` layer.
+
 Future work :
 
-* `AssertionStatus::Hypothesis` — a labeled, provenance-required status for machine-suggested facts
-* `commit_hypothesis` / `hypotheses_for` — writing and listing open predictions
-* Bounded local graph traversal (`neighbors`, `co_occurring_predicates`) — feature extraction for
+* ✅ `AssertionStatus::Hypothesis` — a labeled, provenance-required status for machine-suggested facts
+* ✅ `commit_hypothesis` / `hypotheses_for` — writing and listing open predictions
+* ✅ Bounded local graph traversal (`neighbors`, `co_occurring_predicates`) — feature extraction for
  external prediction/causal-inference tooling, not a query language
 
 Per an explicit design decision, the kernel stays a *substrate* for this phase: it stores and clearly
@@ -766,11 +769,6 @@ Current implementation status :
 * `KnowledgeKernel::co_occurring_predicates(EntityId subject) -> vector<PredicateId>` is a direct,
  public exposure of `IndexManager::predicates_for_subject` — deliberately per-subject, not a
  cross-subject association join, per the "no joins" restriction in the Do-Not-Do-Yet narrowing below.
-* **Deliberate scope decision:** `KernelCommand`/`KernelResult` variants for `commit_hypothesis`,
- `hypotheses_for`, `neighbors`, and `co_occurring_predicates` are **not yet implemented** — tracked as
- a separate follow-up per `AGENTS.md`'s own "small PR" workflow rule. Omitting new commands from
- `KernelCommand` does not break the build: `execute`'s dependent `static_assert` only fires for variant
- alternatives that exist and go unhandled.
 * Covered by additions to `tests/index_manager_tests.cpp`
  (`add_indexes_active_open_ended_assertions_as_current_by_object`,
  `mark_superseded_and_mark_retracted_remove_the_object_index_entry`,
@@ -782,6 +780,20 @@ Current implementation status :
  `neighbors_reverse_edges_are_restored_after_kernel_restart` (exercises the fast-path bulk-seed
  specifically), `co_occurring_predicates_returns_currently_active_predicates_for_subject`,
  `co_occurring_predicates_excludes_hypothesis_and_superseded`).
+* `KernelCommand`/`KernelResult` now cover all four Phase 7 methods: `CommitHypothesisCommand`
+ (mutating, alongside `RecordProvenanceCommand`) and `HypothesesForCommand`/`NeighborsCommand`/
+ `CoOccurringPredicatesCommand` (query, alongside `ProvenanceForCommand`). `NeighborsCommand` carries
+ `max_hops` explicitly rather than relying on `neighbors`'s default argument — commands are plain,
+ fully-specified data, so there is no default-parameter concept for a serialized call. `KernelResult`
+ gained one new alternative, `std::vector<EntityId>`, shared by both `neighbors` (`vector<EntityId>`)
+ and `co_occurring_predicates` (`vector<PredicateId>`) — the same uint64_t-alias collapsing already
+ used for the scalar id alternatives applies equally to vectors of them. This closes out **Phase 7 in
+ full**: every method introduced by this phase now has command-layer coverage, matching Phase 6's
+ established pattern.
+* Covered by additions to `tests/kernel_command_tests.cpp`: `commit_hypothesis_command_round_trips`
+ (twin kernels, like the other mutating round-trips) and `hypotheses_for_command_round_trips`/
+ `neighbors_command_round_trips`/`co_occurring_predicates_command_round_trips` (same-kernel direct-vs-
+ `execute` comparisons, like the other query round-trips).
 * Verified on 2026-07-18: `cmake --build build && ctest --test-dir build --output-on-failure` passes
  (16/16 test binaries).
 
