@@ -29,6 +29,7 @@ constexpr EntityId GAMMA = 300;
 constexpr EntityId UNIVERSITY = 400;
 constexpr EntityId STARTUP = 500;
 constexpr PredicateId WORKS_AT = 10;
+constexpr PredicateId LIVES_IN = 20;
 
 constexpr Timestamp JAN_1_2020 = 1577894012;
 constexpr Timestamp JAN_1_2023 = 1672531200;
@@ -1434,6 +1435,168 @@ void hypothesis_is_preserved_across_kernel_restarts() {
     cleanup(root);
 }
 
+bool contains(const std::vector<EntityId> &ids, EntityId id) {
+    return std::find(ids.begin(), ids.end(), id) != ids.end();
+}
+
+void neighbors_respects_max_hops() {
+    auto root = test_root("neighbors_respects_max_hops");
+    KnowledgeKernel kernel(StorageConfig{root});
+
+    // Chain: ALICE -> ACME -> BETA -> GAMMA
+    kernel.commit(ALICE, WORKS_AT, ACME, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.9);
+    kernel.commit(ACME, WORKS_AT, BETA, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.9);
+    kernel.commit(BETA, WORKS_AT, GAMMA, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.9);
+
+    assert(kernel.neighbors(ALICE, 0).empty());
+
+    auto one_hop = kernel.neighbors(ALICE, 1);
+    assert(one_hop.size() == 1);
+    assert(contains(one_hop, ACME));
+
+    auto two_hops = kernel.neighbors(ALICE, 2);
+    assert(two_hops.size() == 2);
+    assert(contains(two_hops, ACME));
+    assert(contains(two_hops, BETA));
+
+    auto three_hops = kernel.neighbors(ALICE, 3);
+    assert(three_hops.size() == 3);
+    assert(contains(three_hops, GAMMA));
+
+    cleanup(root);
+}
+
+void neighbors_returns_empty_for_unknown_subject() {
+    auto root = test_root("neighbors_returns_empty_for_unknown_subject");
+    KnowledgeKernel kernel(StorageConfig{root});
+
+    assert(kernel.neighbors(UNIVERSITY, 1).empty());
+
+    cleanup(root);
+}
+
+void neighbors_deduplicates_and_avoids_cycles() {
+    auto root = test_root("neighbors_deduplicates_and_avoids_cycles");
+    KnowledgeKernel kernel(StorageConfig{root});
+
+    // A two-entity cycle plus a third neighbor -- must terminate and not report ALICE itself.
+    kernel.commit(ALICE, WORKS_AT, ACME, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.9);
+    kernel.commit(ACME, WORKS_AT, ALICE, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.9);
+    kernel.commit(ALICE, LIVES_IN, BETA, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.9);
+
+    auto result = kernel.neighbors(ALICE, 2);
+    assert(result.size() == 2);
+    assert(contains(result, ACME));
+    assert(contains(result, BETA));
+    assert(!contains(result, ALICE));
+
+    cleanup(root);
+}
+
+void neighbors_follows_incoming_edges_reverse_direction() {
+    auto root = test_root("neighbors_follows_incoming_edges_reverse_direction");
+    KnowledgeKernel kernel(StorageConfig{root});
+
+    // ACME has no outgoing assertions of its own; ALICE is only reachable by following the
+    // ALICE -> ACME edge backwards, via the reverse (object -> subject) index.
+    kernel.commit(ALICE, WORKS_AT, ACME, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.9);
+
+    auto result = kernel.neighbors(ACME, 1);
+    assert(result.size() == 1);
+    assert(contains(result, ALICE));
+
+    cleanup(root);
+}
+
+void neighbors_excludes_non_current_edges() {
+    auto root = test_root("neighbors_excludes_non_current_edges");
+    KnowledgeKernel kernel(StorageConfig{root});
+
+    // Closed-interval active assertion -- not open-ended, so not current.
+    kernel.commit(ALICE, WORKS_AT, ACME, JAN_1_2023, JUL_1_2024, JUL_2_2024, 0.9);
+    // Hypothesis -- never current regardless of interval.
+    auto source = kernel.intern_entity("predictor_model");
+    kernel.commit_hypothesis(ALICE, LIVES_IN, BETA, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.6, source, JUL_2_2024,
+                             "predicted_by_model");
+    // Retracted -- was current, no longer is.
+    auto retractable = kernel.commit(ALICE, WORKS_AT, GAMMA, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.9);
+    kernel.commit_retraction(ALICE, WORKS_AT, GAMMA, JAN_1_2023, OPEN_ENDED, JUL_3_2024, 0.9, retractable);
+
+    assert(kernel.neighbors(ALICE, 1).empty());
+    assert(kernel.neighbors(ACME, 1).empty());
+    assert(kernel.neighbors(BETA, 1).empty());
+    assert(kernel.neighbors(GAMMA, 1).empty());
+
+    cleanup(root);
+}
+
+void neighbors_reverse_edges_are_restored_after_kernel_restart() {
+    auto root = test_root("neighbors_reverse_edges_are_restored_after_kernel_restart");
+
+    AssertionId superseded_id;
+
+    {
+        KnowledgeKernel kernel(StorageConfig{root});
+        kernel.commit(ALICE, WORKS_AT, ACME, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.9);
+        superseded_id = kernel.commit(STARTUP, WORKS_AT, GAMMA, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.9);
+        // Superseded before restart -- the reverse edge for the original target must not reappear.
+        kernel.commit_superseding(STARTUP, WORKS_AT, BETA, JAN_1_2023, OPEN_ENDED, JUL_3_2024, 0.95, superseded_id);
+    }
+
+    // A clean shutdown leaves every persisted index and the checkpoint consistent, so this restart
+    // takes the fast path -- exactly the path whose bulk object-index seed this test exercises.
+    KnowledgeKernel reopened_kernel(StorageConfig{root});
+
+    auto acme_neighbors = reopened_kernel.neighbors(ACME, 1);
+    assert(acme_neighbors.size() == 1);
+    assert(contains(acme_neighbors, ALICE));
+
+    assert(reopened_kernel.neighbors(GAMMA, 1).empty());
+
+    auto beta_neighbors = reopened_kernel.neighbors(BETA, 1);
+    assert(beta_neighbors.size() == 1);
+    assert(contains(beta_neighbors, STARTUP));
+
+    cleanup(root);
+}
+
+void co_occurring_predicates_returns_currently_active_predicates_for_subject() {
+    auto root = test_root("co_occurring_predicates_returns_currently_active_predicates_for_subject");
+    KnowledgeKernel kernel(StorageConfig{root});
+
+    kernel.commit(ALICE, WORKS_AT, ACME, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.9);
+    kernel.commit(ALICE, LIVES_IN, BETA, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.9);
+
+    auto predicates = kernel.co_occurring_predicates(ALICE);
+    assert(predicates.size() == 2);
+    assert(std::find(predicates.begin(), predicates.end(), WORKS_AT) != predicates.end());
+    assert(std::find(predicates.begin(), predicates.end(), LIVES_IN) != predicates.end());
+
+    assert(kernel.co_occurring_predicates(UNIVERSITY).empty());
+
+    cleanup(root);
+}
+
+void co_occurring_predicates_excludes_hypothesis_and_superseded() {
+    auto root = test_root("co_occurring_predicates_excludes_hypothesis_and_superseded");
+    KnowledgeKernel kernel(StorageConfig{root});
+
+    auto source = kernel.intern_entity("predictor_model");
+    kernel.commit_hypothesis(ALICE, LIVES_IN, BETA, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.6, source, JUL_2_2024,
+                             "predicted_by_model");
+
+    auto original = kernel.commit(ALICE, WORKS_AT, ACME, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.9);
+    kernel.commit_superseding(ALICE, WORKS_AT, GAMMA, JAN_1_2023, OPEN_ENDED, JUL_3_2024, 0.95, original);
+
+    // WORKS_AT still co-occurs (the superseding assertion is current); LIVES_IN does not, since its
+    // only assertion is a hypothesis, never current.
+    auto predicates = kernel.co_occurring_predicates(ALICE);
+    assert(predicates.size() == 1);
+    assert(predicates[0] == WORKS_AT);
+
+    cleanup(root);
+}
+
 } // namespace
 
 int main() {
@@ -1492,6 +1655,14 @@ int main() {
     promoting_a_hypothesis_preserves_it_in_commit_history();
     commit_hypothesis_requires_a_source_and_records_provenance();
     hypothesis_is_preserved_across_kernel_restarts();
+    neighbors_respects_max_hops();
+    neighbors_returns_empty_for_unknown_subject();
+    neighbors_deduplicates_and_avoids_cycles();
+    neighbors_follows_incoming_edges_reverse_direction();
+    neighbors_excludes_non_current_edges();
+    neighbors_reverse_edges_are_restored_after_kernel_restart();
+    co_occurring_predicates_returns_currently_active_predicates_for_subject();
+    co_occurring_predicates_excludes_hypothesis_and_superseded();
 
     std::cout << "All assertion_kernel tests passed.\n";
     return 0;

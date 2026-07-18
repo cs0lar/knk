@@ -72,6 +72,20 @@ class KnowledgeKernel {
     // are never added to that index, since is_current_assertion requires Active status.
     std::vector<Assertion> hypotheses_for(EntityId subject) const;
 
+    // Bounded local graph traversal: breadth-first from subject, following current (Active,
+    // open-ended) assertion edges in both directions -- subject's own assertions (outgoing) and
+    // assertions where subject is the object (incoming, via the in-memory reverse index). Returns a
+    // flat, deduplicated set of reachable EntityIds, not paths, capped at max_hops hops. Feature
+    // extraction for an external prediction/causal-inference tool, not a general graph query
+    // language -- see AGENTS.md's "Do Not Do Yet" narrowing for Phase 7.
+    std::vector<EntityId> neighbors(EntityId subject, size_t max_hops = 1) const;
+
+    // The PredicateIds currently active for a single subject -- which relationship types co-occur on
+    // the same entity right now. Deliberately per-subject, not a cross-subject association join (the
+    // "no joins" restriction on this phase's graph-traversal exception): an external tool aggregating
+    // co-occurrence across many subjects calls this once per subject and does that aggregation itself.
+    std::vector<PredicateId> co_occurring_predicates(EntityId subject) const;
+
     std::vector<Assertion> valid_at(EntityId subject, Timestamp valid_time) const;
 
     std::vector<Assertion> known_at(EntityId subject, Timestamp observed_time) const;

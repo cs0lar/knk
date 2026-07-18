@@ -736,17 +736,52 @@ Current implementation status :
  or rewritten (still present in `commit_history`/`explain` with its original fields), not that its
  status field is frozen. Its provenance record (e.g. `method == "predicted_by_model"`) is unaffected
  by promotion and remains resolvable via `provenance_for` after the fact.
-* **Deliberate scope decision:** `neighbors`/`co_occurring_predicates` (bounded graph traversal) and
- `KernelCommand`/`KernelResult` variants for `commit_hypothesis`/`hypotheses_for` are **not yet
- implemented** — this status block covers only the `AssertionStatus::Hypothesis`/`commit_hypothesis`/
- `hypotheses_for` core slice, kept small and separate per `AGENTS.md`'s own "small PR" workflow rule.
- Omitting new commands from `KernelCommand` does not break the build: `execute`'s dependent
- `static_assert` only fires for variant alternatives that exist and go unhandled.
 * Covered by additions to `tests/knowledge_kernel_tests.cpp`:
  `commit_hypothesis_is_excluded_from_current_and_valid_at`, `hypotheses_for_returns_open_predictions`,
  `promoting_a_hypothesis_preserves_it_in_commit_history` (including that provenance survives
  promotion), `commit_hypothesis_requires_a_source_and_records_provenance`, and
  `hypothesis_is_preserved_across_kernel_restarts`.
+* `IndexManager` gained a reverse (object -> subject) companion to the current-state index:
+ `object_index_`/`assertion_object_` (mirroring `current_index_`/`assertion_keys_`), populated via a
+ new `restore_object_entry(EntityId object, AssertionId id, bool active)` and read via
+ `current_assertions_by_object(EntityId object) const`. Only current (`Active`, open-ended) assertions
+ are tracked, exactly like the forward current index, and `mark_superseded`/`mark_retracted` remove
+ from both indexes together. **Deliberately not persisted to its own log file**, unlike the three
+ Phase 3 indexes: it carries no corruption/self-heal/checkpoint machinery of its own. It is always
+ rebuilt in memory — via `IndexManager::add` (which now also calls `restore_object_entry`) on the
+ live-commit and full-replay paths, and via one dedicated bulk pass over the already-in-memory
+ `assertions_` vector on the fast/trusted-index startup path (`restore_assertion`, unlike `apply`,
+ never touches `IndexManager`, so this path would otherwise leave the reverse index empty after
+ restart). That bulk pass is a linear scan of already-loaded data, not a disk re-read, so it doesn't
+ undermine the snapshot/checkpoint optimization the fast path exists for.
+* `KnowledgeKernel::neighbors(EntityId subject, size_t max_hops = 1) -> vector<EntityId>` is a
+ breadth-first traversal from `subject` using `current(entity)` for outgoing edges and
+ `IndexManager::current_assertions_by_object` for incoming edges, so it is bidirectional despite
+ `IndexManager` only ever having been keyed by subject before this phase. A `visited` set both
+ deduplicates and makes the traversal cycle-safe; results are a flat, deduplicated `vector<EntityId>`
+ (no paths), matching the "no path queries" restriction. `max_hops` is not hard-capped in code — the
+ `visited` set already bounds the work to the reachable-set size, so a large `max_hops` degrades
+ gracefully rather than becoming pathological; callers are expected to keep it small per the design
+ note above.
+* `KnowledgeKernel::co_occurring_predicates(EntityId subject) -> vector<PredicateId>` is a direct,
+ public exposure of `IndexManager::predicates_for_subject` — deliberately per-subject, not a
+ cross-subject association join, per the "no joins" restriction in the Do-Not-Do-Yet narrowing below.
+* **Deliberate scope decision:** `KernelCommand`/`KernelResult` variants for `commit_hypothesis`,
+ `hypotheses_for`, `neighbors`, and `co_occurring_predicates` are **not yet implemented** — tracked as
+ a separate follow-up per `AGENTS.md`'s own "small PR" workflow rule. Omitting new commands from
+ `KernelCommand` does not break the build: `execute`'s dependent `static_assert` only fires for variant
+ alternatives that exist and go unhandled.
+* Covered by additions to `tests/index_manager_tests.cpp`
+ (`add_indexes_active_open_ended_assertions_as_current_by_object`,
+ `mark_superseded_and_mark_retracted_remove_the_object_index_entry`,
+ `restore_object_entry_reproduces_object_index_out_of_band`,
+ `restore_object_entry_removal_of_unknown_assertion_is_a_noop`) and
+ `tests/knowledge_kernel_tests.cpp` (`neighbors_respects_max_hops`,
+ `neighbors_returns_empty_for_unknown_subject`, `neighbors_deduplicates_and_avoids_cycles`,
+ `neighbors_follows_incoming_edges_reverse_direction`, `neighbors_excludes_non_current_edges`,
+ `neighbors_reverse_edges_are_restored_after_kernel_restart` (exercises the fast-path bulk-seed
+ specifically), `co_occurring_predicates_returns_currently_active_predicates_for_subject`,
+ `co_occurring_predicates_excludes_hypothesis_and_superseded`).
 * Verified on 2026-07-18: `cmake --build build && ctest --test-dir build --output-on-failure` passes
  (16/16 test binaries).
 
