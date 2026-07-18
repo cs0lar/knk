@@ -441,6 +441,59 @@ std::vector<Assertion> KnowledgeKernel::commit_history(EntityId subject, Predica
     return result;
 }
 
+std::vector<Assertion> KnowledgeKernel::explain(AssertionId id) const {
+    std::vector<Assertion> chain;
+
+    auto assertion = get(id);
+    while (assertion.has_value()) {
+        chain.push_back(*assertion);
+
+        // supersedes_id and retracts_id are mutually exclusive on any given record (commit_superseding
+        // sets one, commit_retraction the other), so at most one is non-zero. Both always point at an
+        // earlier, smaller id, so the chain strictly decreases and terminates -- no cycle guard needed.
+        AssertionId next = assertion->supersedes_id != 0 ? assertion->supersedes_id : assertion->retracts_id;
+        if (next == 0) {
+            break;
+        }
+
+        assertion = get(next);
+    }
+
+    return chain;
+}
+
+std::vector<std::pair<Assertion, Assertion>> KnowledgeKernel::find_conflicts(EntityId subject,
+                                                                             PredicateId predicate) const {
+    std::vector<std::pair<Assertion, Assertion>> conflicts;
+
+    std::vector<Assertion> active;
+    for (AssertionId id : index_manager_.assertions_for_subject(subject)) {
+        auto assertion = get(id);
+        if (assertion.has_value() && assertion->status == AssertionStatus::Active &&
+            assertion->predicate == predicate) {
+            active.push_back(*assertion);
+        }
+    }
+
+    // Two half-open [valid_from, valid_to) intervals overlap iff each starts strictly before the
+    // other ends; OPEN_ENDED (0) means unbounded, so it never bounds an end.
+    auto overlaps = [](const Assertion &a, const Assertion &b) {
+        bool a_ends_after_b_starts = a.valid_to == OPEN_ENDED || b.valid_from < a.valid_to;
+        bool b_ends_after_a_starts = b.valid_to == OPEN_ENDED || a.valid_from < b.valid_to;
+        return a_ends_after_b_starts && b_ends_after_a_starts;
+    };
+
+    for (size_t i = 0; i < active.size(); ++i) {
+        for (size_t j = i + 1; j < active.size(); ++j) {
+            if (active[i].object != active[j].object && overlaps(active[i], active[j])) {
+                conflicts.emplace_back(active[i], active[j]);
+            }
+        }
+    }
+
+    return conflicts;
+}
+
 EntityId KnowledgeKernel::intern_entity(std::string_view name) {
     return intern_value(Value::of_text(std::string(name)));
 }

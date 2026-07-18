@@ -1101,6 +1101,93 @@ void corrupt_payload_is_fatal_on_startup() {
     cleanup(root);
 }
 
+void explain_walks_the_supersession_chain_to_its_root() {
+    auto root = test_root("explain_walks_the_supersession_chain_to_its_root");
+    KnowledgeKernel kernel(StorageConfig{root});
+
+    auto id1 = kernel.commit(ALICE, WORKS_AT, ACME, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.90);
+    auto id2 = kernel.commit_superseding(ALICE, WORKS_AT, BETA, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.92, id1);
+    auto id3 = kernel.commit_superseding(ALICE, WORKS_AT, GAMMA, JAN_1_2023, OPEN_ENDED, JUL_3_2024, 0.95, id2);
+
+    auto chain = kernel.explain(id3);
+
+    // Newest-first: the queried assertion, then the one it superseded, down to the root.
+    assert(chain.size() == 3);
+    assert(chain[0].id == id3);
+    assert(chain[0].object == GAMMA);
+    assert(chain[1].id == id2);
+    assert(chain[1].object == BETA);
+    assert(chain[2].id == id1);
+    assert(chain[2].object == ACME);
+
+    // A root assertion links no further -- its chain is just itself.
+    auto root_chain = kernel.explain(id1);
+    assert(root_chain.size() == 1);
+    assert(root_chain[0].id == id1);
+
+    // A retraction record links back to the assertion it retracted.
+    auto retraction_id =
+        kernel.commit_retraction(ALICE, WORKS_AT, GAMMA, JAN_1_2023, OPEN_ENDED, JUL_8_2024, 0.95, id3);
+    auto retraction_chain = kernel.explain(retraction_id);
+    assert(retraction_chain.size() == 4);
+    assert(retraction_chain[0].id == retraction_id);
+    assert(retraction_chain[1].id == id3);
+    assert(retraction_chain[3].id == id1);
+
+    // An unknown id explains to nothing.
+    assert(kernel.explain(999).empty());
+    assert(kernel.explain(0).empty());
+
+    cleanup(root);
+}
+
+void find_conflicts_detects_overlapping_active_assertions_for_the_same_subject_predicate() {
+    auto root = test_root("find_conflicts_detects_overlapping_active_assertions_for_the_same_subject_predicate");
+    KnowledgeKernel kernel(StorageConfig{root});
+
+    // Two open-ended active assertions with different objects for the same subject/predicate overlap
+    // in valid time -> a conflict.
+    auto acme_id = kernel.commit(ALICE, WORKS_AT, ACME, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.80);
+    auto beta_id = kernel.commit(ALICE, WORKS_AT, BETA, JAN_1_2024, OPEN_ENDED, JUL_2_2024, 0.80);
+
+    auto conflicts = kernel.find_conflicts(ALICE, WORKS_AT);
+    assert(conflicts.size() == 1);
+    // Reported in subject-index (commit) order: the earlier assertion first.
+    assert(conflicts[0].first.id == acme_id);
+    assert(conflicts[0].second.id == beta_id);
+
+    // A third assertion with the SAME object as an existing one is not a conflict with it, even
+    // though it overlaps -- same claim, not a contradiction.
+    kernel.commit(ALICE, WORKS_AT, ACME, JAN_1_2023, OPEN_ENDED, JUL_3_2024, 0.85);
+    conflicts = kernel.find_conflicts(ALICE, WORKS_AT);
+    // acme/beta, and the new acme conflicts with beta too (different object, overlapping) -- but the
+    // two ACME assertions do not conflict with each other.
+    assert(conflicts.size() == 2);
+
+    cleanup(root);
+}
+
+void find_conflicts_excludes_non_overlapping_and_resolved_assertions() {
+    auto root = test_root("find_conflicts_excludes_non_overlapping_and_resolved_assertions");
+    KnowledgeKernel kernel(StorageConfig{root});
+
+    // Adjacent, non-overlapping valid intervals ([JAN_1_2023, JAN_1_2024) then [JAN_1_2024, ...)) --
+    // half-open, so touching at JAN_1_2024 is not an overlap.
+    kernel.commit(ALICE, WORKS_AT, ACME, JAN_1_2023, JAN_1_2024, JUL_2_2024, 0.80);
+    kernel.commit(ALICE, WORKS_AT, BETA, JAN_1_2024, OPEN_ENDED, JUL_2_2024, 0.80);
+    assert(kernel.find_conflicts(ALICE, WORKS_AT).empty());
+
+    // A superseded assertion is already resolved and is never a conflict.
+    auto original = kernel.commit(BETA, WORKS_AT, ACME, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.80);
+    kernel.commit_superseding(BETA, WORKS_AT, GAMMA, JAN_1_2023, OPEN_ENDED, JUL_3_2024, 0.90, original);
+    assert(kernel.find_conflicts(BETA, WORKS_AT).empty());
+
+    // No assertions at all for a subject -> no conflicts.
+    assert(kernel.find_conflicts(UNIVERSITY, WORKS_AT).empty());
+
+    cleanup(root);
+}
+
 } // namespace
 
 int main() {
@@ -1150,6 +1237,9 @@ int main() {
     intern_document_mints_ids_from_the_shared_entity_id_space();
     payload_is_preserved_across_kernel_restarts();
     corrupt_payload_is_fatal_on_startup();
+    explain_walks_the_supersession_chain_to_its_root();
+    find_conflicts_detects_overlapping_active_assertions_for_the_same_subject_predicate();
+    find_conflicts_excludes_non_overlapping_and_resolved_assertions();
 
     std::cout << "All assertion_kernel tests passed.\n";
     return 0;
