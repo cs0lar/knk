@@ -1,7 +1,8 @@
 // A guided tour of the Knowledge Kernel's public API: bitemporal commit/query, supersession and
 // retraction, audit/timeline history, the Phase 6 explain()/find_conflicts() read-side queries, the
-// Phase 5 Catalog (name/value interning), the Phase 5 PayloadStore (documents), and recovery across a
-// restart. See examples/catalog_usage.cpp for a narrower, more focused look at just the Catalog.
+// Phase 5 Catalog (name/value interning), the Phase 5 PayloadStore (documents), the Phase 7
+// hypothesis/prediction layer and bounded graph traversal, and recovery across a restart. See
+// examples/catalog_usage.cpp for a narrower, more focused look at just the Catalog.
 #include <cstddef>
 #include <filesystem>
 #include <iostream>
@@ -63,6 +64,8 @@ std::string status_label(AssertionStatus status) {
         return "retracted";
     case AssertionStatus::Retraction:
         return "retraction-record";
+    case AssertionStatus::Hypothesis:
+        return "hypothesis";
     }
     return "?";
 }
@@ -97,6 +100,35 @@ void print_conflicts(const std::string &header, const KnowledgeKernel &kernel,
                   << predicate_label(kernel, a.predicate) << " " << entity_label(kernel, a.object) << "  <>  #" << b.id
                   << " " << entity_label(kernel, b.object) << " (overlapping active claims with different objects)\n";
     }
+}
+
+void print_entity_ids(const std::string &header, const KnowledgeKernel &kernel, const std::vector<EntityId> &ids) {
+    std::cout << header << "\n  ";
+
+    if (ids.empty()) {
+        std::cout << "(none)";
+    }
+
+    for (EntityId id : ids) {
+        std::cout << entity_label(kernel, id) << " ";
+    }
+
+    std::cout << "\n";
+}
+
+void print_predicate_ids(const std::string &header, const KnowledgeKernel &kernel,
+                         const std::vector<PredicateId> &ids) {
+    std::cout << header << "\n  ";
+
+    if (ids.empty()) {
+        std::cout << "(none)";
+    }
+
+    for (PredicateId id : ids) {
+        std::cout << predicate_label(kernel, id) << " ";
+    }
+
+    std::cout << "\n";
 }
 
 std::vector<std::byte> to_bytes(const std::string &text) {
@@ -220,6 +252,34 @@ int main() {
         std::cout << "  document_content(bio_document) round-trips " << (loaded_bio ? loaded_bio->size() : 0)
                   << " bytes\n";
 
+        // --- Predictions (Phase 7) ------------------------------------------------------
+        // A hypothesis is a labeled, provenance-required guess -- e.g. from an external predictor
+        // model -- that never appears in current()/valid_at()/etc. until it's promoted via ordinary
+        // commit_superseding, the same mechanism used for the correction above. This is the concrete
+        // answer to "what does the kernel currently predict about Alice?".
+        std::cout << "\n== Committing a hypothesis ==\n";
+        EntityId predictor = kernel.intern_entity("predictor_model_v1");
+        EntityId gamma = kernel.intern_entity("Gamma Startup");
+        AssertionId alice_predicted_at_gamma =
+            kernel.commit_hypothesis(alice, works_at, gamma, 1767225600, OPEN_ENDED, 1735689600, 0.55, predictor,
+                                     1735689600, "predicted_next_employer");
+        std::cout << "  commit_hypothesis(...) -> assertion #" << alice_predicted_at_gamma
+                  << " (status=" << status_label(kernel.get(alice_predicted_at_gamma)->status) << ")\n";
+        print_facts("hypotheses_for(Alice) -- open predictions, absent from current():", kernel,
+                    kernel.hypotheses_for(alice));
+
+        // --- Bounded graph traversal (Phase 7) ------------------------------------------
+        // neighbors() is bidirectional even though every index it's built on is keyed by subject:
+        // Beta Inc has no outgoing assertions of its own, so it's only reachable by following the
+        // Alice -> Beta Inc edge backwards, via the in-memory reverse (object -> subject) index.
+        std::cout << "\n== Bounded graph traversal ==\n";
+        print_entity_ids("neighbors(Alice, 1 hop) -- everything Alice currently points at:", kernel,
+                         kernel.neighbors(alice, 1));
+        print_entity_ids("neighbors(Beta Inc, 1 hop) -- found only via the reverse index:", kernel,
+                         kernel.neighbors(beta, 1));
+        print_predicate_ids("co_occurring_predicates(Alice) -- relationship types active for Alice right now:", kernel,
+                            kernel.co_occurring_predicates(alice));
+
         // --- The reified command layer (Phase 6) --------------------------------------
         // Every public operation above can also be issued as data through execute(), which dispatches
         // 1:1 to the mirrored method and returns a KernelResult variant. This is what lets a future
@@ -232,6 +292,13 @@ int main() {
         KernelResult snapshot_of_alice = kernel.execute(CurrentCommand{alice});
         print_facts("execute(CurrentCommand{Alice}) returns the same vector current(Alice) would:", kernel,
                     std::get<std::vector<Assertion>>(snapshot_of_alice));
+
+        // Phase 7's methods are covered by the command layer too, including neighbors' extra
+        // max_hops argument -- commands are fully-specified plain data, so there's no default-
+        // argument concept the way there is for a direct C++ call.
+        KernelResult alice_neighbors_via_command = kernel.execute(NeighborsCommand{alice, 1});
+        std::cout << "  execute(NeighborsCommand{Alice, 1}) -> "
+                  << std::get<std::vector<EntityId>>(alice_neighbors_via_command).size() << " neighbor(s)\n";
 
         // Explicit, application-triggered only -- there is no automatic snapshot cadence, so this
         // never affects commit-path latency unless the application calls it itself.

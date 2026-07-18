@@ -45,6 +45,9 @@ KernelResult KnowledgeKernel::execute(const KernelCommand &command) {
             } else if constexpr (std::is_same_v<T, RecordProvenanceCommand>) {
                 record_provenance(cmd.assertion_id, cmd.source, cmd.recorded_at, cmd.method);
                 return std::monostate{};
+            } else if constexpr (std::is_same_v<T, CommitHypothesisCommand>) {
+                return commit_hypothesis(cmd.subject, cmd.predicate, cmd.object, cmd.valid_from, cmd.valid_to,
+                                         cmd.observed_at, cmd.confidence, cmd.source, cmd.recorded_at, cmd.method);
             } else if constexpr (std::is_same_v<T, GetCommand>) {
                 return get(cmd.id);
             } else if constexpr (std::is_same_v<T, AssertionsForSubjectCommand>) {
@@ -83,6 +86,12 @@ KernelResult KnowledgeKernel::execute(const KernelCommand &command) {
                 return document_content(cmd.id);
             } else if constexpr (std::is_same_v<T, ProvenanceForCommand>) {
                 return provenance_for(cmd.assertion_id);
+            } else if constexpr (std::is_same_v<T, HypothesesForCommand>) {
+                return hypotheses_for(cmd.subject);
+            } else if constexpr (std::is_same_v<T, NeighborsCommand>) {
+                return neighbors(cmd.subject, cmd.max_hops);
+            } else if constexpr (std::is_same_v<T, CoOccurringPredicatesCommand>) {
+                return co_occurring_predicates(cmd.subject);
             } else {
                 static_assert(always_false<T>, "unhandled KernelCommand alternative");
             }
