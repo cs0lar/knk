@@ -21,6 +21,7 @@ add_library(kernel
     src/predicate_catalog_log.cpp
     src/catalog.cpp
     src/payload_store.cpp
+    src/provenance_log.cpp
 )
 
 target_include_directories(kernel
@@ -101,6 +102,10 @@ add_executable(payload_store_tests
     tests/payload_store_tests.cpp
 )
 
+add_executable(provenance_log_tests
+    tests/provenance_log_tests.cpp
+)
+
 target_link_libraries(knowledge_kernel_tests
     PRIVATE kernel
 )
@@ -154,6 +159,10 @@ target_link_libraries(catalog_tests
 )
 
 target_link_libraries(payload_store_tests
+    PRIVATE kernel
+)
+
+target_link_libraries(provenance_log_tests
     PRIVATE kernel
 )
 
@@ -225,4 +234,9 @@ add_test(
 add_test(
     NAME payload_store_tests
     COMMAND payload_store_tests
+)
+
+add_test(
+    NAME provenance_log_tests
+    COMMAND provenance_log_tests
 )

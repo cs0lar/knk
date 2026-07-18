@@ -1,22 +1,22 @@
 # Storage Format
 
-This document describes the on-disk binary format shared by all six persisted logs: the assertion
+This document describes the on-disk binary format shared by all seven persisted logs: the assertion
 log (`AssertionLog`, the `segments/` directory — see "Segmented assertion log" below),
 `indexes/subject.idx` (`SubjectIndexLog`), `indexes/current.idx` (`CurrentIndexLog`),
-`indexes/observed_time.idx` (`ObservedTimeIndexLog`), and `catalog/entities.log`/
+`indexes/observed_time.idx` (`ObservedTimeIndexLog`), `catalog/entities.log`/
 `catalog/predicates.log` (`EntityCatalogLog`/`PredicateCatalogLog` — see "Entity/predicate catalog"
-below).
+below), and `provenance/provenance.log` (`ProvenanceLog` — see "Provenance log" below).
 
-All six logs use the identical per-file header + record-frame layout described below; what differs
+All seven logs use the identical per-file header + record-frame layout described below; what differs
 per log is the record payload — fixed-size raw structs for the first four, explicitly serialized
-variable-length payloads for the two catalog logs (see "Entity/predicate catalog") — and only the
-assertion log spreads that framing across multiple files instead of one; every other log remains a
-single file.
+variable-length payloads for the two catalog logs and the provenance log (see "Entity/predicate
+catalog" and "Provenance log") — and only the assertion log spreads that framing across multiple
+files instead of one; every other log remains a single file.
 
 ## File layout
 
 Every individual file involved (each assertion-log segment file, each of the three index log files,
-and each of the two catalog log files) follows this same layout:
+the two catalog log files, and the provenance log file) follows this same layout:
 
 ```
 [ file header, 8 bytes ]
@@ -184,6 +184,43 @@ constructor also feeds every id discovered via `PayloadStore::existing_ids()` ba
 `Catalog::note_allocated_entity_id`, which advances the same counter `add_entity` does but without
 recording any name/value mapping. Skipping this step would let a restart mint a document id that
 collides with a document id issued before the restart.
+
+## Provenance log
+
+`provenance/provenance.log` (`ProvenanceLog`) records *which source produced a given assertion, and
+by what method* — the durable backing for `KnowledgeKernel::record_provenance`/`provenance_for`. It
+is a **side-log keyed by `AssertionId`**, deliberately not a new field on `Assertion`: adding a field
+would be a breaking change to the raw-struct on-disk assertion format (see "Known limitation" below),
+whereas a side-log leaves `assertions.log` untouched.
+
+It reuses the exact same 8-byte header and `[record_size][payload][crc32]` framing as the other logs,
+with a variable-length payload — the same precedent as the catalog logs' `Text` case.
+
+`ProvenanceRecord` payload bytes: `[AssertionId assertion_id (8)][EntityId source (8)][Timestamp
+recorded_at (8)][uint32_t method_length (4)][method_length bytes]`. The minimum payload is 28 bytes
+(an empty `method` string). As with the catalog logs, a `record_size` below that minimum, or a
+`method_length` prefix that does not exactly consume the remaining payload bytes, always throws
+`std::runtime_error` with no tail tolerance — there is no safe resync point once framing is
+inconsistent.
+
+`source` is just an `EntityId`, interned into `Catalog` exactly like any other entity (a person, an
+ingestion pipeline, an agent), so resolving "which source produced this claim" reuses
+`entity_name`/`entity_value` for free rather than introducing a second identity system. `recorded_at`
+is a caller-supplied `Timestamp`, matching how `observed_at` is supplied to `commit` — the kernel
+never reads a wall clock, so provenance replay stays deterministic.
+
+The log is append-only, so more than one record may exist for the same `AssertionId` (provenance can
+be re-recorded); on replay `KnowledgeKernel` keeps the **last** record read for each id, so the newest
+recorded provenance wins. `record_provenance` validates that its target `AssertionId` refers to an
+existing assertion before appending, so a failed call never persists a dangling provenance record —
+the same pre-append validation `commit_retraction`/`commit_superseding` apply to their targets.
+
+**`ProvenanceLog` is authoritative, not a derived/rebuildable index**, for the same reason the catalog
+logs and payload store are: `assertions.log` encodes nothing about provenance, so there is nothing to
+rebuild it from. Consequently there is no `overwrite_all`/self-heal path, and non-tail corruption is a
+fatal, uncaught `std::runtime_error` propagating straight out of `KnowledgeKernel`'s constructor —
+replayed in the same uncaught block as the catalog logs and payload store, before the
+snapshot/checkpoint/tail-vs-full-replay branching that only concerns the derived Phase 3 indexes.
 
 ## Segmented assertion log
 

@@ -8,11 +8,13 @@ StorageEngine::StorageEngine(StorageConfig config)
       observed_time_index_log_(config_.observed_time_index_path()), subject_index_log_(config_.subject_index_path()),
       current_index_log_(config_.current_index_path()), checkpoint_(config_.checkpoint_path()),
       snapshot_store_(config_.snapshot_path()), entity_catalog_log_(config_.entity_catalog_path()),
-      predicate_catalog_log_(config_.predicate_catalog_path()), payload_store_(config_.payload_directory()) {
+      predicate_catalog_log_(config_.predicate_catalog_path()), payload_store_(config_.payload_directory()),
+      provenance_log_(config_.provenance_log_path()) {
     std::filesystem::create_directories(config_.root);
     std::filesystem::create_directories(config_.index_directory());
     std::filesystem::create_directories(config_.payload_directory());
     std::filesystem::create_directories(config_.catalog_directory());
+    std::filesystem::create_directories(config_.provenance_directory());
 }
 
 void StorageEngine::append_assertion(const Assertion &assertion) { assertion_log_.append(assertion); }
@@ -88,6 +90,13 @@ void StorageEngine::write_payload(EntityId id, std::span<const std::byte> conten
 std::optional<std::vector<std::byte>> StorageEngine::load_payload(EntityId id) const { return payload_store_.read(id); }
 
 std::vector<EntityId> StorageEngine::existing_payload_ids() const { return payload_store_.existing_ids(); }
+
+void StorageEngine::append_provenance_entry(AssertionId assertion_id, EntityId source, Timestamp recorded_at,
+                                            const std::string &method) {
+    provenance_log_.append(ProvenanceRecord{assertion_id, source, recorded_at, method});
+}
+
+std::vector<ProvenanceRecord> StorageEngine::load_provenance() const { return provenance_log_.read_all(); }
 
 const StorageConfig &StorageEngine::config() const { return config_; }
 
