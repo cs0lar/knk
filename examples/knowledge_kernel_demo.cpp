@@ -1,12 +1,13 @@
 // A guided tour of the Knowledge Kernel's public API: bitemporal commit/query, supersession and
-// retraction, audit/timeline history, the Phase 5 Catalog (name/value interning), the Phase 5
-// PayloadStore (documents), and recovery across a restart. See examples/catalog_usage.cpp for a
-// narrower, more focused look at just the Catalog.
+// retraction, audit/timeline history, the Phase 6 explain()/find_conflicts() read-side queries, the
+// Phase 5 Catalog (name/value interning), the Phase 5 PayloadStore (documents), and recovery across a
+// restart. See examples/catalog_usage.cpp for a narrower, more focused look at just the Catalog.
 #include <cstddef>
 #include <filesystem>
 #include <iostream>
 #include <span>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "kernel/knowledge_kernel.hpp"
@@ -81,6 +82,22 @@ void print_facts(const std::string &header, const KnowledgeKernel &kernel, const
     }
 }
 
+void print_conflicts(const std::string &header, const KnowledgeKernel &kernel,
+                     const std::vector<std::pair<Assertion, Assertion>> &conflicts) {
+    std::cout << header << "\n";
+
+    if (conflicts.empty()) {
+        std::cout << "  (none)\n";
+        return;
+    }
+
+    for (const auto &[a, b] : conflicts) {
+        std::cout << "  #" << a.id << " " << entity_label(kernel, a.subject) << " "
+                  << predicate_label(kernel, a.predicate) << " " << entity_label(kernel, a.object) << "  <>  #" << b.id
+                  << " " << entity_label(kernel, b.object) << " (overlapping active claims with different objects)\n";
+    }
+}
+
 std::vector<std::byte> to_bytes(const std::string &text) {
     std::vector<std::byte> bytes(text.size());
     for (size_t i = 0; i < text.size(); ++i) {
@@ -150,7 +167,8 @@ int main() {
         std::cout << "\n== Correcting a fact via supersession ==\n";
         // The confidence recorded for "Alice works_at Beta" was optimistic; a later assertion
         // corrects it without ever mutating the original append-only record.
-        kernel.commit_superseding(alice, works_at, beta, 1719792000, OPEN_ENDED, 1719961200, 0.98, alice_at_beta);
+        AssertionId corrected_alice_at_beta =
+            kernel.commit_superseding(alice, works_at, beta, 1719792000, OPEN_ENDED, 1719961200, 0.98, alice_at_beta);
         print_facts("current(Alice) after supersession -- the corrected fact replaces the old one:", kernel,
                     kernel.current(alice));
 
@@ -167,6 +185,25 @@ int main() {
         print_facts("commit_history(Alice, works_at):", kernel, kernel.commit_history(alice, works_at));
         print_facts("valid_time_timeline(Alice, works_at) -- Active facts sorted by valid_from:", kernel,
                     kernel.valid_time_timeline(alice, works_at));
+
+        // --- Explaining a fact's lineage (Phase 6) ------------------------------------
+        // explain() walks supersedes_id/retracts_id back to the root, newest-first: the corrected
+        // "Alice works_at Beta" (confidence 0.98) followed by the original it replaced (0.80). This
+        // is the concrete answer to "why does the kernel believe this?".
+        std::cout << "\n== Explaining a fact's lineage ==\n";
+        print_facts("explain(corrected 'Alice works_at Beta') -- newest correction first, down to the root:", kernel,
+                    kernel.explain(corrected_alice_at_beta));
+
+        // --- Detecting conflicts (Phase 6) --------------------------------------------
+        // Two sources disagree about where Alice currently lives. Both assertions are Active and
+        // open-ended, so their valid-time intervals overlap -- find_conflicts surfaces the pair.
+        std::cout << "\n== Detecting conflicting active assertions ==\n";
+        PredicateId lives_in = kernel.intern_predicate("lives_in");
+        EntityId paris = kernel.intern_entity("Paris");
+        EntityId london = kernel.intern_entity("London");
+        kernel.commit(alice, lives_in, paris, 1704067200, OPEN_ENDED, 1719878400, 0.60);
+        kernel.commit(alice, lives_in, london, 1704067200, OPEN_ENDED, 1719878400, 0.70);
+        print_conflicts("find_conflicts(Alice, lives_in):", kernel, kernel.find_conflicts(alice, lives_in));
 
         // --- Documents (PayloadStore) ----------------------------------------------------
         std::cout << "\n== Interning a document ==\n";

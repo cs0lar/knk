@@ -6,6 +6,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include "kernel/assertion.hpp"
@@ -63,6 +64,21 @@ class KnowledgeKernel {
     std::vector<Assertion> observed_time_timeline(EntityId subject, PredicateId predicate) const;
 
     std::vector<Assertion> commit_history(EntityId subject, PredicateId predicate) const;
+
+    // Walks the supersession/retraction chain from the given assertion back to its root, following
+    // supersedes_id/retracts_id one hop at a time. Returns the chain newest-first (the given
+    // assertion, then the one it superseded/retracted, ... , down to the original that links no
+    // further). An unknown or zero id returns an empty vector. This is the concrete answer to "why
+    // does the kernel believe this" -- the caller can resolve each hop's provenance via
+    // provenance_for once that lands.
+    std::vector<Assertion> explain(AssertionId id) const;
+
+    // Detects overlapping active assertions for the same subject/predicate: every unordered pair of
+    // Active assertions with a different object whose valid-time intervals overlap (half-open
+    // [valid_from, valid_to), with OPEN_ENDED meaning unbounded). Pure read-side over the existing
+    // subject index -- no new storage. Superseded/retracted assertions are already resolved and are
+    // never reported as conflicts.
+    std::vector<std::pair<Assertion, Assertion>> find_conflicts(EntityId subject, PredicateId predicate) const;
 
     EntityId intern_entity(std::string_view name);
 

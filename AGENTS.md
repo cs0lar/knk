@@ -505,8 +505,10 @@ Future work :
 
 * ✅ Provenance log (`AssertionId` -> source `EntityId` + method, "which source produced this claim?";
  see implementation status below)
-* `explain(AssertionId)` — walk the supersession/retraction chain to its root
-* Conflict detection (`find_conflicts`) — overlapping active assertions for the same subject/predicate
+* ✅ `explain(AssertionId)` — walk the supersession/retraction chain to its root (see implementation
+ status below)
+* ✅ Conflict detection (`find_conflicts`) — overlapping active assertions for the same
+ subject/predicate (see implementation status below)
 * `KernelCommand`/`KernelResult` — a closed, serializable command layer over the existing public API
 
 This phase gives everything else in the roadmap two things it depends on: a durable notion of *who or
@@ -594,6 +596,28 @@ Current implementation status :
  `provenance_is_preserved_across_kernel_restarts`, `corrupt_provenance_log_is_fatal_on_startup`).
 * Verified on 2026-07-18: `cmake --build build && ctest --test-dir build --output-on-failure` passes
  (15/15 test binaries).
+* `KnowledgeKernel::explain(AssertionId) -> vector<Assertion>` walks the supersession/retraction chain
+ from the given assertion back to its root, one hop at a time via `supersedes_id`/`retracts_id`
+ (mutually exclusive on any record, and always pointing at a smaller/earlier id, so the chain strictly
+ decreases and terminates with no cycle guard). Returns the chain newest-first (queried assertion, then
+ the one it superseded/retracted, ... , down to the original); an unknown or zero id returns an empty
+ vector. Provenance resolution per hop is left to the caller via `provenance_for` (that method lands
+ with the provenance-log work; `explain` itself has no dependency on it and returns only the assertion
+ chain).
+* `KnowledgeKernel::find_conflicts(EntityId subject, PredicateId predicate) ->
+ vector<std::pair<Assertion, Assertion>>` is pure read-side over the existing subject index: every
+ unordered pair of `Active` assertions for the subject/predicate with a different object whose
+ half-open `[valid_from, valid_to)` valid-time intervals overlap (`OPEN_ENDED` = unbounded end). No new
+ storage. Superseded/retracted assertions are excluded (already resolved), and same-object assertions
+ are never reported (same claim, not a contradiction). Pairs are reported in subject-index/commit order.
+* `record_provenance`/`provenance_for`/`ProvenanceLog` and the `KernelCommand`/`KernelResult` layer are
+ tracked separately — this status block covers only `explain` and `find_conflicts`.
+* Covered by additions to `tests/knowledge_kernel_tests.cpp`
+ (`explain_walks_the_supersession_chain_to_its_root`,
+ `find_conflicts_detects_overlapping_active_assertions_for_the_same_subject_predicate`,
+ `find_conflicts_excludes_non_overlapping_and_resolved_assertions`).
+* Verified on 2026-07-18: `cmake --build build && ctest --test-dir build --output-on-failure` passes
+ (14/14 test binaries).
 
 ### Phase 7 — Self-Improvement: Merge & Prune
 
