@@ -5,6 +5,7 @@
 #include <optional>
 #include <stdexcept>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "kernel/ids.hpp"
@@ -111,6 +112,17 @@ KnowledgeKernel::KnowledgeKernel(StorageConfig config) : storage_(config), index
 
         for (const auto &record : tail_records) {
             restore_assertion(record);
+        }
+
+        // restore_assertion (unlike apply) never touches IndexManager, so the object index -- which
+        // has no persisted log of its own to restore from above -- would otherwise come out empty on
+        // this fast path. Rebuilding it here is a single linear pass over already-in-memory
+        // assertions_, not a disk re-read, so it doesn't undermine the snapshot/checkpoint
+        // optimization this branch exists for. Each assertion's status already reflects any later
+        // supersession/retraction applied while building assertions_ above, so is_current_assertion
+        // evaluates correctly regardless of iteration order.
+        for (const auto &assertion : assertions_) {
+            index_manager_.restore_object_entry(assertion.object, assertion.id, is_current_assertion(assertion));
         }
     } else {
         // The fallback path always needs the full log to rebuild IndexManager via apply(); if only
@@ -340,6 +352,41 @@ std::vector<Assertion> KnowledgeKernel::hypotheses_for(EntityId subject) const {
     }
 
     return result;
+}
+
+std::vector<EntityId> KnowledgeKernel::neighbors(EntityId subject, size_t max_hops) const {
+    std::vector<EntityId> result;
+    std::unordered_set<EntityId> visited{subject};
+    std::vector<EntityId> frontier{subject};
+
+    for (size_t hop = 0; hop < max_hops && !frontier.empty(); ++hop) {
+        std::vector<EntityId> next_frontier;
+
+        for (EntityId entity : frontier) {
+            for (const auto &assertion : current(entity)) {
+                if (visited.insert(assertion.object).second) {
+                    result.push_back(assertion.object);
+                    next_frontier.push_back(assertion.object);
+                }
+            }
+
+            for (AssertionId id : index_manager_.current_assertions_by_object(entity)) {
+                auto assertion = get(id);
+                if (assertion.has_value() && visited.insert(assertion->subject).second) {
+                    result.push_back(assertion->subject);
+                    next_frontier.push_back(assertion->subject);
+                }
+            }
+        }
+
+        frontier = std::move(next_frontier);
+    }
+
+    return result;
+}
+
+std::vector<PredicateId> KnowledgeKernel::co_occurring_predicates(EntityId subject) const {
+    return index_manager_.predicates_for_subject(subject);
 }
 
 std::vector<Assertion> KnowledgeKernel::valid_at(EntityId subject, Timestamp t) const {

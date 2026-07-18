@@ -16,6 +16,7 @@ bool is_current_assertion(const Assertion &assertion) {
 
 void IndexManager::add(const Assertion &assertion) {
     restore_current_index_entry(assertion.subject, assertion.predicate, assertion.id, is_current_assertion(assertion));
+    restore_object_entry(assertion.object, assertion.id, is_current_assertion(assertion));
     restore_subject_entry(assertion.subject, assertion.id);
     restore_observed_time_entry(assertion.subject, assertion.observed_at, assertion.id);
 }
@@ -32,6 +33,16 @@ void IndexManager::restore_current_index_entry(EntityId subject, PredicateId pre
     predicate_index_[subject].insert(predicate);
 }
 
+void IndexManager::restore_object_entry(EntityId object, AssertionId id, bool active) {
+    if (!active) {
+        remove_from_object_index(id);
+        return;
+    }
+
+    object_index_[object].push_back(id);
+    assertion_object_[id] = object;
+}
+
 void IndexManager::restore_observed_time_entry(EntityId subject, Timestamp observed_at, AssertionId id) {
     auto &observed_entries = observed_time_index_[subject];
     auto insert_at = std::upper_bound(observed_entries.begin(), observed_entries.end(), std::make_pair(observed_at, id),
@@ -44,9 +55,15 @@ void IndexManager::restore_subject_entry(EntityId subject, AssertionId id) {
     subject_entries.push_back(id);
 }
 
-void IndexManager::mark_superseded(AssertionId id) { remove_from_current(id); }
+void IndexManager::mark_superseded(AssertionId id) {
+    remove_from_current(id);
+    remove_from_object_index(id);
+}
 
-void IndexManager::mark_retracted(AssertionId id) { remove_from_current(id); }
+void IndexManager::mark_retracted(AssertionId id) {
+    remove_from_current(id);
+    remove_from_object_index(id);
+}
 
 void IndexManager::remove_from_current(AssertionId id) {
 
@@ -62,6 +79,20 @@ void IndexManager::remove_from_current(AssertionId id) {
             }
             assertion_keys_.erase(id);
         }
+    }
+}
+
+void IndexManager::remove_from_object_index(AssertionId id) {
+    auto object = assertion_object_.find(id);
+
+    if (object != assertion_object_.end()) {
+        auto entries = object_index_.find(object->second);
+
+        if (entries != object_index_.end()) {
+            std::erase(entries->second, id);
+        }
+
+        assertion_object_.erase(object);
     }
 }
 
@@ -105,6 +136,22 @@ std::vector<AssertionId> IndexManager::current_assertions(EntityId subject, Pred
     auto assertion_ids = current_index_.find(key);
 
     if (assertion_ids == current_index_.end()) {
+        return result;
+    }
+
+    for (AssertionId id : assertion_ids->second) {
+        result.push_back(id);
+    }
+
+    return result;
+}
+
+std::vector<AssertionId> IndexManager::current_assertions_by_object(EntityId object) const {
+    std::vector<AssertionId> result;
+
+    auto assertion_ids = object_index_.find(object);
+
+    if (assertion_ids == object_index_.end()) {
         return result;
     }
 

@@ -106,6 +106,60 @@ void removing_unknown_or_non_current_assertion_is_a_noop() {
     assert_ids_equal(indexes.assertions_for_subject(ALICE), {1, 2});
 }
 
+void add_indexes_active_open_ended_assertions_as_current_by_object() {
+    IndexManager indexes;
+
+    indexes.add(assertion(1, ALICE, WORKS_AT, ACME, JAN_1_2023, OPEN_ENDED));
+    indexes.add(assertion(2, BOB, WORKS_AT, ACME, JAN_1_2024, OPEN_ENDED));
+    // Closed-interval active assertions are excluded, mirroring the forward current index.
+    indexes.add(assertion(3, ALICE, LIVES_IN, BETA, JAN_1_2023, JUL_1_2024));
+
+    assert_ids_equal(indexes.current_assertions_by_object(ACME), {1, 2});
+    assert(indexes.current_assertions_by_object(BETA).empty());
+    assert(indexes.current_assertions_by_object(999).empty());
+}
+
+void mark_superseded_and_mark_retracted_remove_the_object_index_entry() {
+    IndexManager indexes;
+
+    indexes.add(assertion(1, ALICE, WORKS_AT, ACME, JAN_1_2023, OPEN_ENDED));
+    indexes.add(assertion(2, BOB, WORKS_AT, ACME, JAN_1_2024, OPEN_ENDED));
+
+    indexes.mark_superseded(1);
+    assert_ids_equal(indexes.current_assertions_by_object(ACME), {2});
+
+    indexes.mark_retracted(2);
+    assert(indexes.current_assertions_by_object(ACME).empty());
+
+    // Removing an id never added to the object index (e.g. one that was never current) is a no-op.
+    indexes.mark_superseded(999);
+}
+
+void restore_object_entry_reproduces_object_index_out_of_band() {
+    IndexManager indexes;
+
+    indexes.restore_object_entry(ACME, 1, true);
+    indexes.restore_object_entry(ACME, 2, true);
+
+    assert_ids_equal(indexes.current_assertions_by_object(ACME), {1, 2});
+
+    indexes.restore_object_entry(ACME, 1, false);
+
+    assert_ids_equal(indexes.current_assertions_by_object(ACME), {2});
+
+    indexes.restore_object_entry(ACME, 2, false);
+
+    assert(indexes.current_assertions_by_object(ACME).empty());
+}
+
+void restore_object_entry_removal_of_unknown_assertion_is_a_noop() {
+    IndexManager indexes;
+
+    indexes.restore_object_entry(ACME, 999, false);
+
+    assert(indexes.current_assertions_by_object(ACME).empty());
+}
+
 Assertion assertion_observed_at(AssertionId id, EntityId subject, PredicateId predicate, EntityId object,
                                 Timestamp observed_at) {
     return Assertion{
@@ -275,6 +329,10 @@ int main() {
     mark_superseded_removes_only_the_requested_current_assertion();
     mark_retracted_removes_only_the_requested_current_assertion();
     removing_unknown_or_non_current_assertion_is_a_noop();
+    add_indexes_active_open_ended_assertions_as_current_by_object();
+    mark_superseded_and_mark_retracted_remove_the_object_index_entry();
+    restore_object_entry_reproduces_object_index_out_of_band();
+    restore_object_entry_removal_of_unknown_assertion_is_a_noop();
     observed_before_returns_ids_with_observed_at_at_or_before_the_given_time();
     observed_before_orders_entries_by_observed_at_regardless_of_insertion_order();
     observed_before_scopes_to_subject_and_handles_unknown_subject();
