@@ -1597,6 +1597,98 @@ void co_occurring_predicates_excludes_hypothesis_and_superseded() {
     cleanup(root);
 }
 
+void merge_entities_makes_queries_for_the_absorbed_id_resolve_to_the_surviving_id() {
+    auto root = test_root("merge_entities_makes_queries_for_the_absorbed_id_resolve_to_the_surviving_id");
+    KnowledgeKernel kernel(StorageConfig{root});
+
+    constexpr EntityId ALICE_DUPLICATE = 999;
+
+    kernel.commit(ALICE, WORKS_AT, ACME, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.9);
+
+    // Before the merge, the duplicate id is its own, unrelated entity.
+    assert(kernel.current(ALICE_DUPLICATE).empty());
+    assert(kernel.resolve_entity(ALICE_DUPLICATE) == ALICE_DUPLICATE);
+
+    kernel.merge_entities(ALICE, ALICE_DUPLICATE, JUL_3_2024);
+
+    assert(kernel.resolve_entity(ALICE_DUPLICATE) == ALICE);
+
+    // A caller still holding the absorbed id transparently gets the surviving id's results across
+    // every query-path method that takes a subject, without the underlying data ever moving.
+    auto via_duplicate = kernel.current(ALICE_DUPLICATE);
+    auto via_keep = kernel.current(ALICE);
+    assert(via_duplicate.size() == 1);
+    assert(via_duplicate[0].id == via_keep[0].id);
+
+    assert(kernel.commit_history(ALICE_DUPLICATE, WORKS_AT).size() == 1);
+    assert(kernel.valid_at(ALICE_DUPLICATE, JUL_2_2024).size() == 1);
+
+    cleanup(root);
+}
+
+void merged_entity_redirect_is_preserved_across_kernel_restarts() {
+    auto root = test_root("merged_entity_redirect_is_preserved_across_kernel_restarts");
+
+    constexpr EntityId ALICE_DUPLICATE = 999;
+
+    {
+        KnowledgeKernel kernel(StorageConfig{root});
+        kernel.commit(ALICE, WORKS_AT, ACME, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.9);
+        kernel.merge_entities(ALICE, ALICE_DUPLICATE, JUL_3_2024);
+    }
+
+    KnowledgeKernel reopened_kernel(StorageConfig{root});
+
+    assert(reopened_kernel.resolve_entity(ALICE_DUPLICATE) == ALICE);
+    assert(reopened_kernel.current(ALICE_DUPLICATE).size() == 1);
+
+    cleanup(root);
+}
+
+void assertions_are_not_rewritten_by_a_merge() {
+    auto root = test_root("assertions_are_not_rewritten_by_a_merge");
+    KnowledgeKernel kernel(StorageConfig{root});
+
+    constexpr EntityId ALICE_DUPLICATE = 999;
+
+    auto id = kernel.commit(ALICE_DUPLICATE, WORKS_AT, ACME, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.9);
+
+    kernel.merge_entities(ALICE, ALICE_DUPLICATE, JUL_3_2024);
+
+    // The stored assertion keeps the exact subject it was committed with -- resolution happens only
+    // at the query boundary, never by rewriting assertions_.
+    auto stored = kernel.get(id);
+    assert(stored.has_value());
+    assert(stored->subject == ALICE_DUPLICATE);
+
+    cleanup(root);
+}
+
+void corrupt_entity_merge_log_is_fatal_on_startup() {
+    auto root = test_root("corrupt_entity_merge_log_is_fatal_on_startup");
+
+    {
+        KnowledgeKernel kernel(StorageConfig{root});
+        kernel.merge_entities(ALICE, 999, JUL_3_2024);
+    }
+
+    auto merge_log_path = StorageConfig{root}.entity_merge_log_path();
+    write_corrupt_record_size_after_valid_header(merge_log_path);
+
+    bool threw = false;
+    try {
+        KnowledgeKernel recovered_kernel(StorageConfig{root});
+    } catch (const std::runtime_error &) {
+        threw = true;
+    }
+
+    // Like the catalog logs, entity_merges.log is authoritative with no self-heal fallback -- non-tail
+    // corruption must surface as a fatal, uncaught startup error.
+    assert(threw);
+
+    cleanup(root);
+}
+
 } // namespace
 
 int main() {
@@ -1663,6 +1755,10 @@ int main() {
     neighbors_reverse_edges_are_restored_after_kernel_restart();
     co_occurring_predicates_returns_currently_active_predicates_for_subject();
     co_occurring_predicates_excludes_hypothesis_and_superseded();
+    merge_entities_makes_queries_for_the_absorbed_id_resolve_to_the_surviving_id();
+    merged_entity_redirect_is_preserved_across_kernel_restarts();
+    assertions_are_not_rewritten_by_a_merge();
+    corrupt_entity_merge_log_is_fatal_on_startup();
 
     std::cout << "All assertion_kernel tests passed.\n";
     return 0;

@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <unordered_set>
 
 #include "kernel/catalog.hpp"
 
@@ -59,5 +60,25 @@ std::optional<std::string> Catalog::predicate_name(PredicateId id) const {
 EntityId Catalog::next_entity_id() const { return next_entity_id_; }
 
 PredicateId Catalog::next_predicate_id() const { return next_predicate_id_; }
+
+void Catalog::add_merge(EntityId absorbed, EntityId surviving) { merge_redirects_[absorbed] = surviving; }
+
+EntityId Catalog::resolve(EntityId id) const {
+    EntityId current = id;
+    std::unordered_set<EntityId> visited;
+
+    while (true) {
+        auto it = merge_redirects_.find(current);
+        if (it == merge_redirects_.end()) {
+            return current;
+        }
+
+        if (!visited.insert(current).second) {
+            return current; // cycle guard: redirects are meant to be forward-only, never expected
+        }
+
+        current = it->second;
+    }
+}
 
 } // namespace knk

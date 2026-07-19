@@ -264,6 +264,26 @@ void commit_hypothesis_command_round_trips() {
     cleanup(root);
 }
 
+void merge_entities_command_round_trips() {
+    auto root = test_root("merge_entities_command_round_trips");
+    KnowledgeKernel direct(StorageConfig{root / "direct"});
+    KnowledgeKernel via(StorageConfig{root / "via"});
+
+    constexpr EntityId ALICE_DUPLICATE = 999;
+
+    direct.commit(ALICE, WORKS_AT, ACME, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.90);
+    via.commit(ALICE, WORKS_AT, ACME, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.90);
+
+    direct.merge_entities(ALICE, ALICE_DUPLICATE, JUL_2_2024);
+    auto r = via.execute(MergeEntitiesCommand{ALICE, ALICE_DUPLICATE, JUL_2_2024});
+    assert(std::holds_alternative<std::monostate>(r));
+
+    assert(direct.resolve_entity(ALICE_DUPLICATE) == via.resolve_entity(ALICE_DUPLICATE));
+    assert(via.current(ALICE_DUPLICATE).size() == 1);
+
+    cleanup(root);
+}
+
 // --- Query command round-trips (same kernel, direct vs execute) ------------------
 
 void get_command_round_trips() {
@@ -559,6 +579,21 @@ void co_occurring_predicates_command_round_trips() {
     cleanup(root);
 }
 
+void resolve_entity_command_round_trips() {
+    auto root = test_root("resolve_entity_command_round_trips");
+    KnowledgeKernel kernel(StorageConfig{root});
+
+    constexpr EntityId ALICE_DUPLICATE = 999;
+    kernel.merge_entities(ALICE, ALICE_DUPLICATE, JUL_2_2024);
+
+    auto d = kernel.resolve_entity(ALICE_DUPLICATE);
+    auto v = std::get<AssertionId>(kernel.execute(ResolveEntityCommand{ALICE_DUPLICATE}));
+    assert(d == v);
+    assert(v == ALICE);
+
+    cleanup(root);
+}
+
 } // namespace
 
 int main() {
@@ -572,6 +607,7 @@ int main() {
     intern_document_command_round_trips();
     record_provenance_command_round_trips();
     commit_hypothesis_command_round_trips();
+    merge_entities_command_round_trips();
     get_command_round_trips();
     assertions_for_subject_command_round_trips();
     current_command_round_trips();
@@ -594,6 +630,7 @@ int main() {
     hypotheses_for_command_round_trips();
     neighbors_command_round_trips();
     co_occurring_predicates_command_round_trips();
+    resolve_entity_command_round_trips();
 
     std::cout << "All kernel_command tests passed.\n";
 }

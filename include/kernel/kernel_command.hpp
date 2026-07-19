@@ -95,6 +95,12 @@ struct CommitHypothesisCommand {
     std::string method;
 };
 
+struct MergeEntitiesCommand {
+    EntityId keep;
+    EntityId absorb;
+    Timestamp merged_at;
+};
+
 // --- Query commands --------------------------------------------------------------
 
 struct GetCommand {
@@ -194,14 +200,18 @@ struct CoOccurringPredicatesCommand {
     EntityId subject;
 };
 
+struct ResolveEntityCommand {
+    EntityId id;
+};
+
 using KernelCommand =
     std::variant<CommitCommand, CommitRetractionCommand, CommitSupersedingCommand, WriteSnapshotCommand,
                  InternEntityCommand, InternValueCommand, InternPredicateCommand, InternDocumentCommand,
-                 RecordProvenanceCommand, CommitHypothesisCommand, GetCommand, AssertionsForSubjectCommand,
-                 CurrentCommand, ValidAtCommand, KnownAtCommand, ValidAtKnownAtCommand, ValidTimeTimelineCommand,
-                 ObservedTimeTimelineCommand, CommitHistoryCommand, ExplainCommand, FindConflictsCommand,
-                 FindEntityCommand, FindValueCommand, FindPredicateCommand, EntityNameCommand, EntityValueCommand,
-                 PredicateNameCommand, DocumentContentCommand, ProvenanceForCommand, HypothesesForCommand,
-                 NeighborsCommand, CoOccurringPredicatesCommand>;
+                 RecordProvenanceCommand, CommitHypothesisCommand, MergeEntitiesCommand, GetCommand,
+                 AssertionsForSubjectCommand, CurrentCommand, ValidAtCommand, KnownAtCommand, ValidAtKnownAtCommand,
+                 ValidTimeTimelineCommand, ObservedTimeTimelineCommand, CommitHistoryCommand, ExplainCommand,
+                 FindConflictsCommand, FindEntityCommand, FindValueCommand, FindPredicateCommand, EntityNameCommand,
+                 EntityValueCommand, PredicateNameCommand, DocumentContentCommand, ProvenanceForCommand,
+                 HypothesesForCommand, NeighborsCommand, CoOccurringPredicatesCommand, ResolveEntityCommand>;
 
 } // namespace knk

@@ -23,6 +23,7 @@ add_library(kernel
     src/payload_store.cpp
     src/provenance_log.cpp
     src/kernel_command.cpp
+    src/entity_merge_log.cpp
 )
 
 target_include_directories(kernel
@@ -111,6 +112,10 @@ add_executable(kernel_command_tests
     tests/kernel_command_tests.cpp
 )
 
+add_executable(entity_merge_log_tests
+    tests/entity_merge_log_tests.cpp
+)
+
 target_link_libraries(knowledge_kernel_tests
     PRIVATE kernel
 )
@@ -172,6 +177,10 @@ target_link_libraries(provenance_log_tests
 )
 
 target_link_libraries(kernel_command_tests
+    PRIVATE kernel
+)
+
+target_link_libraries(entity_merge_log_tests
     PRIVATE kernel
 )
 
@@ -253,4 +262,9 @@ add_test(
 add_test(
     NAME kernel_command_tests
     COMMAND kernel_command_tests
+)
+
+add_test(
+    NAME entity_merge_log_tests
+    COMMAND entity_merge_log_tests
 )

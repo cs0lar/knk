@@ -48,6 +48,9 @@ KernelResult KnowledgeKernel::execute(const KernelCommand &command) {
             } else if constexpr (std::is_same_v<T, CommitHypothesisCommand>) {
                 return commit_hypothesis(cmd.subject, cmd.predicate, cmd.object, cmd.valid_from, cmd.valid_to,
                                          cmd.observed_at, cmd.confidence, cmd.source, cmd.recorded_at, cmd.method);
+            } else if constexpr (std::is_same_v<T, MergeEntitiesCommand>) {
+                merge_entities(cmd.keep, cmd.absorb, cmd.merged_at);
+                return std::monostate{};
             } else if constexpr (std::is_same_v<T, GetCommand>) {
                 return get(cmd.id);
             } else if constexpr (std::is_same_v<T, AssertionsForSubjectCommand>) {
@@ -92,6 +95,8 @@ KernelResult KnowledgeKernel::execute(const KernelCommand &command) {
                 return neighbors(cmd.subject, cmd.max_hops);
             } else if constexpr (std::is_same_v<T, CoOccurringPredicatesCommand>) {
                 return co_occurring_predicates(cmd.subject);
+            } else if constexpr (std::is_same_v<T, ResolveEntityCommand>) {
+                return resolve_entity(cmd.id);
             } else {
                 static_assert(always_false<T>, "unhandled KernelCommand alternative");
             }

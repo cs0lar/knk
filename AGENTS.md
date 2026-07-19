@@ -801,8 +801,8 @@ Current implementation status :
 
 Future work :
 
-* Entity merge (`merge_entities`) — one-way, append-only redirect for deduplicating entities
-* `Catalog::resolve(EntityId)` — transitive redirect resolution at the query boundary
+* ✅ Entity merge (`merge_entities`) — one-way, append-only redirect for deduplicating entities
+* ✅ `Catalog::resolve(EntityId)` — transitive redirect resolution at the query boundary
 * Segment archival (`archive_segments_before`) — compaction, not deletion
 
 Design :
@@ -843,6 +843,64 @@ Minimum tests to add :
 * `assertions_are_not_rewritten_by_a_merge`
 * `archive_segments_before_moves_only_fully_rolled_segments`
 * `archived_segments_remain_readable_via_read_all`
+
+Current implementation status (entity merge only — segment archival is not yet implemented) :
+
+* `EntityMergeLog` (`include/kernel/entity_merge_log.hpp`/`src/entity_merge_log.cpp`) persists
+ `{EntityId absorbed, EntityId surviving, Timestamp merged_at}` to `catalog/entity_merges.log`.
+ Fixed-size record (24 bytes), same framing style as `ObservedTimeIndexLog` rather than the
+ variable-length catalog/provenance logs, since every field is a fixed-width integer. Authoritative
+ like the other catalog logs: no `overwrite_all`/self-heal, and non-tail corruption is a fatal thrown
+ `std::runtime_error`. See `docs/storage_format.md`'s new "Entity merge log" section.
+* `StorageConfig` gained `entity_merge_log_path()` (`catalog/entity_merges.log`). `StorageEngine` owns
+ the log and exposes `append_entity_merge_entry(absorbed, surviving, merged_at)`/`load_entity_merges()`
+ (no `rewrite_*`, consistent with there being no self-heal).
+* `Catalog` gained `merge_redirects_` (a plain `absorbed -> surviving` map, one hop only — it does not
+ itself collapse chains), `add_merge(EntityId absorbed, EntityId surviving)` (the single mutation entry
+ point, used identically for a fresh merge commit and full replay, mirroring `add_entity`/
+ `add_predicate`), and `resolve(EntityId) -> EntityId` (follows redirects transitively until reaching
+ an id with no outgoing redirect; identity for an unmerged id). `resolve` guards against a malformed
+ redirect cycle with a visited-set check and returns the last id reached rather than looping forever —
+ defensive only, since merges are meant to be forward-only and a cycle is never expected in practice.
+* `KnowledgeKernel::merge_entities(EntityId keep, EntityId absorb, Timestamp merged_at)` is
+ durable-before-visible (`storage_.append_entity_merge_entry` then `catalog_.add_merge`), exactly like
+ `commit`'s append-then-apply ordering. **Deliberate divergence from the design sketch above:**
+ `merge_entities` takes a caller-supplied `merged_at` `Timestamp` rather than reading a wall clock
+ internally, matching the same precedent already set by `record_provenance`'s `recorded_at` (no code
+ path anywhere reads a clock, keeping replay deterministic). `KnowledgeKernel::resolve_entity(EntityId)
+ const` is a thin public wrapper over `catalog_.resolve`.
+* Entity-merge replay lives in the same uncaught, authoritative constructor block as the catalog logs,
+ payload store, and provenance log — before the snapshot/checkpoint/tail-vs-full-replay branching that
+ only concerns the derived Phase 3 indexes.
+* **Scoping decision, not in the original design sketch:** resolution is applied only to the
+ `KnowledgeKernel` query methods that take a caller-supplied *subject* `EntityId` used to look up
+ assertions — `assertions_for_subject`, `current`, `hypotheses_for`, `neighbors`,
+ `co_occurring_predicates`, `valid_at`, `known_at`, `valid_at_known_at`, `valid_time_timeline`,
+ `observed_time_timeline`, `commit_history`, `find_conflicts` — each resolving its `subject` parameter
+ via `catalog_.resolve` before doing anything else. Catalog name/value lookups (`entity_name`,
+ `entity_value`, `predicate_name`, `find_entity`, `find_value`, `find_predicate`, `document_content`)
+ are deliberately **not** resolved: they answer "what is this id called/worth," a fact about the
+ specific id, not "which real-world entity does this id canonically represent." Write-path methods
+ (`commit`/`commit_superseding`/`commit_retraction`/`commit_hypothesis`/`intern_*`) are also not
+ resolved, consistent with "assertions are never rewritten by a merge" — a caller who wants new
+ commits filed under the canonical id is expected to resolve first, the same way commands already
+ expect callers to intern before committing.
+* `KernelCommand`/`KernelResult` gained `MergeEntitiesCommand` (mutating, alongside
+ `RecordProvenanceCommand`/`CommitHypothesisCommand`) and `ResolveEntityCommand` (query, collapsing to
+ the existing `AssertionId` alternative like every other scalar-id command).
+* Covered by `tests/entity_merge_log_tests.cpp` (append/read round trip, missing file, invalid header,
+ partial header, invalid record size, tail checksum mismatch, non-tail checksum mismatch, incomplete
+ trailing record — the standard per-log battery, minus `overwrite_all` since there is none), additions
+ to `tests/catalog_tests.cpp` (`resolve_is_identity_for_an_unmerged_id`,
+ `resolve_follows_a_merge_redirect`, `resolve_collapses_transitive_merge_chains`), additions to
+ `tests/knowledge_kernel_tests.cpp`
+ (`merge_entities_makes_queries_for_the_absorbed_id_resolve_to_the_surviving_id`,
+ `merged_entity_redirect_is_preserved_across_kernel_restarts`, `assertions_are_not_rewritten_by_a_merge`,
+ `corrupt_entity_merge_log_is_fatal_on_startup`), and additions to `tests/kernel_command_tests.cpp`
+ (`merge_entities_command_round_trips`, `resolve_entity_command_round_trips`).
+ `examples/knowledge_kernel_demo.cpp` gains an "Entity merge" section.
+* Verified on 2026-07-19: `cmake --build build && ctest --test-dir build --output-on-failure` passes
+ (17/17 test binaries).
 
 ### Phase 9 — Performance
 

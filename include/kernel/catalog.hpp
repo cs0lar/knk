@@ -40,11 +40,25 @@ class Catalog {
     EntityId next_entity_id() const;
     PredicateId next_predicate_id() const;
 
+    // Records a one-way redirect: absorbed is superseded by surviving for entity-resolution purposes.
+    // The single mutation entry point for both a fresh merge_entities call and full replay at startup,
+    // mirroring add_entity/add_predicate. Does not itself resolve chains -- resolve() below does that
+    // transitively at read time -- so a later merge of `surviving` into some third id does not require
+    // rewriting this entry.
+    void add_merge(EntityId absorbed, EntityId surviving);
+
+    // Follows merge redirects transitively (merging A into B, then B into C, makes resolve(A) == C)
+    // until reaching an id with no outgoing redirect. Identity for an id that was never absorbed.
+    // Guards against a malformed cycle (never expected in practice, since merges are meant to be
+    // forward-only) by stopping and returning the last id reached rather than looping forever.
+    EntityId resolve(EntityId id) const;
+
   private:
     std::unordered_map<Value, EntityId> entity_ids_;
     std::unordered_map<EntityId, Value> entity_values_;
     std::unordered_map<std::string, PredicateId> predicate_ids_;
     std::unordered_map<PredicateId, std::string> predicate_names_;
+    std::unordered_map<EntityId, EntityId> merge_redirects_;
 
     EntityId next_entity_id_ = 1;
     PredicateId next_predicate_id_ = 1;
