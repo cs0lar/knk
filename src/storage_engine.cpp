@@ -27,6 +27,10 @@ std::vector<Assertion> StorageEngine::load_assertions_after(AssertionId last_see
 
 AssertionId StorageEngine::assertion_log_record_count_hint() const { return assertion_log_.record_count_hint(); }
 
+void StorageEngine::archive_segments_before(AssertionId assertion_id) {
+    assertion_log_.archive_segments_before(assertion_id);
+}
+
 void StorageEngine::append_observed_time_entry(EntityId subject, Timestamp observed_at, AssertionId id) {
     observed_time_index_log_.append(ObservedTimeIndexRecord{subject, observed_at, id});
 }

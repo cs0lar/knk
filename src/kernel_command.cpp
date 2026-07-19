@@ -51,6 +51,9 @@ KernelResult KnowledgeKernel::execute(const KernelCommand &command) {
             } else if constexpr (std::is_same_v<T, MergeEntitiesCommand>) {
                 merge_entities(cmd.keep, cmd.absorb, cmd.merged_at);
                 return std::monostate{};
+            } else if constexpr (std::is_same_v<T, ArchiveSegmentsBeforeCommand>) {
+                archive_segments_before(cmd.assertion_id);
+                return std::monostate{};
             } else if constexpr (std::is_same_v<T, GetCommand>) {
                 return get(cmd.id);
             } else if constexpr (std::is_same_v<T, AssertionsForSubjectCommand>) {

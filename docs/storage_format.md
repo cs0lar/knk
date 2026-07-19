@@ -310,6 +310,36 @@ currently the highest-indexed one on disk.
 change earlier in this document: there is no migration from a pre-segment single `assertions.log`
 file. Existing local data directories must be deleted and rebuilt from scratch.
 
+### Segment archival
+
+`AssertionLog::archive_segments_before(AssertionId)` (exposed as `StorageEngine::archive_segments_before`
+and `KnowledgeKernel::archive_segments_before`) is **compaction, not deletion** — the Phase 8 answer to
+"pruning" in the roadmap. It moves already-rolled-from segment files from `segments/` into
+`segments/archive/`, unchanged byte-for-byte; nothing is rewritten or shrunk.
+
+A segment is eligible only if both hold:
+
+- **Not the active segment.** The active (highest-index) segment may still receive writes and is
+  never guaranteed complete, so it is skipped unconditionally regardless of the requested threshold —
+  the same "only non-active segments are guaranteed exactly `max_records_per_segment` complete
+  records" invariant the rest of this section relies on.
+- **Entirely before the threshold.** A segment's *end* id (`(index + 1) * max_records_per_segment`,
+  exact for any non-active segment) must be strictly less than the requested `AssertionId` — i.e.
+  every id the segment holds is `< assertion_id`. A segment straddling the threshold is left alone.
+
+Archiving is idempotent: a segment already moved simply no longer appears in `segments/` on a repeat
+call, so nothing happens to it a second time.
+
+**Archived segments remain fully readable.** `read_all()`/`read_after()`/`record_count_hint()` resolve
+a segment's location by checking `segments/<index>.seg` first and falling back to
+`segments/archive/<index>.seg` — a segment lives in exactly one of the two locations at a time, never
+both — so callers see identical results whether or not `archive_segments_before` has ever run. This is
+the concrete guarantee behind "pruning never shrinks queryable history": audit and timeline queries,
+which read the full log, are completely unaffected by archival.
+
+True, irreversible deletion is an explicit **non-goal**, not deferred future work — see `AGENTS.md`'s
+Phase 8 section.
+
 ## Durability
 
 Every `append()` closes its `std::ofstream` and then fsyncs the file (`knk::fsync_file`,

@@ -719,4 +719,8 @@ void KnowledgeKernel::merge_entities(EntityId keep, EntityId absorb, Timestamp m
 
 EntityId KnowledgeKernel::resolve_entity(EntityId id) const { return catalog_.resolve(id); }
 
+void KnowledgeKernel::archive_segments_before(AssertionId assertion_id) {
+    storage_.archive_segments_before(assertion_id);
+}
+
 } // namespace knk

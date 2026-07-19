@@ -101,6 +101,10 @@ struct MergeEntitiesCommand {
     Timestamp merged_at;
 };
 
+struct ArchiveSegmentsBeforeCommand {
+    AssertionId assertion_id;
+};
+
 // --- Query commands --------------------------------------------------------------
 
 struct GetCommand {
@@ -204,14 +208,13 @@ struct ResolveEntityCommand {
     EntityId id;
 };
 
-using KernelCommand =
-    std::variant<CommitCommand, CommitRetractionCommand, CommitSupersedingCommand, WriteSnapshotCommand,
-                 InternEntityCommand, InternValueCommand, InternPredicateCommand, InternDocumentCommand,
-                 RecordProvenanceCommand, CommitHypothesisCommand, MergeEntitiesCommand, GetCommand,
-                 AssertionsForSubjectCommand, CurrentCommand, ValidAtCommand, KnownAtCommand, ValidAtKnownAtCommand,
-                 ValidTimeTimelineCommand, ObservedTimeTimelineCommand, CommitHistoryCommand, ExplainCommand,
-                 FindConflictsCommand, FindEntityCommand, FindValueCommand, FindPredicateCommand, EntityNameCommand,
-                 EntityValueCommand, PredicateNameCommand, DocumentContentCommand, ProvenanceForCommand,
-                 HypothesesForCommand, NeighborsCommand, CoOccurringPredicatesCommand, ResolveEntityCommand>;
+using KernelCommand = std::variant<
+    CommitCommand, CommitRetractionCommand, CommitSupersedingCommand, WriteSnapshotCommand, InternEntityCommand,
+    InternValueCommand, InternPredicateCommand, InternDocumentCommand, RecordProvenanceCommand, CommitHypothesisCommand,
+    MergeEntitiesCommand, ArchiveSegmentsBeforeCommand, GetCommand, AssertionsForSubjectCommand, CurrentCommand,
+    ValidAtCommand, KnownAtCommand, ValidAtKnownAtCommand, ValidTimeTimelineCommand, ObservedTimeTimelineCommand,
+    CommitHistoryCommand, ExplainCommand, FindConflictsCommand, FindEntityCommand, FindValueCommand,
+    FindPredicateCommand, EntityNameCommand, EntityValueCommand, PredicateNameCommand, DocumentContentCommand,
+    ProvenanceForCommand, HypothesesForCommand, NeighborsCommand, CoOccurringPredicatesCommand, ResolveEntityCommand>;
 
 } // namespace knk

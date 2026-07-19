@@ -487,6 +487,63 @@ void assertion_log_checksum_mismatch_in_a_non_active_segment_throws() {
     std::filesystem::remove_all(dir);
 }
 
+void assertion_log_archive_segments_before_moves_only_fully_rolled_segments() {
+    auto dir = std::filesystem::temp_directory_path() / "kernel_archive_segments_log";
+    std::filesystem::remove_all(dir);
+
+    // Capacity 2: segments hold [1,2] (index 0), [3,4] (index 1), [5] (index 2, active).
+    AssertionLog log(dir, 2);
+    for (AssertionId id = 1; id <= 5; ++id) {
+        log.append(make_assertion(id, id));
+    }
+
+    // Archiving before id 3 only reaches into segment 0's range ([1,2]): segment 0 is entirely
+    // before it, segment 1 ([3,4]) is not, and the active segment (2) must never move regardless.
+    log.archive_segments_before(3);
+
+    assert(!std::filesystem::exists(segment_file(dir, 0)));
+    assert(std::filesystem::exists(segment_file(dir / "archive", 0)));
+    assert(std::filesystem::exists(segment_file(dir, 1)));
+    assert(std::filesystem::exists(segment_file(dir, 2)));
+
+    // Archiving again before a higher id now also reaches segment 1, but still never the active
+    // segment, and is a no-op for the already-archived segment 0.
+    log.archive_segments_before(5);
+
+    assert(std::filesystem::exists(segment_file(dir / "archive", 0)));
+    assert(!std::filesystem::exists(segment_file(dir, 1)));
+    assert(std::filesystem::exists(segment_file(dir / "archive", 1)));
+    assert(std::filesystem::exists(segment_file(dir, 2)));
+
+    std::filesystem::remove_all(dir);
+}
+
+void assertion_log_archived_segments_remain_readable_via_read_all() {
+    auto dir = std::filesystem::temp_directory_path() / "kernel_archived_segments_readable_log";
+    std::filesystem::remove_all(dir);
+
+    AssertionLog log(dir, 2);
+    for (AssertionId id = 1; id <= 5; ++id) {
+        log.append(make_assertion(id, id));
+    }
+
+    log.archive_segments_before(5);
+
+    auto all = log.read_all();
+    assert(all.size() == 5);
+    for (AssertionId id = 1; id <= 5; ++id) {
+        assert(all[id - 1].id == id);
+    }
+
+    auto tail = log.read_after(2);
+    assert(tail.size() == 3);
+    assert(tail[0].id == 3 && tail[1].id == 4 && tail[2].id == 5);
+
+    assert(log.record_count_hint() == 5);
+
+    std::filesystem::remove_all(dir);
+}
+
 } // namespace
 
 int main() {
@@ -510,6 +567,8 @@ int main() {
     assertion_log_record_count_hint_spans_multiple_segments();
     assertion_log_tail_checksum_mismatch_in_the_active_segment_is_tolerated();
     assertion_log_checksum_mismatch_in_a_non_active_segment_throws();
+    assertion_log_archive_segments_before_moves_only_fully_rolled_segments();
+    assertion_log_archived_segments_remain_readable_via_read_all();
 
     std::cout << "All assertion_log tests passed.\n";
 }
