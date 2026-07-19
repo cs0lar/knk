@@ -1664,6 +1664,36 @@ void assertions_are_not_rewritten_by_a_merge() {
     cleanup(root);
 }
 
+void archive_segments_before_is_transparent_to_queries_and_survives_restart() {
+    auto root = test_root("archive_segments_before_is_transparent_to_queries_and_survives_restart");
+
+    AssertionId last_id = 0;
+    {
+        // Small segment capacity so a handful of commits span several segments.
+        KnowledgeKernel kernel(StorageConfig{root, 2});
+
+        for (int i = 0; i < 5; ++i) {
+            last_id = kernel.commit(ALICE, WORKS_AT, ACME, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.9);
+        }
+
+        // Archiving is compaction, not deletion: every already-committed assertion must still be
+        // readable through the ordinary public API, both before and after a restart.
+        kernel.archive_segments_before(last_id);
+
+        assert(kernel.get(1).has_value());
+        assert(kernel.get(last_id).has_value());
+        assert(kernel.commit_history(ALICE, WORKS_AT).size() == 5);
+    }
+
+    KnowledgeKernel reopened_kernel(StorageConfig{root, 2});
+
+    assert(reopened_kernel.get(1).has_value());
+    assert(reopened_kernel.get(last_id).has_value());
+    assert(reopened_kernel.commit_history(ALICE, WORKS_AT).size() == 5);
+
+    cleanup(root);
+}
+
 void corrupt_entity_merge_log_is_fatal_on_startup() {
     auto root = test_root("corrupt_entity_merge_log_is_fatal_on_startup");
 
@@ -1758,6 +1788,7 @@ int main() {
     merge_entities_makes_queries_for_the_absorbed_id_resolve_to_the_surviving_id();
     merged_entity_redirect_is_preserved_across_kernel_restarts();
     assertions_are_not_rewritten_by_a_merge();
+    archive_segments_before_is_transparent_to_queries_and_survives_restart();
     corrupt_entity_merge_log_is_fatal_on_startup();
 
     std::cout << "All assertion_kernel tests passed.\n";

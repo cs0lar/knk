@@ -284,6 +284,30 @@ void merge_entities_command_round_trips() {
     cleanup(root);
 }
 
+void archive_segments_before_command_round_trips() {
+    auto root = test_root("archive_segments_before_command_round_trips");
+    KnowledgeKernel direct(StorageConfig{root / "direct", 2});
+    KnowledgeKernel via(StorageConfig{root / "via", 2});
+
+    AssertionId last_direct = 0;
+    AssertionId last_via = 0;
+    for (int i = 0; i < 5; ++i) {
+        last_direct = direct.commit(ALICE, WORKS_AT, ACME, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.90);
+        last_via = via.commit(ALICE, WORKS_AT, ACME, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.90);
+    }
+    assert(last_direct == last_via);
+
+    direct.archive_segments_before(last_direct);
+    auto r = via.execute(ArchiveSegmentsBeforeCommand{last_via});
+    assert(std::holds_alternative<std::monostate>(r));
+
+    assert(direct.get(1).has_value());
+    assert(via.get(1).has_value());
+    assert(via.get(last_via).has_value());
+
+    cleanup(root);
+}
+
 // --- Query command round-trips (same kernel, direct vs execute) ------------------
 
 void get_command_round_trips() {
@@ -608,6 +632,7 @@ int main() {
     record_provenance_command_round_trips();
     commit_hypothesis_command_round_trips();
     merge_entities_command_round_trips();
+    archive_segments_before_command_round_trips();
     get_command_round_trips();
     assertions_for_subject_command_round_trips();
     current_command_round_trips();

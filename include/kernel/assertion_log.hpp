@@ -35,6 +35,13 @@ class AssertionLog {
     // log could possibly contain); never authoritative.
     AssertionId record_count_hint() const;
 
+    // Moves every already-rolled-from segment entirely before assertion_id (i.e. every id it holds is
+    // < assertion_id) from segments/ into segments/archive/, skipping the active segment unconditionally
+    // (it may still receive writes, so it is never "fully rolled" in the sense this invariant relies
+    // on). This is compaction, not deletion: read_all/read_after transparently see archived segments
+    // exactly as before, and repeated calls are a no-op for anything already moved.
+    void archive_segments_before(AssertionId assertion_id);
+
   private:
     std::filesystem::path segment_directory_;
     size_t max_records_per_segment_;

@@ -37,6 +37,8 @@ class StorageEngine {
 
     AssertionId assertion_log_record_count_hint() const;
 
+    void archive_segments_before(AssertionId assertion_id);
+
     void append_observed_time_entry(EntityId subject, Timestamp observed_at, AssertionId id);
 
     std::vector<ObservedTimeIndexRecord> load_observed_time_index() const;

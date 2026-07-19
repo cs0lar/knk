@@ -157,6 +157,12 @@ class KnowledgeKernel {
     // surviving id. Identity for an id that was never absorbed into another.
     EntityId resolve_entity(EntityId id) const;
 
+    // Compaction, not deletion: moves every already-rolled-from assertion-log segment entirely before
+    // assertion_id out of the hot working set and into segments/archive/. This never shrinks queryable
+    // history -- read_all/read_after (and therefore every audit/timeline query) still see archived
+    // segments exactly as before. True, irreversible erasure is an explicit non-goal, not deferred work.
+    void archive_segments_before(AssertionId assertion_id);
+
     // Executes a reified command by dispatching 1:1 to the mirrored public method above and wrapping
     // its return value in a KernelResult. This is a thin, closed dispatch boundary, not new business
     // logic -- see include/kernel/kernel_command.hpp. Non-const because the command set includes

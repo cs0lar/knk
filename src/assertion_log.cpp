@@ -140,19 +140,39 @@ std::string segment_filename(size_t segment_index) {
     return std::string(buffer) + ".seg";
 }
 
-std::filesystem::path segment_path(const std::filesystem::path &segment_directory, size_t segment_index) {
-    return segment_directory / segment_filename(segment_index);
+std::filesystem::path archive_directory(const std::filesystem::path &segment_directory) {
+    return segment_directory / "archive";
 }
 
-// Lists the indices of existing segment files, ascending. Cheap: a directory scan, no record parsing.
-std::vector<size_t> existing_segment_indices(const std::filesystem::path &segment_directory) {
+// Resolves a segment's actual location: a segment lives either directly in segment_directory (the
+// common case) or, once archived, in segment_directory/archive -- never both, so checking existence
+// is enough to tell which. Callers that only ever address the active segment (append, and
+// record_count_hint's tail estimate) never observe the archive branch, since the active segment is
+// never archived.
+std::filesystem::path segment_path(const std::filesystem::path &segment_directory, size_t segment_index) {
+    auto path = segment_directory / segment_filename(segment_index);
+    if (std::filesystem::exists(path)) {
+        return path;
+    }
+
+    auto archived_path = archive_directory(segment_directory) / segment_filename(segment_index);
+    if (std::filesystem::exists(archived_path)) {
+        return archived_path;
+    }
+
+    return path;
+}
+
+// Lists the indices of segment files directly inside one directory (non-recursive), ascending. Cheap:
+// a directory scan, no record parsing.
+std::vector<size_t> list_segment_indices_in(const std::filesystem::path &directory) {
     std::vector<size_t> indices;
 
-    if (!std::filesystem::exists(segment_directory)) {
+    if (!std::filesystem::exists(directory)) {
         return indices;
     }
 
-    for (const auto &entry : std::filesystem::directory_iterator(segment_directory)) {
+    for (const auto &entry : std::filesystem::directory_iterator(directory)) {
         if (entry.path().extension() != ".seg") {
             continue;
         }
@@ -164,6 +184,20 @@ std::vector<size_t> existing_segment_indices(const std::filesystem::path &segmen
         }
     }
 
+    std::sort(indices.begin(), indices.end());
+
+    return indices;
+}
+
+// Lists the indices of every segment, archived or not, ascending -- read_all/read_after/
+// record_count_hint must see archived segments exactly as if they were never moved. A segment index
+// only ever appears in one of the two directories at a time, so a simple concatenation-then-sort is
+// enough; no de-duplication is needed.
+std::vector<size_t> existing_segment_indices(const std::filesystem::path &segment_directory) {
+    auto indices = list_segment_indices_in(segment_directory);
+    auto archived = list_segment_indices_in(archive_directory(segment_directory));
+
+    indices.insert(indices.end(), archived.begin(), archived.end());
     std::sort(indices.begin(), indices.end());
 
     return indices;
@@ -291,6 +325,29 @@ std::vector<Assertion> AssertionLog::read_after(AssertionId last_seen_id) const 
     }
 
     return result;
+}
+
+void AssertionLog::archive_segments_before(AssertionId assertion_id) {
+    std::filesystem::create_directories(archive_directory(segment_directory_));
+
+    // Only ever scans the top-level directory (not the merged archived+unarchived view): a segment
+    // already archived by an earlier call simply won't appear here again, making repeated calls a
+    // no-op for anything already moved.
+    for (size_t index : list_segment_indices_in(segment_directory_)) {
+        if (index >= active_segment_index_) {
+            continue; // the active segment may still receive writes; never archive it
+        }
+
+        // Every non-active segment holds exactly max_records_per_segment_ complete records (see class
+        // comment), so this end id is exact, not an estimate.
+        AssertionId segment_end_id = static_cast<AssertionId>(index + 1) * max_records_per_segment_;
+        if (segment_end_id >= assertion_id) {
+            continue; // not yet entirely before the requested threshold
+        }
+
+        std::filesystem::rename(segment_directory_ / segment_filename(index),
+                                archive_directory(segment_directory_) / segment_filename(index));
+    }
 }
 
 AssertionId AssertionLog::record_count_hint() const {

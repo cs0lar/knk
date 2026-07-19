@@ -1,9 +1,9 @@
 // A guided tour of the Knowledge Kernel's public API: bitemporal commit/query, supersession and
 // retraction, audit/timeline history, the Phase 6 explain()/find_conflicts() read-side queries, the
 // Phase 5 Catalog (name/value interning), the Phase 5 PayloadStore (documents), the Phase 7
-// hypothesis/prediction layer and bounded graph traversal, the Phase 8 entity-merge redirect, and
-// recovery across a restart. See examples/catalog_usage.cpp for a narrower, more focused look at just
-// the Catalog.
+// hypothesis/prediction layer and bounded graph traversal, the Phase 8 entity-merge redirect and
+// segment archival, and recovery across a restart. See examples/catalog_usage.cpp for a narrower,
+// more focused look at just the Catalog.
 #include <cstddef>
 #include <filesystem>
 #include <iostream>
@@ -294,6 +294,18 @@ int main() {
                   << alice << ")\n";
         print_facts("current(duplicate) -- resolves transparently to Alice's facts:", kernel,
                     kernel.current(alice_duplicate));
+
+        // --- Segment archival (Phase 8) --------------------------------------------------
+        // Compaction, not deletion: moves already-rolled-from assertion-log segments into
+        // segments/archive/, out of the hot working set. With this demo's default segment capacity
+        // (100,000 records) everything committed so far still lives in the one active segment, so
+        // there is nothing yet to move -- the call is still safe and idempotent to make regardless.
+        // read_all/read_after (and so every audit/timeline query) see archived segments exactly as
+        // before; true deletion is an explicit non-goal, never an implicit side effect of this call.
+        std::cout << "\n== Segment archival ==\n";
+        kernel.archive_segments_before(alice_predicted_at_gamma);
+        std::cout << "  archive_segments_before(...) recorded -- a no-op here, since nothing has "
+                  << "rolled out of the active segment yet\n";
 
         // --- The reified command layer (Phase 6) --------------------------------------
         // Every public operation above can also be issued as data through execute(), which dispatches

@@ -803,7 +803,10 @@ Future work :
 
 * ✅ Entity merge (`merge_entities`) — one-way, append-only redirect for deduplicating entities
 * ✅ `Catalog::resolve(EntityId)` — transitive redirect resolution at the query boundary
-* Segment archival (`archive_segments_before`) — compaction, not deletion
+* ✅ Segment archival (`archive_segments_before`) — compaction, not deletion
+
+**Phase 8 is complete.** All three deliverables above are implemented, tested, documented, and (where
+applicable) covered by the `KernelCommand`/`KernelResult` layer.
 
 Design :
 
@@ -844,7 +847,7 @@ Minimum tests to add :
 * `archive_segments_before_moves_only_fully_rolled_segments`
 * `archived_segments_remain_readable_via_read_all`
 
-Current implementation status (entity merge only — segment archival is not yet implemented) :
+Current implementation status :
 
 * `EntityMergeLog` (`include/kernel/entity_merge_log.hpp`/`src/entity_merge_log.cpp`) persists
  `{EntityId absorbed, EntityId surviving, Timestamp merged_at}` to `catalog/entity_merges.log`.
@@ -899,6 +902,30 @@ Current implementation status (entity merge only — segment archival is not yet
  `corrupt_entity_merge_log_is_fatal_on_startup`), and additions to `tests/kernel_command_tests.cpp`
  (`merge_entities_command_round_trips`, `resolve_entity_command_round_trips`).
  `examples/knowledge_kernel_demo.cpp` gains an "Entity merge" section.
+* `AssertionLog::archive_segments_before(AssertionId)` moves every already-rolled-from segment
+ entirely before the given id (its exact end id, `(index + 1) * max_records_per_segment`, `<`
+ the threshold) from `segments/` into a new `segments/archive/` subdirectory via
+ `std::filesystem::rename`, skipping the active segment unconditionally regardless of the threshold —
+ it may still receive writes, so it is never guaranteed complete the way an already-rolled-from
+ segment is. Idempotent: a segment already moved simply doesn't reappear in a later top-level scan, so
+ a repeat call is a no-op for it.
+* `AssertionLog`'s internal segment-path/index-listing helpers were generalized to treat
+ `segments/archive/` as an equally valid home for any given segment index: `segment_path` now checks
+ the top-level location first and falls back to the archive location, and `existing_segment_indices`
+ (used by `read_all`/`read_after`/`record_count_hint`) now merges indices from both directories. A
+ segment lives in exactly one of the two locations at a time, so this needed no de-duplication logic.
+ The net effect is that `read_all`/`read_after`/`record_count_hint` are completely unaffected by
+ archival — the public `AssertionLog` interface gained only the one new method. `StorageEngine`/
+ `KnowledgeKernel` expose the same operation 1:1 as `archive_segments_before`, with no new storage of
+ their own (unlike every other Phase 5-8 addition, this needed no new log/persisted state at all).
+* Covered by additions to `tests/assertion_log_tests.cpp`
+ (`assertion_log_archive_segments_before_moves_only_fully_rolled_segments`,
+ `assertion_log_archived_segments_remain_readable_via_read_all`), a
+ `tests/knowledge_kernel_tests.cpp` integration test
+ (`archive_segments_before_is_transparent_to_queries_and_survives_restart`, using a small
+ `StorageConfig::max_records_per_segment` to force multiple segments), and a
+ `tests/kernel_command_tests.cpp` round-trip test (`archive_segments_before_command_round_trips`) for
+ the new `ArchiveSegmentsBeforeCommand`.
 * Verified on 2026-07-19: `cmake --build build && ctest --test-dir build --output-on-failure` passes
  (17/17 test binaries).
 
