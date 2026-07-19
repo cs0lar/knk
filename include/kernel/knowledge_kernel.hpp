@@ -144,6 +144,19 @@ class KnowledgeKernel {
 
     std::optional<ProvenanceRecord> provenance_for(AssertionId assertion_id) const;
 
+    // Merges absorb into keep: a one-way, append-only redirect durably recorded in EntityMergeLog,
+    // then applied to the in-memory Catalog. Assertions are never rewritten by a merge -- assertions_
+    // keeps whatever EntityId was originally committed, and resolve_entity (plus every query-path
+    // method below that takes a caller-supplied EntityId) follows the redirect transitively at the
+    // query boundary instead. merged_at is caller-supplied, matching how observed_at/recorded_at are
+    // supplied elsewhere -- the kernel never reads a wall clock, keeping replay deterministic. A merge
+    // that turns out wrong is corrected by a later merge_entities call, never by mutating this one.
+    void merge_entities(EntityId keep, EntityId absorb, Timestamp merged_at);
+
+    // Resolves id through any recorded entity-merge redirects, transitively, to its canonical
+    // surviving id. Identity for an id that was never absorbed into another.
+    EntityId resolve_entity(EntityId id) const;
+
     // Executes a reified command by dispatching 1:1 to the mirrored public method above and wrapping
     // its return value in a KernelResult. This is a thin, closed dispatch boundary, not new business
     // logic -- see include/kernel/kernel_command.hpp. Non-const because the command set includes

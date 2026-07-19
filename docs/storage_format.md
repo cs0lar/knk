@@ -222,6 +222,46 @@ fatal, uncaught `std::runtime_error` propagating straight out of `KnowledgeKerne
 replayed in the same uncaught block as the catalog logs and payload store, before the
 snapshot/checkpoint/tail-vs-full-replay branching that only concerns the derived Phase 3 indexes.
 
+## Entity merge log
+
+`catalog/entity_merges.log` (`EntityMergeLog`) records one-way entity-merge redirects — the durable
+backing for `KnowledgeKernel::merge_entities`/`resolve_entity` and `Catalog::resolve`. It reuses the
+exact same 8-byte header and `[record_size][payload][crc32]` framing as the other logs, but with a
+**fixed-size** payload (like `ObservedTimeIndexLog`, not the variable-length catalog/provenance logs),
+since every field is a fixed-width integer: `EntityMergeRecord` is `[EntityId absorbed (8)][EntityId
+surviving (8)][Timestamp merged_at (8)]`, 24 bytes total. A `record_size` other than exactly 24 always
+throws `std::runtime_error`, with the same tail-tolerant treatment of a torn trailing frame as every
+other log (indistinguishable from a crash mid-append).
+
+`merged_at` is a caller-supplied `Timestamp`, matching how `observed_at`/`recorded_at` are supplied
+elsewhere — the kernel never reads a wall clock, keeping replay deterministic.
+
+The log is append-only and one-way: merging keeps growing a chain of redirects (`A -> B`, then later
+`B -> C`) rather than ever rewriting an earlier record. `Catalog::resolve` follows the chain
+transitively at read time, so nothing here needs to be collapsed or rewritten when a later merge
+extends the chain. `Catalog` itself only stores the direct, one-hop redirects (`merge_redirects_`);
+transitivity is entirely a property of how `resolve` walks the map.
+
+**`EntityMergeLog` is authoritative, not a derived/rebuildable index**, for the same reason the catalog
+and provenance logs are: `assertions.log` never records that two `EntityId`s were merged, so there is
+nothing to rebuild this mapping from. Consequently there is no `overwrite_all`/self-heal path, and
+non-tail corruption is a fatal, uncaught `std::runtime_error` propagating straight out of
+`KnowledgeKernel`'s constructor — replayed in the same uncaught block as the catalog logs, payload
+store, and provenance log, before the snapshot/checkpoint/tail-vs-full-replay branching that only
+concerns the derived Phase 3 indexes.
+
+**Assertions are never rewritten by a merge.** `assertions_` and every persisted index keep whatever
+`EntityId` was originally committed as a subject/object; resolution happens only at the query
+boundary. Every `KnowledgeKernel` query method that takes a caller-supplied subject `EntityId`
+(`assertions_for_subject`, `current`, `hypotheses_for`, `neighbors`, `co_occurring_predicates`,
+`valid_at`, `known_at`, `valid_at_known_at`, `valid_time_timeline`, `observed_time_timeline`,
+`commit_history`, `find_conflicts`) calls `Catalog::resolve` on that subject before doing anything
+else, so a caller still holding an absorbed id transparently gets the surviving id's results. Catalog
+name/value lookups (`entity_name`, `entity_value`, `predicate_name`, `find_entity`, `find_value`,
+`find_predicate`, `document_content`) are deliberately **not** resolved — they answer "what is this id
+called/worth," a fact about the specific id, not "which real-world entity does this id represent,"
+so merging does not change what they return for the absorbed id.
+
 ## Segmented assertion log
 
 Unlike the three index logs, the assertion log (`AssertionLog`) is not a single file. It is a

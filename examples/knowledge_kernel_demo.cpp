@@ -1,8 +1,9 @@
 // A guided tour of the Knowledge Kernel's public API: bitemporal commit/query, supersession and
 // retraction, audit/timeline history, the Phase 6 explain()/find_conflicts() read-side queries, the
 // Phase 5 Catalog (name/value interning), the Phase 5 PayloadStore (documents), the Phase 7
-// hypothesis/prediction layer and bounded graph traversal, and recovery across a restart. See
-// examples/catalog_usage.cpp for a narrower, more focused look at just the Catalog.
+// hypothesis/prediction layer and bounded graph traversal, the Phase 8 entity-merge redirect, and
+// recovery across a restart. See examples/catalog_usage.cpp for a narrower, more focused look at just
+// the Catalog.
 #include <cstddef>
 #include <filesystem>
 #include <iostream>
@@ -279,6 +280,20 @@ int main() {
                          kernel.neighbors(beta, 1));
         print_predicate_ids("co_occurring_predicates(Alice) -- relationship types active for Alice right now:", kernel,
                             kernel.co_occurring_predicates(alice));
+
+        // --- Entity merge (Phase 8) -----------------------------------------------------
+        // Suppose "Alice Smith" was accidentally interned as a second, duplicate entity. merge_entities
+        // records a one-way redirect; it never rewrites assertions_ or the index -- resolve_entity (and
+        // every query-path method that takes a subject) transparently follows the redirect instead, so
+        // a caller still holding the duplicate id keeps working correctly.
+        std::cout << "\n== Entity merge ==\n";
+        EntityId alice_duplicate = kernel.intern_entity("Alice Smith (duplicate)");
+        kernel.merge_entities(alice, alice_duplicate, 1735689600);
+        std::cout << "  merge_entities(Alice, Alice Smith (duplicate)) recorded\n";
+        std::cout << "  resolve_entity(duplicate) -> " << kernel.resolve_entity(alice_duplicate) << " (Alice is "
+                  << alice << ")\n";
+        print_facts("current(duplicate) -- resolves transparently to Alice's facts:", kernel,
+                    kernel.current(alice_duplicate));
 
         // --- The reified command layer (Phase 6) --------------------------------------
         // Every public operation above can also be issued as data through execute(), which dispatches

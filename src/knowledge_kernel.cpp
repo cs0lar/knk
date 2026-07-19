@@ -48,6 +48,13 @@ KnowledgeKernel::KnowledgeKernel(StorageConfig config) : storage_(config), index
         provenance_[record.assertion_id] = record;
     }
 
+    // Entity-merge replay lives in the same uncaught, authoritative block: assertions.log never
+    // encodes a merge decision, so there is nothing to rebuild entity_merges.log from and a non-tail-
+    // corrupt file is a fatal startup error, same as the catalog logs above.
+    for (const auto &record : storage_.load_entity_merges()) {
+        catalog_.add_merge(record.absorbed, record.surviving);
+    }
+
     // A snapshot only ever benefits the "indexes trusted" fast path below: the full-rebuild fallback
     // path must apply() every record from id 1 to rebuild IndexManager from scratch regardless, and
     // pre-seeding assertions_ from a snapshot while also apply()-ing those same records would
@@ -306,6 +313,8 @@ std::optional<Assertion> KnowledgeKernel::get(AssertionId id) const {
 std::vector<Assertion> KnowledgeKernel::assertions_for_subject(EntityId subject) const {
     std::vector<Assertion> result;
 
+    subject = catalog_.resolve(subject);
+
     auto assertions = index_manager_.assertions_for_subject(subject);
     if (assertions.empty()) {
         return result;
@@ -324,6 +333,11 @@ std::vector<Assertion> KnowledgeKernel::assertions_for_subject(EntityId subject)
 
 std::vector<Assertion> KnowledgeKernel::current(EntityId subject) const {
     std::vector<Assertion> result;
+
+    // Resolving here (rather than in IndexManager) is what makes merge_entities take effect at the
+    // query boundary only: a caller still holding the absorbed id transparently gets the surviving
+    // id's current facts, with no rewrite of assertions_ or the index.
+    subject = catalog_.resolve(subject);
 
     auto predicates = index_manager_.predicates_for_subject(subject);
 
@@ -344,6 +358,8 @@ std::vector<Assertion> KnowledgeKernel::current(EntityId subject) const {
 std::vector<Assertion> KnowledgeKernel::hypotheses_for(EntityId subject) const {
     std::vector<Assertion> result;
 
+    subject = catalog_.resolve(subject);
+
     for (AssertionId id : index_manager_.assertions_for_subject(subject)) {
         auto assertion = get(id);
         if (assertion.has_value() && assertion->status == AssertionStatus::Hypothesis) {
@@ -355,6 +371,8 @@ std::vector<Assertion> KnowledgeKernel::hypotheses_for(EntityId subject) const {
 }
 
 std::vector<EntityId> KnowledgeKernel::neighbors(EntityId subject, size_t max_hops) const {
+    subject = catalog_.resolve(subject);
+
     std::vector<EntityId> result;
     std::unordered_set<EntityId> visited{subject};
     std::vector<EntityId> frontier{subject};
@@ -386,11 +404,13 @@ std::vector<EntityId> KnowledgeKernel::neighbors(EntityId subject, size_t max_ho
 }
 
 std::vector<PredicateId> KnowledgeKernel::co_occurring_predicates(EntityId subject) const {
-    return index_manager_.predicates_for_subject(subject);
+    return index_manager_.predicates_for_subject(catalog_.resolve(subject));
 }
 
 std::vector<Assertion> KnowledgeKernel::valid_at(EntityId subject, Timestamp t) const {
     std::vector<Assertion> result;
+
+    subject = catalog_.resolve(subject);
 
     auto assertions = index_manager_.assertions_for_subject(subject);
     if (assertions.empty()) {
@@ -418,6 +438,8 @@ std::vector<Assertion> KnowledgeKernel::valid_at(EntityId subject, Timestamp t) 
 std::vector<Assertion> KnowledgeKernel::known_at(EntityId subject, Timestamp t) const {
     std::vector<Assertion> result;
 
+    subject = catalog_.resolve(subject);
+
     auto assertions = index_manager_.observed_before(subject, t);
     if (assertions.empty()) {
         return result;
@@ -440,6 +462,8 @@ std::vector<Assertion> KnowledgeKernel::known_at(EntityId subject, Timestamp t) 
 std::vector<Assertion> KnowledgeKernel::valid_at_known_at(EntityId subject, Timestamp valid_time,
                                                           Timestamp observed_time) const {
     std::vector<Assertion> result;
+
+    subject = catalog_.resolve(subject);
 
     auto assertions = index_manager_.observed_before(subject, observed_time);
     if (assertions.empty()) {
@@ -466,6 +490,8 @@ std::vector<Assertion> KnowledgeKernel::valid_at_known_at(EntityId subject, Time
 std::vector<Assertion> KnowledgeKernel::valid_time_timeline(EntityId subject, PredicateId predicate) const {
     std::vector<Assertion> result;
 
+    subject = catalog_.resolve(subject);
+
     auto assertions = index_manager_.assertions_for_subject(subject);
     if (assertions.empty()) {
         return result;
@@ -491,6 +517,8 @@ std::vector<Assertion> KnowledgeKernel::valid_time_timeline(EntityId subject, Pr
 std::vector<Assertion> KnowledgeKernel::observed_time_timeline(EntityId subject, PredicateId predicate) const {
     std::vector<Assertion> result;
 
+    subject = catalog_.resolve(subject);
+
     auto assertions = index_manager_.assertions_for_subject(subject);
     if (assertions.empty()) {
         return result;
@@ -515,6 +543,8 @@ std::vector<Assertion> KnowledgeKernel::observed_time_timeline(EntityId subject,
 
 std::vector<Assertion> KnowledgeKernel::commit_history(EntityId subject, PredicateId predicate) const {
     std::vector<Assertion> result;
+
+    subject = catalog_.resolve(subject);
 
     auto assertions = index_manager_.assertions_for_subject(subject);
     if (assertions.empty()) {
@@ -561,6 +591,8 @@ std::vector<Assertion> KnowledgeKernel::explain(AssertionId id) const {
 std::vector<std::pair<Assertion, Assertion>> KnowledgeKernel::find_conflicts(EntityId subject,
                                                                              PredicateId predicate) const {
     std::vector<std::pair<Assertion, Assertion>> conflicts;
+
+    subject = catalog_.resolve(subject);
 
     std::vector<Assertion> active;
     for (AssertionId id : index_manager_.assertions_for_subject(subject)) {
@@ -677,5 +709,14 @@ std::optional<ProvenanceRecord> KnowledgeKernel::provenance_for(AssertionId asse
 
     return it->second;
 }
+
+void KnowledgeKernel::merge_entities(EntityId keep, EntityId absorb, Timestamp merged_at) {
+    // Durable-before-visible: append to the log first, then apply to the in-memory Catalog, exactly
+    // like commit's append-then-apply ordering.
+    storage_.append_entity_merge_entry(absorb, keep, merged_at);
+    catalog_.add_merge(absorb, keep);
+}
+
+EntityId KnowledgeKernel::resolve_entity(EntityId id) const { return catalog_.resolve(id); }
 
 } // namespace knk

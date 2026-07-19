@@ -47,6 +47,8 @@ struct StorageConfig {
 
     std::filesystem::path predicate_catalog_path() const { return catalog_directory() / "predicates.log"; }
 
+    std::filesystem::path entity_merge_log_path() const { return catalog_directory() / "entity_merges.log"; }
+
     std::filesystem::path provenance_directory() const { return root / "provenance"; }
 
     std::filesystem::path provenance_log_path() const { return provenance_directory() / "provenance.log"; }

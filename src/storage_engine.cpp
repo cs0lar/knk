@@ -9,7 +9,7 @@ StorageEngine::StorageEngine(StorageConfig config)
       current_index_log_(config_.current_index_path()), checkpoint_(config_.checkpoint_path()),
       snapshot_store_(config_.snapshot_path()), entity_catalog_log_(config_.entity_catalog_path()),
       predicate_catalog_log_(config_.predicate_catalog_path()), payload_store_(config_.payload_directory()),
-      provenance_log_(config_.provenance_log_path()) {
+      provenance_log_(config_.provenance_log_path()), entity_merge_log_(config_.entity_merge_log_path()) {
     std::filesystem::create_directories(config_.root);
     std::filesystem::create_directories(config_.index_directory());
     std::filesystem::create_directories(config_.payload_directory());
@@ -97,6 +97,12 @@ void StorageEngine::append_provenance_entry(AssertionId assertion_id, EntityId s
 }
 
 std::vector<ProvenanceRecord> StorageEngine::load_provenance() const { return provenance_log_.read_all(); }
+
+void StorageEngine::append_entity_merge_entry(EntityId absorbed, EntityId surviving, Timestamp merged_at) {
+    entity_merge_log_.append(EntityMergeRecord{absorbed, surviving, merged_at});
+}
+
+std::vector<EntityMergeRecord> StorageEngine::load_entity_merges() const { return entity_merge_log_.read_all(); }
 
 const StorageConfig &StorageEngine::config() const { return config_; }
 

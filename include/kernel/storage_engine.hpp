@@ -10,6 +10,7 @@
 #include "kernel/assertion_log.hpp"
 #include "kernel/current_index_log.hpp"
 #include "kernel/entity_catalog_log.hpp"
+#include "kernel/entity_merge_log.hpp"
 #include "kernel/ids.hpp"
 #include "kernel/index_checkpoint.hpp"
 #include "kernel/observed_time_index_log.hpp"
@@ -70,6 +71,10 @@ class StorageEngine {
 
     std::vector<PredicateCatalogRecord> load_predicate_catalog() const;
 
+    void append_entity_merge_entry(EntityId absorbed, EntityId surviving, Timestamp merged_at);
+
+    std::vector<EntityMergeRecord> load_entity_merges() const;
+
     void write_payload(EntityId id, std::span<const std::byte> content);
 
     std::optional<std::vector<std::byte>> load_payload(EntityId id) const;
@@ -93,6 +98,7 @@ class StorageEngine {
     SnapshotStore snapshot_store_;
     EntityCatalogLog entity_catalog_log_;
     PredicateCatalogLog predicate_catalog_log_;
+    EntityMergeLog entity_merge_log_;
     PayloadStore payload_store_;
     ProvenanceLog provenance_log_;
 };

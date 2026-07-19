@@ -138,6 +138,34 @@ void next_predicate_id_advances_past_the_highest_added_id() {
     assert(catalog.next_predicate_id() == 6);
 }
 
+void resolve_is_identity_for_an_unmerged_id() {
+    Catalog catalog;
+
+    assert(catalog.resolve(1) == 1);
+    assert(catalog.resolve(42) == 42);
+}
+
+void resolve_follows_a_merge_redirect() {
+    Catalog catalog;
+
+    catalog.add_merge(2, 1);
+
+    assert(catalog.resolve(2) == 1);
+    assert(catalog.resolve(1) == 1);
+}
+
+void resolve_collapses_transitive_merge_chains() {
+    Catalog catalog;
+
+    // A merged into B, then B merged into C: resolve(A) must land on C, not stop at B.
+    catalog.add_merge(1, 2);
+    catalog.add_merge(2, 3);
+
+    assert(catalog.resolve(1) == 3);
+    assert(catalog.resolve(2) == 3);
+    assert(catalog.resolve(3) == 3);
+}
+
 } // namespace
 
 int main() {
@@ -152,6 +180,9 @@ int main() {
     find_predicate_for_unknown_name_returns_nullopt();
     predicate_name_returns_the_interned_name_for_a_known_id();
     next_predicate_id_advances_past_the_highest_added_id();
+    resolve_is_identity_for_an_unmerged_id();
+    resolve_follows_a_merge_redirect();
+    resolve_collapses_transitive_merge_chains();
 
     std::cout << "All catalog tests passed.\n";
 }
