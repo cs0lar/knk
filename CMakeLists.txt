@@ -46,6 +46,33 @@ target_link_libraries(catalog_usage_example
     PRIVATE kernel
 )
 
+# Phase 9 benchmarks (see AGENTS.md "Performance Rules"): not added to ctest, since these report
+# throughput/latency numbers, not pass/fail correctness. Build in Release for meaningful numbers,
+# e.g. `cmake -S . -B build-release -DCMAKE_BUILD_TYPE=Release`.
+add_executable(commit_benchmark
+    benchmarks/commit_benchmark.cpp
+)
+
+target_link_libraries(commit_benchmark
+    PRIVATE kernel
+)
+
+add_executable(query_benchmark
+    benchmarks/query_benchmark.cpp
+)
+
+target_link_libraries(query_benchmark
+    PRIVATE kernel
+)
+
+add_executable(replay_benchmark
+    benchmarks/replay_benchmark.cpp
+)
+
+target_link_libraries(replay_benchmark
+    PRIVATE kernel
+)
+
 enable_testing()
 
 add_executable(knowledge_kernel_tests

@@ -943,6 +943,41 @@ Future work :
 
 Do not introduce advanced performance features before the correctness model is stable.
 
+Current implementation status :
+
+* Benchmark harness added ahead of any actual optimization, per the Performance Rules' "add or update a
+ benchmark, record a baseline" first step. `benchmarks/benchmark_harness.hpp` is a small header-only
+ `Timer`/`report()` pair shared by three executables (`benchmarks/commit_benchmark.cpp`,
+ `query_benchmark.cpp`, `replay_benchmark.cpp`), matching the hand-rolled, no-framework style already
+ used for `tests/`. They are wired into `CMakeLists.txt` as plain `add_executable` targets, deliberately
+ **not** registered via `add_test`/`ctest`, since they report throughput/latency numbers rather than
+ pass/fail — building/running them is a manual step (see `docs/benchmarks.md`).
+* `commit_benchmark` measures sequential `commit()` throughput (distinct subjects, isolating the
+ append/index/checkpoint path from supersession bookkeeping) and `commit_superseding()` throughput
+ (repeated supersession of one subject/predicate, adding `mark_superseded`'s current-index tombstone
+ write). `query_benchmark` measures `current`/`valid_at`/`known_at`/`neighbors` throughput over a
+ 5,000-subject pre-populated kernel. `replay_benchmark` compares startup/reopen cost across three
+ scenarios against the same populated log: trusted persisted indexes (normal fast path), a forced full
+ replay (checkpoint file deleted, same fallback trigger the `corrupt_*_falls_back_to_replay_and_self_
+ heals` tests use), and a reopen immediately after an explicit `write_snapshot()` call.
+* The default `build/` tree stays `Debug` (unoptimized) for day-to-day development; benchmarks must be
+ built in a separate `Release` tree (`cmake -S . -B build-release -DCMAKE_BUILD_TYPE=Release`) to
+ produce meaningful numbers — `CMakeLists.txt` was not changed to default to `Release`, so the existing
+ test/debug workflow is unaffected.
+* Baseline numbers recorded 2026-07-20 (single run each, this container): `commit()` ~67-69 commits/sec
+ flat across 1k/10k (fsync-dominated, not O(n)); reads are 4-6 orders of magnitude faster than commits
+ (hundreds of thousands to low millions of queries/sec, no durability write on the read path); forced
+ full replay is ~13-30x slower than a trusted-index reopen at the 2k-5k record scale tested, though at
+ that scale it's dominated by the three index-log rewrites' fixed fsync cost rather than the O(n)
+ `apply()` loop. Full numbers, methodology, and a per-Phase-9-candidate read of what each measurement
+ does and doesn't cover live in `docs/benchmarks.md` — this container's `fsync` latency is unusually
+ high, so absolute numbers should be re-measured on real target hardware before being trusted; relative
+ deltas from a future before/after optimization comparison are what the Performance Rules workflow
+ actually needs.
+* No optimization work (SIMD, mmap, lock-free readers, NUMA allocation, background compaction, Bloom
+ filters, compression) has been implemented yet — this status block covers only the benchmark/baseline
+ groundwork the Performance Rules require before any of that can start.
+
 -- -
 
 ## Architectural Principles
