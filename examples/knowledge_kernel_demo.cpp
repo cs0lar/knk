@@ -3,7 +3,9 @@
 // Phase 5 Catalog (name/value interning), the Phase 5 PayloadStore (documents), the Phase 7
 // hypothesis/prediction layer and bounded graph traversal, the Phase 8 entity-merge redirect and
 // segment archival, and recovery across a restart. See examples/catalog_usage.cpp for a narrower,
-// more focused look at just the Catalog.
+// more focused look at just the Catalog, and examples/agent_workflow_demo.cpp for a single
+// chronological scenario chaining these features together the way a real caller would, rather than
+// demonstrating each in isolation.
 #include <cstddef>
 #include <filesystem>
 #include <iostream>

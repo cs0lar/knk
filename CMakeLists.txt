@@ -46,6 +46,14 @@ target_link_libraries(catalog_usage_example
     PRIVATE kernel
 )
 
+add_executable(agent_workflow_demo
+    examples/agent_workflow_demo.cpp
+)
+
+target_link_libraries(agent_workflow_demo
+    PRIVATE kernel
+)
+
 # Phase 9 benchmarks (see AGENTS.md "Performance Rules"): not added to ctest, since these report
 # throughput/latency numbers, not pass/fail correctness. Build in Release for meaningful numbers,
 # e.g. `cmake -S . -B build-release -DCMAKE_BUILD_TYPE=Release`.

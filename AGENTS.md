@@ -1307,6 +1307,20 @@ valid_to == OPEN_ENDED
 
 means the assertion remains valid until closed, superseded, or retracted.
 
+**A subtlety worth being explicit about, surfaced while writing `examples/agent_workflow_demo.cpp`:**
+`known_at`/`valid_at_known_at` filter on `status == Active` at query time, not status as of
+`observed_time`. They answer "of what had been observed by `t`, what do we *currently* still
+consider Active" — not "what would `current()`/`valid_at()` have returned if called back at `t`."
+Concretely: if assertion A was observed at `t0` and later superseded at `t1 > t0`, then
+`known_at(subject, t)` for any `t` with `t0 <= t < t1` returns A right up until `t1`, but returns
+*nothing* for A once queried after `t1` — even for the same historical `t` cutoff, since A is no
+longer Active. There is no persisted "status as of a past commit" to query instead; reconstructing
+that would require replaying the log up to a given commit point, which is not something either
+method does today. Not a bug — the existing tests (`known_at_excludes_future_observed_fact`,
+`valid_at_known_at_respects_both_times`) already lock in the current-status-filtered behavior — but
+worth knowing before reaching for these methods to answer "what did we believe back then," which
+they do not actually answer once a later correction has landed.
+
 -- -
 
 ## Storage Semantics
