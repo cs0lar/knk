@@ -248,6 +248,17 @@ int main() {
     print_facts("\ncurrent(Alice) after retracting the stale claim -- exactly one active fact again:", kernel,
                 kernel.current(alice));
 
+    // current(subject) only ever answers in the subject -> object direction. An application built on
+    // top of the kernel -- a CRM answering "who works at Gamma Startup," or a retriever pulling every
+    // WORKS_AT edge to build a subgraph for an agent -- needs the reverse and kernel-wide directions
+    // too, without already knowing which subjects to ask about.
+    print_facts("\ncurrent_by_object(Gamma Startup) -- reverse-direction lookup, \"who currently works at Gamma "
+                "Startup\":",
+                kernel, kernel.current_by_object(gamma));
+    print_facts("current_by_predicate(works_at) -- kernel-wide lookup, every currently-active WORKS_AT "
+                "relationship, any subject:",
+                kernel, kernel.current_by_predicate(works_at));
+
     print_lineage_with_provenance(
         "\nNorth Star: \"What evidence supports this hypothesis?\" -- explain(confirmed Gamma claim) traces "
         "straight back to the original prediction it confirms:",

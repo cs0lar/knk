@@ -31,6 +31,7 @@ void IndexManager::restore_current_index_entry(EntityId subject, PredicateId pre
     current_index_[key].push_back(id);
     assertion_keys_[id] = key;
     predicate_index_[subject].insert(predicate);
+    predicate_current_index_[predicate].push_back(id);
 }
 
 void IndexManager::restore_object_entry(EntityId object, AssertionId id, bool active) {
@@ -77,8 +78,14 @@ void IndexManager::remove_from_current(AssertionId id) {
             if (mapIt->second.empty()) {
                 predicate_index_[key->second.subject].erase(key->second.predicate);
             }
-            assertion_keys_.erase(id);
         }
+
+        auto predicate_entries = predicate_current_index_.find(key->second.predicate);
+        if (predicate_entries != predicate_current_index_.end()) {
+            std::erase(predicate_entries->second, id);
+        }
+
+        assertion_keys_.erase(id);
     }
 }
 
@@ -152,6 +159,22 @@ std::vector<AssertionId> IndexManager::current_assertions_by_object(EntityId obj
     auto assertion_ids = object_index_.find(object);
 
     if (assertion_ids == object_index_.end()) {
+        return result;
+    }
+
+    for (AssertionId id : assertion_ids->second) {
+        result.push_back(id);
+    }
+
+    return result;
+}
+
+std::vector<AssertionId> IndexManager::current_assertions_by_predicate(PredicateId predicate) const {
+    std::vector<AssertionId> result;
+
+    auto assertion_ids = predicate_current_index_.find(predicate);
+
+    if (assertion_ids == predicate_current_index_.end()) {
         return result;
     }
 

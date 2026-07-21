@@ -60,6 +60,10 @@ KernelResult KnowledgeKernel::execute(const KernelCommand &command) {
                 return assertions_for_subject(cmd.subject);
             } else if constexpr (std::is_same_v<T, CurrentCommand>) {
                 return current(cmd.subject);
+            } else if constexpr (std::is_same_v<T, CurrentByObjectCommand>) {
+                return current_by_object(cmd.object);
+            } else if constexpr (std::is_same_v<T, CurrentByPredicateCommand>) {
+                return current_by_predicate(cmd.predicate);
             } else if constexpr (std::is_same_v<T, ValidAtCommand>) {
                 return valid_at(cmd.subject, cmd.valid_time);
             } else if constexpr (std::is_same_v<T, KnownAtCommand>) {

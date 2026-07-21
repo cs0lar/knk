@@ -43,6 +43,14 @@ class IndexManager {
     // reverse-direction counterpart to current_assertions.
     std::vector<AssertionId> current_assertions_by_object(EntityId object) const;
 
+    // Current (Active, open-ended) assertion ids for the given predicate, any subject -- e.g. every
+    // WORKS_AT relationship in the kernel. Unlike current_assertions_by_object, this needs no
+    // separate restore_*_entry/bulk-seed path: predicate is already part of every persisted
+    // current_index.log record, so folding this into restore_current_index_entry (see index_manager.cpp)
+    // keeps it correct across restart on both the fast trusted-index path and the full-replay path for
+    // free.
+    std::vector<AssertionId> current_assertions_by_predicate(PredicateId predicate) const;
+
     std::vector<AssertionId> observed_before(EntityId subject, Timestamp t) const;
     std::vector<std::tuple<EntityId, Timestamp, AssertionId>> observed_time_entries() const;
     std::vector<std::pair<EntityId, AssertionId>> subject_index_entries() const;
@@ -55,6 +63,7 @@ class IndexManager {
     std::unordered_map<SubjectPredicateKey, std::vector<AssertionId>> current_index_;
     std::unordered_map<AssertionId, SubjectPredicateKey> assertion_keys_;
     std::unordered_map<EntityId, std::unordered_set<PredicateId>> predicate_index_;
+    std::unordered_map<PredicateId, std::vector<AssertionId>> predicate_current_index_;
     std::unordered_map<EntityId, std::vector<std::pair<Timestamp, AssertionId>>> observed_time_index_;
     std::unordered_map<EntityId, std::vector<AssertionId>> object_index_;
     std::unordered_map<AssertionId, EntityId> assertion_object_;

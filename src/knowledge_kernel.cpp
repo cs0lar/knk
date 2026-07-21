@@ -355,6 +355,34 @@ std::vector<Assertion> KnowledgeKernel::current(EntityId subject) const {
     return result;
 }
 
+std::vector<Assertion> KnowledgeKernel::current_by_object(EntityId object) const {
+    std::vector<Assertion> result;
+
+    object = catalog_.resolve(object);
+
+    for (AssertionId id : index_manager_.current_assertions_by_object(object)) {
+        auto assertion = get(id);
+        if (assertion.has_value()) {
+            result.push_back(*assertion);
+        }
+    }
+
+    return result;
+}
+
+std::vector<Assertion> KnowledgeKernel::current_by_predicate(PredicateId predicate) const {
+    std::vector<Assertion> result;
+
+    for (AssertionId id : index_manager_.current_assertions_by_predicate(predicate)) {
+        auto assertion = get(id);
+        if (assertion.has_value()) {
+            result.push_back(*assertion);
+        }
+    }
+
+    return result;
+}
+
 std::vector<Assertion> KnowledgeKernel::hypotheses_for(EntityId subject) const {
     std::vector<Assertion> result;
 

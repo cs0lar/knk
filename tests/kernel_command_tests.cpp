@@ -350,6 +350,32 @@ void current_command_round_trips() {
     cleanup(root);
 }
 
+void current_by_object_command_round_trips() {
+    auto root = test_root("current_by_object_command_round_trips");
+    KnowledgeKernel kernel(StorageConfig{root});
+    auto s = seed_query_kernel(kernel);
+
+    auto d = kernel.current_by_object(s.beta);
+    auto v = std::get<std::vector<Assertion>>(kernel.execute(CurrentByObjectCommand{s.beta}));
+    assert(ids(d) == ids(v));
+    assert(!v.empty());
+
+    cleanup(root);
+}
+
+void current_by_predicate_command_round_trips() {
+    auto root = test_root("current_by_predicate_command_round_trips");
+    KnowledgeKernel kernel(StorageConfig{root});
+    auto s = seed_query_kernel(kernel);
+
+    auto d = kernel.current_by_predicate(s.works_at);
+    auto v = std::get<std::vector<Assertion>>(kernel.execute(CurrentByPredicateCommand{s.works_at}));
+    assert(ids(d) == ids(v));
+    assert(!v.empty());
+
+    cleanup(root);
+}
+
 void valid_at_command_round_trips() {
     auto root = test_root("valid_at_command_round_trips");
     KnowledgeKernel kernel(StorageConfig{root});
@@ -649,6 +675,8 @@ int main() {
     get_command_round_trips();
     assertions_for_subject_command_round_trips();
     current_command_round_trips();
+    current_by_object_command_round_trips();
+    current_by_predicate_command_round_trips();
     valid_at_command_round_trips();
     known_at_command_round_trips();
     valid_at_known_at_command_round_trips();

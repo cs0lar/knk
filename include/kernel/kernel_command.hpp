@@ -119,6 +119,14 @@ struct CurrentCommand {
     EntityId subject;
 };
 
+struct CurrentByObjectCommand {
+    EntityId object;
+};
+
+struct CurrentByPredicateCommand {
+    PredicateId predicate;
+};
+
 struct ValidAtCommand {
     EntityId subject;
     Timestamp valid_time;
@@ -216,10 +224,10 @@ using KernelCommand = std::variant<
     CommitCommand, CommitRetractionCommand, CommitSupersedingCommand, WriteSnapshotCommand, InternEntityCommand,
     InternValueCommand, InternPredicateCommand, InternDocumentCommand, RecordProvenanceCommand, CommitHypothesisCommand,
     MergeEntitiesCommand, ArchiveSegmentsBeforeCommand, GetCommand, AssertionsForSubjectCommand, CurrentCommand,
-    ValidAtCommand, KnownAtCommand, ValidAtKnownAtCommand, ValidTimeTimelineCommand, ObservedTimeTimelineCommand,
-    CommitHistoryCommand, ChangesSinceCommand, ExplainCommand, FindConflictsCommand, FindEntityCommand,
-    FindValueCommand, FindPredicateCommand, EntityNameCommand, EntityValueCommand, PredicateNameCommand,
-    DocumentContentCommand, ProvenanceForCommand, HypothesesForCommand, NeighborsCommand, CoOccurringPredicatesCommand,
-    ResolveEntityCommand>;
+    CurrentByObjectCommand, CurrentByPredicateCommand, ValidAtCommand, KnownAtCommand, ValidAtKnownAtCommand,
+    ValidTimeTimelineCommand, ObservedTimeTimelineCommand, CommitHistoryCommand, ChangesSinceCommand, ExplainCommand,
+    FindConflictsCommand, FindEntityCommand, FindValueCommand, FindPredicateCommand, EntityNameCommand,
+    EntityValueCommand, PredicateNameCommand, DocumentContentCommand, ProvenanceForCommand, HypothesesForCommand,
+    NeighborsCommand, CoOccurringPredicatesCommand, ResolveEntityCommand>;
 
 } // namespace knk
