@@ -1759,6 +1759,9 @@ Implementation:
  aren't — verified instead by piping JSON-RPC requests into the built binary manually and checking
  the responses.
 
+The full tool list, an example JSON-RPC session, and how to point a real MCP client at the built
+binary live in `docs/mcp_server.md` — this section covers the design decisions, that one covers usage.
+
 The kernel must be correct and recoverable before it becomes broad.
 
 -- -
