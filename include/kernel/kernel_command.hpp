@@ -150,6 +150,10 @@ struct CommitHistoryCommand {
     PredicateId predicate;
 };
 
+struct ChangesSinceCommand {
+    Timestamp observed_since;
+};
+
 struct ExplainCommand {
     AssertionId id;
 };
@@ -213,8 +217,9 @@ using KernelCommand = std::variant<
     InternValueCommand, InternPredicateCommand, InternDocumentCommand, RecordProvenanceCommand, CommitHypothesisCommand,
     MergeEntitiesCommand, ArchiveSegmentsBeforeCommand, GetCommand, AssertionsForSubjectCommand, CurrentCommand,
     ValidAtCommand, KnownAtCommand, ValidAtKnownAtCommand, ValidTimeTimelineCommand, ObservedTimeTimelineCommand,
-    CommitHistoryCommand, ExplainCommand, FindConflictsCommand, FindEntityCommand, FindValueCommand,
-    FindPredicateCommand, EntityNameCommand, EntityValueCommand, PredicateNameCommand, DocumentContentCommand,
-    ProvenanceForCommand, HypothesesForCommand, NeighborsCommand, CoOccurringPredicatesCommand, ResolveEntityCommand>;
+    CommitHistoryCommand, ChangesSinceCommand, ExplainCommand, FindConflictsCommand, FindEntityCommand,
+    FindValueCommand, FindPredicateCommand, EntityNameCommand, EntityValueCommand, PredicateNameCommand,
+    DocumentContentCommand, ProvenanceForCommand, HypothesesForCommand, NeighborsCommand, CoOccurringPredicatesCommand,
+    ResolveEntityCommand>;
 
 } // namespace knk

@@ -98,6 +98,17 @@ class KnowledgeKernel {
 
     std::vector<Assertion> commit_history(EntityId subject, PredicateId predicate) const;
 
+    // Kernel-wide answer to "what changed since t": every assertion (any subject, any predicate)
+    // with observed_at >= observed_since, sorted by observed_at then id for a stable order among
+    // ties. Status-agnostic like commit_history -- new commits, supersessions, retractions, and
+    // hypotheses all count as a "change" -- but unlike commit_history/observed_time_timeline this
+    // does not take a subject or predicate, since the whole point is discovering what changed
+    // without already knowing where to look. A straight scan over assertions_, not an index lookup:
+    // there is no persisted global observed-time ordering (IndexManager's observed-time index is
+    // per-subject), and Phase 9's Performance Rules require a demonstrated bottleneck plus a
+    // benchmark before adding one.
+    std::vector<Assertion> changes_since(Timestamp observed_since) const;
+
     // Walks the supersession/retraction chain from the given assertion back to its root, following
     // supersedes_id/retracts_id one hop at a time. Returns the chain newest-first (the given
     // assertion, then the one it superseded/retracted, ... , down to the original that links no

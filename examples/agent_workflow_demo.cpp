@@ -206,15 +206,10 @@ int main() {
                 "back then\":",
                 kernel, kernel.known_at(alice, FEB_1_2024));
 
-    std::cout << "\nNorth Star: \"What changed since 2024-07-01?\" -- commit_history(Alice, works_at) filtered to "
-                 "observed_at after that cutoff (the kernel exposes full audit history; the caller applies the "
-                 "cutoff):\n";
-    for (const auto &record : kernel.commit_history(alice, works_at)) {
-        if (record.observed_at > JUL_1_2024) {
-            std::cout << "  #" << record.id << " [" << status_label(record.status) << "] "
-                      << entity_label(kernel, record.object) << " (observed_at=" << record.observed_at << ")\n";
-        }
-    }
+    print_facts("\nNorth Star: \"What changed since 2024-07-01?\" -- changes_since(2024-07-01), kernel-wide and "
+                "status-agnostic (unlike commit_history, this doesn't require already knowing which subject/"
+                "predicate to ask about):",
+                kernel, kernel.changes_since(JUL_1_2024));
 
     // --- Forming a prediction --------------------------------------------------------------
     std::cout << "\n== An external model predicts a future change ==\n";

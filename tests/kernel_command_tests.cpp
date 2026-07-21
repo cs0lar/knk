@@ -422,6 +422,19 @@ void commit_history_command_round_trips() {
     cleanup(root);
 }
 
+void changes_since_command_round_trips() {
+    auto root = test_root("changes_since_command_round_trips");
+    KnowledgeKernel kernel(StorageConfig{root});
+    seed_query_kernel(kernel);
+
+    auto d = kernel.changes_since(0);
+    auto v = std::get<std::vector<Assertion>>(kernel.execute(ChangesSinceCommand{0}));
+    assert(ids(d) == ids(v));
+    assert(!v.empty());
+
+    cleanup(root);
+}
+
 void explain_command_round_trips() {
     auto root = test_root("explain_command_round_trips");
     KnowledgeKernel kernel(StorageConfig{root});
@@ -642,6 +655,7 @@ int main() {
     valid_time_timeline_command_round_trips();
     observed_time_timeline_command_round_trips();
     commit_history_command_round_trips();
+    changes_since_command_round_trips();
     explain_command_round_trips();
     find_conflicts_command_round_trips();
     find_entity_command_round_trips();
