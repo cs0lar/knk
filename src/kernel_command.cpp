@@ -72,6 +72,8 @@ KernelResult KnowledgeKernel::execute(const KernelCommand &command) {
                 return observed_time_timeline(cmd.subject, cmd.predicate);
             } else if constexpr (std::is_same_v<T, CommitHistoryCommand>) {
                 return commit_history(cmd.subject, cmd.predicate);
+            } else if constexpr (std::is_same_v<T, ChangesSinceCommand>) {
+                return changes_since(cmd.observed_since);
             } else if constexpr (std::is_same_v<T, ExplainCommand>) {
                 return explain(cmd.id);
             } else if constexpr (std::is_same_v<T, FindConflictsCommand>) {

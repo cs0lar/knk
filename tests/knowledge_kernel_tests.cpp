@@ -492,6 +492,60 @@ void commit_history_returns_history_of_recorded_assertions() {
     cleanup(root);
 }
 
+void changes_since_returns_assertions_observed_at_or_after_cutoff_sorted_by_observed_at() {
+    auto root = test_root("changes_since_returns_assertions_observed_at_or_after_cutoff_sorted_by_observed_at");
+
+    KnowledgeKernel kernel(StorageConfig{root});
+
+    kernel.commit(ALICE, WORKS_AT, ACME, JAN_1_2020, OPEN_ENDED, JAN_1_2024, 0.95);
+    AssertionId at_cutoff = kernel.commit(ALICE, WORKS_AT, BETA, JUL_1_2024, OPEN_ENDED, JUL_1_2024, 0.90);
+    AssertionId after_cutoff = kernel.commit(ALICE, WORKS_AT, GAMMA, JUL_8_2024, OPEN_ENDED, JUL_8_2024, 0.90);
+
+    auto changes = kernel.changes_since(JUL_1_2024);
+
+    assert(changes.size() == 2);
+    assert(changes[0].id == at_cutoff);
+    assert(changes[1].id == after_cutoff);
+
+    cleanup(root);
+}
+
+void changes_since_is_status_agnostic_and_spans_multiple_subjects() {
+    auto root = test_root("changes_since_is_status_agnostic_and_spans_multiple_subjects");
+
+    KnowledgeKernel kernel(StorageConfig{root});
+
+    constexpr Timestamp SUPERSEDING_AT = JUL_1_2024 + 2 * 86400;
+    constexpr Timestamp HYPOTHESIS_AT = JUL_8_2024 + 1;
+
+    // Excluded below: observed before the cutoff, even though its status later changes.
+    AssertionId original = kernel.commit(ALICE, WORKS_AT, ACME, JAN_1_2020, OPEN_ENDED, JAN_1_2024, 0.95);
+
+    AssertionId other_subject = kernel.commit(UNIVERSITY, LIVES_IN, BETA, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.90);
+
+    AssertionId superseding =
+        kernel.commit_superseding(ALICE, WORKS_AT, BETA, JUL_8_2024, OPEN_ENDED, SUPERSEDING_AT, 0.90, original);
+
+    AssertionId retraction = kernel.commit_retraction(UNIVERSITY, LIVES_IN, BETA, JAN_1_2023, OPEN_ENDED,
+                                                       JUL_8_2024, 0.90, other_subject);
+
+    AssertionId hypothesis = kernel.commit_hypothesis(ALICE, WORKS_AT, GAMMA, JAN_1_2020, OPEN_ENDED, HYPOTHESIS_AT,
+                                                       0.5, STARTUP, HYPOTHESIS_AT, "churn_model");
+
+    auto changes = kernel.changes_since(JUL_2_2024);
+
+    assert(changes.size() == 4);
+
+    assert(changes[0].id == other_subject);
+    assert(changes[0].status == AssertionStatus::Retracted);
+    assert(changes[1].id == superseding);
+    assert(changes[2].id == retraction);
+    assert(changes[3].id == hypothesis);
+    assert(changes[3].status == AssertionStatus::Hypothesis);
+
+    cleanup(root);
+}
+
 void observed_time_timeline_only_return_active_assertions_sorted_by_observed_at() {
     auto root = test_root("commit_history_returns_history_of_recorded_assertions");
 
@@ -1743,6 +1797,8 @@ int main() {
     conflicting_active_assertions_can_coexist();
     valid_time_timeline_only_returns_active_assertions_sorted_by_valid_from();
     commit_history_returns_history_of_recorded_assertions();
+    changes_since_returns_assertions_observed_at_or_after_cutoff_sorted_by_observed_at();
+    changes_since_is_status_agnostic_and_spans_multiple_subjects();
     observed_time_timeline_only_return_active_assertions_sorted_by_observed_at();
     known_at_is_restored_from_persisted_observed_time_index_across_kernels();
     corrupt_observed_time_index_falls_back_to_replay_and_self_heals();

@@ -1291,7 +1291,16 @@ std::vector<Assertion> timeline(
     EntityId subject,
     PredicateId predicate
 ) const;
+
+std::vector<Assertion> changes_since(
+    Timestamp observed_since
+) const;
 ```
+
+`changes_since` is the one query method above that is not scoped to a `subject`: it is the
+kernel-wide, status-agnostic answer to "what changed since t" (any subject, any predicate, sorted
+by `observed_at`). It belongs with `commit_history`/`observed_time_timeline` in the "full audit
+history" group below, not with `current`/`valid_at`/`known_at`.
 
 Interval semantics:
 
@@ -1726,6 +1735,24 @@ Until Phase 6, "Why does the kernel believe this assertion?", "Which assertions 
 (no provenance existed at all, and there was no conflict-detection query). Phase 6's `explain`,
 `find_conflicts`, and `provenance_for` close that gap. The last two questions above are new, added
 for Phase 7's `hypotheses_for`/`commit_history` combination.
+
+"What changed since yesterday?" also remained only partially answered even after Phase 6/7:
+`commit_history`/`observed_time_timeline` require a caller-supplied `subject`+`predicate`, so a
+caller had no way to discover *what* changed without already knowing where to look — the
+`examples/agent_workflow_demo.cpp` scenario papered over this by manually filtering
+`commit_history(alice, works_at)` client-side, which only worked because the caller already knew
+to ask about Alice. `changes_since(Timestamp)` closes this properly: a kernel-wide (not
+per-subject), status-agnostic scan mirroring `commit_history`'s full-audit-history philosophy (new
+commits, supersessions, retractions, and hypotheses all count as a "change"). Implemented as a
+straight scan over `assertions_`, not a new index — there is no persisted global observed-time
+ordering (`IndexManager`'s observed-time index is per-subject), and per the Performance Rules below
+that's not worth adding without a demonstrated bottleneck. Covered by
+`changes_since_returns_assertions_observed_at_or_after_cutoff_sorted_by_observed_at` and
+`changes_since_is_status_agnostic_and_spans_multiple_subjects` in
+`tests/knowledge_kernel_tests.cpp`, plus `changes_since_command_round_trips` in
+`tests/kernel_command_tests.cpp` (`ChangesSinceCommand`, dispatched in `execute()` like every other
+query command). `examples/agent_workflow_demo.cpp` now calls `changes_since` directly instead of
+the client-side filter.
 
 Every implementation decision should support this long - term direction.
 

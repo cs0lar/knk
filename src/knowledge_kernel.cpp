@@ -567,6 +567,25 @@ std::vector<Assertion> KnowledgeKernel::commit_history(EntityId subject, Predica
     return result;
 }
 
+std::vector<Assertion> KnowledgeKernel::changes_since(Timestamp observed_since) const {
+    std::vector<Assertion> result;
+
+    for (const auto &assertion : assertions_) {
+        if (assertion.observed_at >= observed_since) {
+            result.push_back(assertion);
+        }
+    }
+
+    std::sort(result.begin(), result.end(), [](const Assertion &a, const Assertion &b) {
+        if (a.observed_at != b.observed_at) {
+            return a.observed_at < b.observed_at;
+        }
+        return a.id < b.id;
+    });
+
+    return result;
+}
+
 std::vector<Assertion> KnowledgeKernel::explain(AssertionId id) const {
     std::vector<Assertion> chain;
 
