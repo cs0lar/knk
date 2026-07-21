@@ -67,6 +67,18 @@ class KnowledgeKernel {
 
     std::vector<Assertion> current(EntityId subject) const;
 
+    // Reverse-direction counterpart to current(subject): every currently active, open-ended
+    // assertion where the given entity is the object rather than the subject -- e.g. "who currently
+    // works at Acme." object is resolved through Catalog first, exactly like current(subject)
+    // resolves subject, so a caller holding an id later merged away still gets the surviving id's
+    // results.
+    std::vector<Assertion> current_by_object(EntityId object) const;
+
+    // Kernel-wide counterpart to current(subject): every currently active, open-ended assertion for
+    // the given predicate, any subject -- e.g. "every WORKS_AT relationship." No entity resolution
+    // needed -- merge_entities only ever redirects EntityIds, and predicates are not subject to it.
+    std::vector<Assertion> current_by_predicate(PredicateId predicate) const;
+
     // Mirrors current(subject) but selects Hypothesis-status records instead of Active ones. Reads
     // off the subject index (like commit_history/valid_at), not the current-state index -- hypotheses
     // are never added to that index, since is_current_assertion requires Active status.

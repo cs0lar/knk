@@ -1379,6 +1379,82 @@ void commit_hypothesis_is_excluded_from_current_and_valid_at() {
     cleanup(root);
 }
 
+void current_by_object_returns_active_open_ended_assertions_referencing_the_entity() {
+    auto root = test_root("current_by_object_returns_active_open_ended_assertions_referencing_the_entity");
+
+    KnowledgeKernel kernel(StorageConfig{root});
+
+    AssertionId alice_at_acme = kernel.commit(ALICE, WORKS_AT, ACME, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.95);
+    AssertionId bob_at_acme = kernel.commit(2, WORKS_AT, ACME, JAN_1_2024, OPEN_ENDED, JUL_2_2024, 0.90);
+    // Closed-interval and unrelated-object assertions must not show up.
+    kernel.commit(ALICE, LIVES_IN, BETA, JAN_1_2023, JUL_1_2024, JUL_2_2024, 0.90);
+    kernel.commit(2, LIVES_IN, GAMMA, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.90);
+
+    auto who_works_at_acme = kernel.current_by_object(ACME);
+
+    assert(who_works_at_acme.size() == 2);
+    std::vector<AssertionId> ids;
+    for (const auto &assertion : who_works_at_acme) {
+        ids.push_back(assertion.id);
+    }
+    assert(std::find(ids.begin(), ids.end(), alice_at_acme) != ids.end());
+    assert(std::find(ids.begin(), ids.end(), bob_at_acme) != ids.end());
+
+    assert(kernel.current_by_object(BETA).empty());
+
+    cleanup(root);
+}
+
+void current_by_object_excludes_superseded_and_resolves_merged_entities() {
+    auto root = test_root("current_by_object_excludes_superseded_and_resolves_merged_entities");
+
+    KnowledgeKernel kernel(StorageConfig{root});
+
+    constexpr EntityId ACME_DUPLICATE = 999;
+
+    AssertionId original = kernel.commit(ALICE, WORKS_AT, ACME, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.95);
+    assert(kernel.current_by_object(ACME).size() == 1);
+
+    kernel.commit_superseding(ALICE, WORKS_AT, BETA, JUL_2_2024, OPEN_ENDED, JUL_2_2024, 0.9, original);
+    assert(kernel.current_by_object(ACME).empty());
+
+    // A caller holding an id later merged into ACME transparently sees ACME's current results too.
+    kernel.merge_entities(BETA, ACME_DUPLICATE, JUL_2_2024);
+    auto via_duplicate = kernel.current_by_object(ACME_DUPLICATE);
+    auto via_keep = kernel.current_by_object(BETA);
+    assert(via_duplicate.size() == 1);
+    assert(via_keep.size() == 1);
+    assert(via_duplicate[0].id == via_keep[0].id);
+
+    cleanup(root);
+}
+
+void current_by_predicate_returns_every_active_open_ended_assertion_for_the_predicate() {
+    auto root = test_root("current_by_predicate_returns_every_active_open_ended_assertion_for_the_predicate");
+
+    KnowledgeKernel kernel(StorageConfig{root});
+
+    AssertionId alice_works = kernel.commit(ALICE, WORKS_AT, ACME, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.95);
+    AssertionId bob_works = kernel.commit(2, WORKS_AT, BETA, JAN_1_2024, OPEN_ENDED, JUL_2_2024, 0.90);
+    kernel.commit(ALICE, LIVES_IN, GAMMA, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.90);
+    // Closed-interval WORKS_AT must not show up.
+    kernel.commit(2, WORKS_AT, ACME, JAN_1_2020, JAN_1_2023, JUL_2_2024, 0.90);
+
+    auto every_works_at = kernel.current_by_predicate(WORKS_AT);
+
+    assert(every_works_at.size() == 2);
+    std::vector<AssertionId> ids;
+    for (const auto &assertion : every_works_at) {
+        ids.push_back(assertion.id);
+    }
+    assert(std::find(ids.begin(), ids.end(), alice_works) != ids.end());
+    assert(std::find(ids.begin(), ids.end(), bob_works) != ids.end());
+
+    assert(kernel.current_by_predicate(999).empty());
+
+    cleanup(root);
+}
+
 void hypotheses_for_returns_open_predictions() {
     auto root = test_root("hypotheses_for_returns_open_predictions");
     KnowledgeKernel kernel(StorageConfig{root});
@@ -1781,6 +1857,9 @@ int main() {
     get_unknown_assertion_returns_nullopt();
     current_assertion_is_preserved_across_kernels();
     current_assertion_returns_open_ended_assertion();
+    current_by_object_returns_active_open_ended_assertions_referencing_the_entity();
+    current_by_object_excludes_superseded_and_resolves_merged_entities();
+    current_by_predicate_returns_every_active_open_ended_assertion_for_the_predicate();
     superseded_assertion_is_excluded_from_current_queries();
     failed_supersession_does_not_persist_or_burn_id();
     retracted_assertion_is_excluded_from_current_queries();

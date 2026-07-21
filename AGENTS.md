@@ -1302,6 +1302,24 @@ kernel-wide, status-agnostic answer to "what changed since t" (any subject, any 
 by `observed_at`). It belongs with `commit_history`/`observed_time_timeline` in the "full audit
 history" group below, not with `current`/`valid_at`/`known_at`.
 
+`current(subject)` only ever answers in the subject -> object direction. Two companions close the
+other directions an application (e.g. a CRM asking "who works at Acme," or a retriever pulling
+every `WORKS_AT` edge to build a subgraph for an agent) needs and previously had no query for at
+all:
+
+* `current_by_object(EntityId object) -> vector<Assertion>` — the reverse-direction counterpart to
+ `current(subject)`. Resolves `object` through `Catalog` first, exactly like `current` resolves
+ `subject`, so merge transparency applies symmetrically.
+* `current_by_predicate(PredicateId predicate) -> vector<Assertion>` — kernel-wide, any subject, any
+ object; e.g. every currently-active `WORKS_AT` assertion.
+
+Both are backed by `IndexManager` structures that already existed or fit naturally alongside
+existing ones: `current_by_object` reuses the reverse object index Phase 7's `neighbors` built
+(previously internal-only); `current_by_predicate` is backed by a new `predicate_current_index_`
+folded directly into `restore_current_index_entry`, so — unlike the object index — it needs no
+separate bulk-seed step on the fast startup path: predicate is already part of every persisted
+`current_index.log` record.
+
 Interval semantics:
 
 ```text
