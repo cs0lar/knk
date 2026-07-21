@@ -24,10 +24,13 @@ add_library(kernel
     src/provenance_log.cpp
     src/kernel_command.cpp
     src/entity_merge_log.cpp
+    src/json_codec.cpp
+    src/mcp_tools.cpp
 )
 
 target_include_directories(kernel
     PUBLIC include
+    PUBLIC third_party
 )
 
 add_executable(kernel_demo
@@ -51,6 +54,17 @@ add_executable(agent_workflow_demo
 )
 
 target_link_libraries(agent_workflow_demo
+    PRIVATE kernel
+)
+
+# MCP stdio server: one JSON-RPC 2.0 message per line on stdin/stdout, exposing every KernelCommand
+# as an MCP tool (see mcp/main.cpp and include/kernel/mcp_tools.hpp). Usage:
+# ./build/mcp_server <storage-root>
+add_executable(mcp_server
+    mcp/main.cpp
+)
+
+target_link_libraries(mcp_server
     PRIVATE kernel
 )
 
@@ -151,6 +165,14 @@ add_executable(entity_merge_log_tests
     tests/entity_merge_log_tests.cpp
 )
 
+add_executable(json_codec_tests
+    tests/json_codec_tests.cpp
+)
+
+add_executable(mcp_tools_tests
+    tests/mcp_tools_tests.cpp
+)
+
 target_link_libraries(knowledge_kernel_tests
     PRIVATE kernel
 )
@@ -216,6 +238,14 @@ target_link_libraries(kernel_command_tests
 )
 
 target_link_libraries(entity_merge_log_tests
+    PRIVATE kernel
+)
+
+target_link_libraries(json_codec_tests
+    PRIVATE kernel
+)
+
+target_link_libraries(mcp_tools_tests
     PRIVATE kernel
 )
 
@@ -302,4 +332,14 @@ add_test(
 add_test(
     NAME entity_merge_log_tests
     COMMAND entity_merge_log_tests
+)
+
+add_test(
+    NAME json_codec_tests
+    COMMAND json_codec_tests
+)
+
+add_test(
+    NAME mcp_tools_tests
+    COMMAND mcp_tools_tests
 )
