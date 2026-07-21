@@ -1706,9 +1706,61 @@ Two of these items are narrowed, not lifted, by Phase 7 (see "Current Roadmap" a
  both just structured calls into the existing commit machinery, not extraction happening inside the
  kernel. Written down explicitly here because Phase 7 is where the ambiguity would otherwise bite.
 
-**HTTP API** stays fully out of scope: Phase 6 adds a serializable command layer but deliberately no
-network transport. Revisiting this item is its own future decision, not implied by anything in the
-current roadmap.
+**HTTP API / network transport** stays fully out of scope: no listening socket, no request routing,
+no auth/TLS surface has been added. This item is about a *network* boundary specifically, not about
+whether the kernel has any caller-facing boundary at all.
+
+A **local MCP server over stdio** (`mcp/`, see below) is a narrower, deliberate exception, not a
+lifting of this item: it is a subprocess speaking newline-delimited JSON-RPC on its own stdin/stdout,
+with no socket, no network exposure, and no auth model beyond "whatever process spawned it controls
+its stdio." It exists because Phase 6's `KernelCommand`/`KernelResult` layer was built specifically to
+make a boundary like this possible, and "no application can call the kernel from outside a C++
+process linking `libkernel.a`" was identified as the concrete blocker to building anything (a CRM, an
+agentic retriever) on top of the kernel at all. A real network-facing HTTP/gRPC API is still a
+separate, not-yet-made decision.
+
+Implementation:
+
+* `third_party/nlohmann/json.hpp` — this project's first external dependency: a single vendored
+ header (nlohmann/json v3.12.0, MIT license, fetched from the upstream `single_include` release, not
+ a moving branch). `KernelCommand`/`KernelResult` together span 38 command shapes and 11 result
+ shapes with varied field types (ids, timestamps, raw bytes, the tagged `Value` union); a hand-rolled
+ JSON parser correctly covering escaping/unicode/number formats for all of that was judged real,
+ bug-prone surface for no benefit over a well-tested single-header library. `target_include_directories(kernel PUBLIC third_party)` in `CMakeLists.txt` makes `#include
+ <nlohmann/json.hpp>` resolve; nothing else in `third_party/` is expected to appear without the same
+ kind of explicit justification.
+* `include/kernel/json_codec.hpp` / `src/json_codec.cpp` — transport-agnostic JSON (de)serialization
+ for `Assertion`, `Value`, `ProvenanceRecord`, `AssertionStatus`, and a `kernel_result_to_json`
+ covering all 11 `KernelResult` alternatives via `std::visit`. Deliberately does **not** include a
+ generic tagged-variant codec for `KernelCommand` itself — the one caller (`mcp_tools`) already knows
+ which command it's building from the MCP tool name, so each tool constructs its specific `Command`
+ struct directly. Also owns hand-rolled base64 encode/decode for the one raw-bytes field in the
+ surface (`InternDocumentCommand::content` / `DocumentContentCommand`'s return) — JSON has no native
+ binary type.
+* `include/kernel/mcp_tools.hpp` / `src/mcp_tools.cpp` — the pure, I/O-free half of the server: one
+ MCP tool per `KernelCommand` variant (38 total), named after the mirrored `KnowledgeKernel` method
+ (`"commit"`, `"current_by_object"`, ...), each with a JSON Schema `inputSchema` built from its
+ fields. Deliberately not a single generic "execute a `KernelCommand` blob" tool — MCP tool schemas
+ are meant to be individually discoverable and typed by an agent, which a polymorphic tool would
+ defeat. `handle_tool_call` looks up the tool, builds the command from the arguments, calls
+ `kernel.execute(...)`, and serializes the result; an unknown tool name, a missing/malformed
+ argument, or an exception from `execute()` itself (e.g. `commit_retraction` against an unknown id)
+ all come back as `ToolCallResult{.is_error = true}` rather than throwing, matching MCP's convention
+ of reporting a tool-level failure as a normal JSON-RPC success with `isError: true`, not a
+ JSON-RPC-level error. Directly unit tested (`tests/mcp_tools_tests.cpp`), including a completeness
+ check that every `KernelCommand` variant has exactly one corresponding tool.
+* `mcp/main.cpp` — the thin stdio JSON-RPC 2.0 loop: one message per line on stdin/stdout (MCP's
+ stdio framing; no `Content-Length` headers, unlike LSP). stdout is reserved entirely for protocol
+ messages; anything diagnostic goes to stderr. Handles `initialize`, `notifications/initialized`
+ (and `notifications/cancelled`, both no-response), `tools/list`, `tools/call`, and reports unknown
+ methods/malformed requests as JSON-RPC errors (`-32601`/`-32600`/`-32602`/`-32700`). Takes the
+ storage root as its one required CLI argument: `./build/mcp_server <storage-root>`. Not unit
+ tested, mirroring how other executable entry points in this repo (`kernel_demo`, the benchmarks)
+ aren't — verified instead by piping JSON-RPC requests into the built binary manually and checking
+ the responses.
+
+The full tool list, an example JSON-RPC session, and how to point a real MCP client at the built
+binary live in `docs/mcp_server.md` — this section covers the design decisions, that one covers usage.
 
 The kernel must be correct and recoverable before it becomes broad.
 
