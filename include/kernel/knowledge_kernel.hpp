@@ -30,6 +30,17 @@ class KnowledgeKernel {
     AssertionId commit(EntityId subject, PredicateId predicate, EntityId object, Timestamp valid_from,
                        Timestamp valid_to, Timestamp observed_at, double confidence);
 
+    // Convenience wrapper over commit() for a caller that only has names/literals, not ids: interns
+    // subject_name and predicate_name (idempotent, same as calling intern_entity/intern_predicate
+    // directly), interns object via intern_value (a text Value is exactly what intern_entity would
+    // produce for an object that's itself a named entity, so this one parameter covers both "object
+    // is another named entity" and "object is a literal"), then commits with the resulting ids. Pure
+    // composition of existing idempotent primitives -- no new storage, no new invariants. Closes the
+    // gap flagged as out of scope back in Phase 5 ("name-based overloads of commit... may become
+    // their own follow-up once the base catalog and payload store are in place").
+    AssertionId commit_by_name(std::string_view subject_name, std::string_view predicate_name, const Value &object,
+                               Timestamp valid_from, Timestamp valid_to, Timestamp observed_at, double confidence);
+
     AssertionId commit_retraction(EntityId subject, PredicateId predicate, EntityId object, Timestamp valid_from,
                                   Timestamp valid_to, Timestamp observed_at, double confidence,
                                   AssertionId retracts_id);

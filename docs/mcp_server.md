@@ -46,7 +46,7 @@ one-liner, which works for testing but isn't how a real MCP client talks to it.
 
 ## Tools
 
-One tool per `KnowledgeKernel` method, 38 total — the exact set `KernelCommand` reifies (see
+One tool per `KnowledgeKernel` method, 39 total — the exact set `KernelCommand` reifies (see
 `include/kernel/kernel_command.hpp`). Argument and return types follow the method signatures directly:
 `EntityId`/`PredicateId`/`AssertionId` are JSON integers, `Timestamp` is a JSON integer (Unix seconds),
 `confidence` is a JSON number, raw bytes (`intern_document`'s `content`, `document_content`'s return
@@ -59,6 +59,7 @@ against a running server for the full JSON Schema of each.
 | Tool | Description |
 |---|---|
 | `commit` | Commits a new active assertion. |
+| `commit_by_name` | Commits a new active assertion from names/literals instead of ids, interning subject, predicate, and object as needed (idempotent). |
 | `commit_retraction` | Commits a retraction record for an existing assertion. |
 | `commit_superseding` | Commits a replacement assertion, marking the superseded one as such. |
 | `write_snapshot` | Persists a full snapshot of current in-memory assertions. |

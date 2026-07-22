@@ -92,6 +92,28 @@ const std::vector<ToolDefinition> &tool_definitions() {
                      require_timestamp(args, "observed_at"), require_double(args, "confidence")});
              }});
 
+        defs.push_back(
+            {{"commit_by_name",
+              "Commits a new active assertion from names/literals instead of ids, interning subject, "
+              "predicate, and object as needed (idempotent).",
+              object_schema(
+                  {{"subject_name", string_property("Subject entity name.")},
+                   {"predicate_name", string_property("Predicate name.")},
+                   {"object", value_property("Object: a text value names an entity, any other kind "
+                                             "is a literal.")},
+                   {"valid_from", integer_property("Valid-from timestamp.")},
+                   {"valid_to", integer_property("Valid-to timestamp; 0 means open-ended.")},
+                   {"observed_at", integer_property("Observed-at timestamp.")},
+                   {"confidence", number_property("Confidence in [0,1].")}},
+                  {"subject_name", "predicate_name", "object", "valid_from", "valid_to", "observed_at", "confidence"})},
+             [](KnowledgeKernel &kernel, const nlohmann::json &args) -> KernelResult {
+                 return kernel.execute(
+                     CommitByNameCommand{require_string(args, "subject_name"), require_string(args, "predicate_name"),
+                                         require_value(args, "object"), require_timestamp(args, "valid_from"),
+                                         require_timestamp(args, "valid_to"), require_timestamp(args, "observed_at"),
+                                         require_double(args, "confidence")});
+             }});
+
         defs.push_back({{"commit_retraction", "Commits a retraction record for an existing assertion.",
                          object_schema({{"subject", integer_property("Subject EntityId.")},
                                         {"predicate", integer_property("Predicate PredicateId.")},

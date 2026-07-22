@@ -119,6 +119,27 @@ void commit_command_round_trips() {
     cleanup(root);
 }
 
+void commit_by_name_command_round_trips() {
+    auto root = test_root("commit_by_name_command_round_trips");
+    KnowledgeKernel direct(StorageConfig{root / "direct"});
+    KnowledgeKernel via(StorageConfig{root / "via"});
+
+    auto d =
+        direct.commit_by_name("Alice", "works_at", Value::of_text("Acme"), JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.90);
+    auto v = std::get<AssertionId>(via.execute(
+        CommitByNameCommand{"Alice", "works_at", Value::of_text("Acme"), JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.90}));
+
+    auto direct_assertion = direct.get(d);
+    auto via_assertion = via.get(v);
+
+    assert(direct_assertion.has_value() && via_assertion.has_value());
+    assert(direct_assertion->subject == via_assertion->subject);
+    assert(direct_assertion->predicate == via_assertion->predicate);
+    assert(direct_assertion->object == via_assertion->object);
+
+    cleanup(root);
+}
+
 void commit_superseding_command_round_trips() {
     auto root = test_root("commit_superseding_command_round_trips");
     KnowledgeKernel direct(StorageConfig{root / "direct"});
@@ -661,6 +682,7 @@ void resolve_entity_command_round_trips() {
 
 int main() {
     commit_command_round_trips();
+    commit_by_name_command_round_trips();
     commit_superseding_command_round_trips();
     commit_retraction_command_round_trips();
     write_snapshot_command_round_trips();
