@@ -221,6 +221,16 @@ AssertionId KnowledgeKernel::commit(EntityId subject, PredicateId predicate, Ent
     return id;
 }
 
+AssertionId KnowledgeKernel::commit_by_name(std::string_view subject_name, std::string_view predicate_name,
+                                            const Value &object, Timestamp valid_from, Timestamp valid_to,
+                                            Timestamp observed_at, double confidence) {
+    EntityId subject = intern_entity(subject_name);
+    PredicateId predicate = intern_predicate(predicate_name);
+    EntityId object_id = intern_value(object);
+
+    return commit(subject, predicate, object_id, valid_from, valid_to, observed_at, confidence);
+}
+
 AssertionId KnowledgeKernel::commit_retraction(EntityId subject, PredicateId predicate, EntityId object,
                                                Timestamp valid_from, Timestamp valid_to, Timestamp observed_at,
                                                double confidence, AssertionId retracts_id) {

@@ -25,6 +25,9 @@ KernelResult KnowledgeKernel::execute(const KernelCommand &command) {
             if constexpr (std::is_same_v<T, CommitCommand>) {
                 return commit(cmd.subject, cmd.predicate, cmd.object, cmd.valid_from, cmd.valid_to, cmd.observed_at,
                               cmd.confidence);
+            } else if constexpr (std::is_same_v<T, CommitByNameCommand>) {
+                return commit_by_name(cmd.subject_name, cmd.predicate_name, cmd.object, cmd.valid_from, cmd.valid_to,
+                                      cmd.observed_at, cmd.confidence);
             } else if constexpr (std::is_same_v<T, CommitRetractionCommand>) {
                 return commit_retraction(cmd.subject, cmd.predicate, cmd.object, cmd.valid_from, cmd.valid_to,
                                          cmd.observed_at, cmd.confidence, cmd.retracts_id);

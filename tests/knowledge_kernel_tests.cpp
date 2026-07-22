@@ -80,6 +80,65 @@ void commit_and_get_assertion() {
     cleanup(root);
 }
 
+void commit_by_name_interns_names_and_commits() {
+    auto root = test_root("commit_by_name_interns_names_and_commits");
+    KnowledgeKernel kernel(StorageConfig{root});
+
+    auto id =
+        kernel.commit_by_name("Alice", "works_at", Value::of_text("Acme"), JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.95);
+
+    auto assertion = kernel.get(id);
+    assert(assertion.has_value());
+
+    auto alice_id = kernel.find_entity("Alice");
+    auto works_at_id = kernel.find_predicate("works_at");
+    auto acme_id = kernel.find_entity("Acme");
+
+    assert(alice_id.has_value() && assertion->subject == *alice_id);
+    assert(works_at_id.has_value() && assertion->predicate == *works_at_id);
+    assert(acme_id.has_value() && assertion->object == *acme_id);
+    assert(assertion->status == AssertionStatus::Active);
+
+    cleanup(root);
+}
+
+void commit_by_name_reuses_ids_for_repeated_names() {
+    auto root = test_root("commit_by_name_reuses_ids_for_repeated_names");
+    KnowledgeKernel kernel(StorageConfig{root});
+
+    auto first =
+        kernel.commit_by_name("Alice", "works_at", Value::of_text("Acme"), JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.95);
+    auto second =
+        kernel.commit_by_name("Alice", "works_at", Value::of_text("Beta"), JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.9);
+
+    auto first_assertion = kernel.get(first);
+    auto second_assertion = kernel.get(second);
+
+    assert(first_assertion.has_value() && second_assertion.has_value());
+    assert(first_assertion->subject == second_assertion->subject);
+    assert(first_assertion->predicate == second_assertion->predicate);
+    assert(first_assertion->object != second_assertion->object);
+
+    cleanup(root);
+}
+
+void commit_by_name_supports_a_literal_object() {
+    auto root = test_root("commit_by_name_supports_a_literal_object");
+    KnowledgeKernel kernel(StorageConfig{root});
+
+    auto id = kernel.commit_by_name("Alice", "age", Value::of_int64(30), JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.95);
+
+    auto assertion = kernel.get(id);
+    assert(assertion.has_value());
+
+    auto object_value = kernel.entity_value(assertion->object);
+    assert(object_value.has_value());
+    assert(object_value->kind == ValueKind::Int64);
+    assert(object_value->int64_value == 30);
+
+    cleanup(root);
+}
+
 void failed_commit_does_not_burn_id() {
     auto root = test_root("failed_commit_does_not_burn_id");
 
@@ -1853,6 +1912,9 @@ void corrupt_entity_merge_log_is_fatal_on_startup() {
 
 int main() {
     commit_and_get_assertion();
+    commit_by_name_interns_names_and_commits();
+    commit_by_name_reuses_ids_for_repeated_names();
+    commit_by_name_supports_a_literal_object();
     failed_commit_does_not_burn_id();
     get_unknown_assertion_returns_nullopt();
     current_assertion_is_preserved_across_kernels();

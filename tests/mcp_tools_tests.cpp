@@ -26,6 +26,7 @@ void cleanup(const std::filesystem::path &path) { std::filesystem::remove_all(pa
 // that would catch a forgotten tool the next time a command is added.
 void tool_specs_cover_every_kernel_command_with_a_well_formed_schema() {
     std::set<std::string> expected_names{"commit",
+                                         "commit_by_name",
                                          "commit_retraction",
                                          "commit_superseding",
                                          "write_snapshot",
@@ -95,6 +96,31 @@ void commit_tool_round_trips_ids_timestamps_and_confidence() {
     assert(committed->subject == 1);
     assert(committed->object == 100);
     assert(committed->confidence == 0.9);
+
+    cleanup(root);
+}
+
+void commit_by_name_tool_interns_names_and_commits() {
+    auto root = test_root("commit_by_name_tool_interns_names_and_commits");
+    KnowledgeKernel kernel(StorageConfig{root});
+
+    nlohmann::json args{{"subject_name", "Alice"},
+                        {"predicate_name", "works_at"},
+                        {"object", {{"kind", "text"}, {"value", "Acme"}}},
+                        {"valid_from", 1704067200},
+                        {"valid_to", 0},
+                        {"observed_at", 1719792000},
+                        {"confidence", 0.9}};
+
+    auto result = handle_tool_call(kernel, "commit_by_name", args);
+    assert(!result.is_error);
+
+    AssertionId id = nlohmann::json::parse(result.content_text).get<AssertionId>();
+    auto committed = kernel.get(id);
+    assert(committed.has_value());
+    assert(kernel.entity_name(committed->subject) == "Alice");
+    assert(kernel.entity_name(committed->object) == "Acme");
+    assert(kernel.predicate_name(committed->predicate) == "works_at");
 
     cleanup(root);
 }
@@ -251,6 +277,7 @@ void kernel_exception_from_execute_is_reported_as_a_tool_error_not_a_crash() {
 int main() {
     tool_specs_cover_every_kernel_command_with_a_well_formed_schema();
     commit_tool_round_trips_ids_timestamps_and_confidence();
+    commit_by_name_tool_interns_names_and_commits();
     intern_entity_tool_round_trips_a_string_argument();
     intern_value_tool_round_trips_a_tagged_value_argument();
     intern_document_tool_round_trips_base64_bytes();

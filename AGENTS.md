@@ -385,7 +385,11 @@ Design :
 * Out of scope for this phase : name-based overloads of `commit`/`commit_superseding`/`commit_retraction`
  (callers intern first, then commit with ids, same as today), content-hash-based payload deduplication,
  renaming or deleting catalog entries, and streaming/partial reads of large payloads. These may become their own
- follow-up once the base catalog and payload store are in place.
+ follow-up once the base catalog and payload store are in place. (`commit` gained exactly this follow-up —
+ `commit_by_name` — once the catalog/MCP layers made the round-trip cost of interning first concrete; see the
+ note at the end of "Current implementation status" below. `commit_superseding`/`commit_retraction` remain
+ id-only, since by the time a caller has a specific assertion to supersede/retract it already has that
+ assertion's ids.)
 
 Minimum tests to add, following the existing per-log pattern (round trip, missing file, invalid record size,
 incomplete trailing record) plus :
@@ -498,6 +502,29 @@ Current implementation status:
  `examples/knowledge_kernel_demo.cpp`, a comprehensive walkthrough of commit/query semantics,
  supersession, retraction, audit/timeline history, Catalog interning, PayloadStore documents, and
  recovery across a restart, run and manually inspected end to end.
+* **Added 2026-07-22, after MCP transport landed:** `KnowledgeKernel::commit_by_name(subject_name,
+ predicate_name, object, valid_from, valid_to, observed_at, confidence) -> AssertionId` — the
+ name-based `commit` overload flagged as out of scope above, built once it landed. Every fact an
+ MCP-speaking agent writes for a brand-new subject/object previously cost three tool calls
+ (`intern_entity` x2, then `commit`); this collapses that to one. Pure composition, not new storage
+ or a new invariant: `intern_entity(subject_name)`, `intern_predicate(predicate_name)`,
+ `intern_value(object)` (each already idempotent/durable-before-visible on its own), then
+ `commit(...)` with the resulting ids. `object` is a `Value`, not a second name string — a `Text`
+ `Value` is exactly what `intern_entity` would produce, so `Value::of_text("Acme")` names an entity
+ the same way `Value::of_int64(2010)` interns a literal; one parameter covers both without a second
+ "is this a name or a literal" flag. `KernelCommand`/`KernelResult` gained `CommitByNameCommand`
+ (mutating, alongside `CommitCommand`), and `mcp_tools`/`docs/mcp_server.md` gained the matching
+ `commit_by_name` tool (39 tools total now, up from 38). Deliberately **not** extended to
+ `commit_superseding`/`commit_retraction`/`commit_hypothesis`: those all take a target/source
+ `AssertionId` the caller can only have gotten from a prior query, which already hands back full
+ `Assertion`s (and therefore their subject/predicate/object ids) — the interning friction this
+ solves is specific to a fact's *first* commit. Covered by
+ `commit_by_name_interns_names_and_commits`, `commit_by_name_reuses_ids_for_repeated_names`, and
+ `commit_by_name_supports_a_literal_object` in `tests/knowledge_kernel_tests.cpp`,
+ `commit_by_name_command_round_trips` in `tests/kernel_command_tests.cpp`, and
+ `commit_by_name_tool_interns_names_and_commits` (plus the updated 39-name completeness set) in
+ `tests/mcp_tools_tests.cpp`. `examples/knowledge_kernel_demo.cpp` gained a "Committing by name"
+ section.
 
 ### Phase 6 — Provenance & Agentic Interface
 
@@ -1723,7 +1750,7 @@ Implementation:
 
 * `third_party/nlohmann/json.hpp` — this project's first external dependency: a single vendored
  header (nlohmann/json v3.12.0, MIT license, fetched from the upstream `single_include` release, not
- a moving branch). `KernelCommand`/`KernelResult` together span 38 command shapes and 11 result
+ a moving branch). `KernelCommand`/`KernelResult` together span 39 command shapes and 11 result
  shapes with varied field types (ids, timestamps, raw bytes, the tagged `Value` union); a hand-rolled
  JSON parser correctly covering escaping/unicode/number formats for all of that was judged real,
  bug-prone surface for no benefit over a well-tested single-header library. `target_include_directories(kernel PUBLIC third_party)` in `CMakeLists.txt` makes `#include
@@ -1738,7 +1765,8 @@ Implementation:
  surface (`InternDocumentCommand::content` / `DocumentContentCommand`'s return) — JSON has no native
  binary type.
 * `include/kernel/mcp_tools.hpp` / `src/mcp_tools.cpp` — the pure, I/O-free half of the server: one
- MCP tool per `KernelCommand` variant (38 total), named after the mirrored `KnowledgeKernel` method
+ MCP tool per `KernelCommand` variant (39 total, after `commit_by_name` — see Phase 5's "Current
+ implementation status" — added a 39th), named after the mirrored `KnowledgeKernel` method
  (`"commit"`, `"current_by_object"`, ...), each with a JSON Schema `inputSchema` built from its
  fields. Deliberately not a single generic "execute a `KernelCommand` blob" tool — MCP tool schemas
  are meant to be individually discoverable and typed by an agent, which a polymorphic tool would

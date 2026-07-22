@@ -199,6 +199,17 @@ int main() {
         print_facts("\nvalid_at_known_at(Alice, 2024-01-01, 2024-07-08) -- what we now know was true then:", kernel,
                     kernel.valid_at_known_at(alice, 1704067200, 1720450412));
 
+        // --- Convenience: committing by name -------------------------------------------
+        // commit_by_name skips the intern-then-commit dance above for a caller that only has
+        // names/literals, not ids -- it interns subject/predicate/object as needed (idempotently,
+        // like calling intern_entity/intern_predicate/intern_value directly) and commits in one
+        // call. Useful for an agent or ingestion pipeline recording a brand-new fact it has no
+        // pre-existing ids for yet.
+        std::cout << "\n== Committing by name (no pre-interning required) ==\n";
+        kernel.commit_by_name("Beta Inc", "founded_in", Value::of_int64(2015), OPEN_ENDED, OPEN_ENDED, 1719878400, 1.0);
+        print_facts("current(Beta Inc) -- founded_in fact committed without ever calling intern_* directly:", kernel,
+                    kernel.current(beta));
+
         // --- Supersession ------------------------------------------------------------
         std::cout << "\n== Correcting a fact via supersession ==\n";
         // The confidence recorded for "Alice works_at Beta" was optimistic; a later assertion
