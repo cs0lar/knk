@@ -41,6 +41,7 @@ void tool_specs_cover_every_kernel_command_with_a_well_formed_schema() {
                                          "get",
                                          "assertions_for_subject",
                                          "current",
+                                         "current_by_name",
                                          "current_by_object",
                                          "current_by_predicate",
                                          "valid_at",
@@ -170,6 +171,27 @@ void intern_document_tool_round_trips_base64_bytes() {
     cleanup(root);
 }
 
+void current_by_name_tool_resolves_the_named_subject() {
+    auto root = test_root("current_by_name_tool_resolves_the_named_subject");
+    KnowledgeKernel kernel(StorageConfig{root});
+
+    kernel.commit_by_name("Alice", "works_at", Value::of_text("Acme"), 1704067200, 0, 1719792000, 0.95);
+
+    auto result = handle_tool_call(kernel, "current_by_name", nlohmann::json{{"subject_name", "Alice"}});
+    assert(!result.is_error);
+
+    auto current_json = nlohmann::json::parse(result.content_text);
+    assert(current_json.is_array());
+    assert(current_json.size() == 1);
+
+    auto unknown = handle_tool_call(kernel, "current_by_name", nlohmann::json{{"subject_name", "Nobody"}});
+    assert(!unknown.is_error);
+    assert(nlohmann::json::parse(unknown.content_text).is_array());
+    assert(nlohmann::json::parse(unknown.content_text).empty());
+
+    cleanup(root);
+}
+
 void current_by_object_and_current_by_predicate_tools_round_trip() {
     auto root = test_root("current_by_object_and_current_by_predicate_tools_round_trip");
     KnowledgeKernel kernel(StorageConfig{root});
@@ -278,6 +300,7 @@ int main() {
     tool_specs_cover_every_kernel_command_with_a_well_formed_schema();
     commit_tool_round_trips_ids_timestamps_and_confidence();
     commit_by_name_tool_interns_names_and_commits();
+    current_by_name_tool_resolves_the_named_subject();
     intern_entity_tool_round_trips_a_string_argument();
     intern_value_tool_round_trips_a_tagged_value_argument();
     intern_document_tool_round_trips_base64_bytes();

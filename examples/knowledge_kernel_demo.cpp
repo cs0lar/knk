@@ -207,8 +207,11 @@ int main() {
         // pre-existing ids for yet.
         std::cout << "\n== Committing by name (no pre-interning required) ==\n";
         kernel.commit_by_name("Beta Inc", "founded_in", Value::of_int64(2015), OPEN_ENDED, OPEN_ENDED, 1719878400, 1.0);
-        print_facts("current(Beta Inc) -- founded_in fact committed without ever calling intern_* directly:", kernel,
-                    kernel.current(beta));
+        // current_by_name is the read-side mirror: looks the name up via find_entity rather than
+        // interning it, so a name that was never committed returns an empty vector instead of
+        // spuriously minting a new entity.
+        print_facts("current_by_name(\"Beta Inc\") -- looked up by name, no id required by the caller:", kernel,
+                    kernel.current_by_name("Beta Inc"));
 
         // --- Supersession ------------------------------------------------------------
         std::cout << "\n== Correcting a fact via supersession ==\n";

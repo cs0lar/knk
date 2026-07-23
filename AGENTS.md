@@ -525,6 +525,29 @@ Current implementation status:
  `commit_by_name_tool_interns_names_and_commits` (plus the updated 39-name completeness set) in
  `tests/mcp_tools_tests.cpp`. `examples/knowledge_kernel_demo.cpp` gained a "Committing by name"
  section.
+* **Added 2026-07-23:** `KnowledgeKernel::current_by_name(subject_name) -> vector<Assertion>` — the
+ read-side mirror of `commit_by_name`, closing the same friction on the query side: asking "what do
+ we currently know about Alice" through MCP previously cost two tool calls (`find_entity("Alice")`
+ then `current(id)`) even though the North Star's own lead example asks for exactly this by name.
+ **Deliberate asymmetry with `commit_by_name`:** this looks the name up via `find_entity`, it does
+ **not** intern it — a read-only query must never spuriously mint a new entity/id as a side effect of
+ asking about a name that was never committed (a typo, or a subject the kernel genuinely doesn't know
+ yet), so an unresolved name returns an empty vector, matching `current()`'s own behavior for a
+ subject id with no current facts, rather than throwing or auto-creating. Pure composition, like
+ `commit_by_name`: `find_entity(subject_name)` then `current(*id)`, no new storage. Scoped narrowly to
+ just `current`, the one method the North Star example actually names — deliberately **not** extended
+ to `valid_at`/`known_at`/`assertions_for_subject`/the other subject-keyed query methods, the same
+ "don't extend beyond a concrete, demonstrated friction point" discipline `commit_by_name` itself
+ followed against `commit_superseding`/`commit_retraction`/`commit_hypothesis`. `KernelCommand`/
+ `KernelResult` gained `CurrentByNameCommand` (query, alongside `CurrentCommand`; reuses the existing
+ `vector<Assertion>` `KernelResult` alternative, no new one needed), and `mcp_tools`/
+ `docs/mcp_server.md` gained the matching `current_by_name` tool (40 tools total now, up from 39).
+ Covered by `current_by_name_resolves_the_named_subject_and_returns_current_assertions` and
+ `current_by_name_returns_empty_for_an_unknown_name` in `tests/knowledge_kernel_tests.cpp`,
+ `current_by_name_command_round_trips` in `tests/kernel_command_tests.cpp`, and
+ `current_by_name_tool_resolves_the_named_subject` (plus the updated 40-name completeness set) in
+ `tests/mcp_tools_tests.cpp`. `examples/knowledge_kernel_demo.cpp`'s "Committing by name" section now
+ also demonstrates `current_by_name`.
 
 ### Phase 6 — Provenance & Agentic Interface
 
@@ -1750,7 +1773,7 @@ Implementation:
 
 * `third_party/nlohmann/json.hpp` — this project's first external dependency: a single vendored
  header (nlohmann/json v3.12.0, MIT license, fetched from the upstream `single_include` release, not
- a moving branch). `KernelCommand`/`KernelResult` together span 39 command shapes and 11 result
+ a moving branch). `KernelCommand`/`KernelResult` together span 40 command shapes and 11 result
  shapes with varied field types (ids, timestamps, raw bytes, the tagged `Value` union); a hand-rolled
  JSON parser correctly covering escaping/unicode/number formats for all of that was judged real,
  bug-prone surface for no benefit over a well-tested single-header library. `target_include_directories(kernel PUBLIC third_party)` in `CMakeLists.txt` makes `#include
@@ -1765,8 +1788,9 @@ Implementation:
  surface (`InternDocumentCommand::content` / `DocumentContentCommand`'s return) — JSON has no native
  binary type.
 * `include/kernel/mcp_tools.hpp` / `src/mcp_tools.cpp` — the pure, I/O-free half of the server: one
- MCP tool per `KernelCommand` variant (39 total, after `commit_by_name` — see Phase 5's "Current
- implementation status" — added a 39th), named after the mirrored `KnowledgeKernel` method
+ MCP tool per `KernelCommand` variant (40 total, after `commit_by_name` and `current_by_name` — see
+ Phase 5's "Current implementation status" — added the 39th and 40th), named after the mirrored
+ `KnowledgeKernel` method
  (`"commit"`, `"current_by_object"`, ...), each with a JSON Schema `inputSchema` built from its
  fields. Deliberately not a single generic "execute a `KernelCommand` blob" tool — MCP tool schemas
  are meant to be individually discoverable and typed by an agent, which a polymorphic tool would

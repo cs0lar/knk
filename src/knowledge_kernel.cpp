@@ -365,6 +365,15 @@ std::vector<Assertion> KnowledgeKernel::current(EntityId subject) const {
     return result;
 }
 
+std::vector<Assertion> KnowledgeKernel::current_by_name(std::string_view subject_name) const {
+    auto subject = find_entity(subject_name);
+    if (!subject.has_value()) {
+        return {};
+    }
+
+    return current(*subject);
+}
+
 std::vector<Assertion> KnowledgeKernel::current_by_object(EntityId object) const {
     std::vector<Assertion> result;
 

@@ -371,6 +371,23 @@ void current_command_round_trips() {
     cleanup(root);
 }
 
+void current_by_name_command_round_trips() {
+    auto root = test_root("current_by_name_command_round_trips");
+    KnowledgeKernel kernel(StorageConfig{root});
+    seed_query_kernel(kernel);
+
+    auto d = kernel.current_by_name("Alice");
+    auto v = std::get<std::vector<Assertion>>(kernel.execute(CurrentByNameCommand{"Alice"}));
+    assert(ids(d) == ids(v));
+    assert(!v.empty());
+
+    // An unknown name round-trips as empty through both paths too.
+    assert(kernel.current_by_name("Nobody").empty());
+    assert(std::get<std::vector<Assertion>>(kernel.execute(CurrentByNameCommand{"Nobody"})).empty());
+
+    cleanup(root);
+}
+
 void current_by_object_command_round_trips() {
     auto root = test_root("current_by_object_command_round_trips");
     KnowledgeKernel kernel(StorageConfig{root});
@@ -697,6 +714,7 @@ int main() {
     get_command_round_trips();
     assertions_for_subject_command_round_trips();
     current_command_round_trips();
+    current_by_name_command_round_trips();
     current_by_object_command_round_trips();
     current_by_predicate_command_round_trips();
     valid_at_command_round_trips();

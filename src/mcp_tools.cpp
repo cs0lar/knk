@@ -255,6 +255,14 @@ const std::vector<ToolDefinition> &tool_definitions() {
                             return kernel.execute(CurrentCommand{require_id(args, "subject")});
                         }});
 
+        defs.push_back({{"current_by_name",
+                         "Returns every currently active, open-ended assertion for a subject looked up by name; "
+                         "empty (not an error) if the name was never interned.",
+                         object_schema({{"subject_name", string_property("Subject entity name.")}}, {"subject_name"})},
+                        [](KnowledgeKernel &kernel, const nlohmann::json &args) -> KernelResult {
+                            return kernel.execute(CurrentByNameCommand{require_string(args, "subject_name")});
+                        }});
+
         defs.push_back({{"current_by_object", "Reverse-direction lookup: who currently has the given entity as object.",
                          object_schema({{"object", integer_property("Object EntityId.")}}, {"object"})},
                         [](KnowledgeKernel &kernel, const nlohmann::json &args) -> KernelResult {
