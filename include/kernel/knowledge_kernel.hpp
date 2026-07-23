@@ -78,6 +78,13 @@ class KnowledgeKernel {
 
     std::vector<Assertion> current(EntityId subject) const;
 
+    // Read-side mirror of commit_by_name: resolves subject_name via find_entity and delegates to
+    // current(). Deliberately looks up rather than interns -- unlike commit_by_name, a read-only query
+    // must not spuriously mint a new entity/id for a name that was never committed (a typo or an
+    // as-yet-unknown subject). Returns an empty vector for a name that was never interned, matching
+    // current()'s existing behavior for a subject id with no current facts.
+    std::vector<Assertion> current_by_name(std::string_view subject_name) const;
+
     // Reverse-direction counterpart to current(subject): every currently active, open-ended
     // assertion where the given entity is the object rather than the subject -- e.g. "who currently
     // works at Acme." object is resolved through Catalog first, exactly like current(subject)

@@ -46,7 +46,7 @@ one-liner, which works for testing but isn't how a real MCP client talks to it.
 
 ## Tools
 
-One tool per `KnowledgeKernel` method, 39 total — the exact set `KernelCommand` reifies (see
+One tool per `KnowledgeKernel` method, 40 total — the exact set `KernelCommand` reifies (see
 `include/kernel/kernel_command.hpp`). Argument and return types follow the method signatures directly:
 `EntityId`/`PredicateId`/`AssertionId` are JSON integers, `Timestamp` is a JSON integer (Unix seconds),
 `confidence` is a JSON number, raw bytes (`intern_document`'s `content`, `document_content`'s return
@@ -79,6 +79,7 @@ against a running server for the full JSON Schema of each.
 | `get` | Fetches a single assertion by id. |
 | `assertions_for_subject` | Returns every recorded assertion (any status) for a subject. |
 | `current` | Returns every currently active, open-ended assertion for a subject. |
+| `current_by_name` | Returns every currently active, open-ended assertion for a subject looked up by name; empty (not an error) if the name was never interned. |
 | `current_by_object` | Reverse-direction lookup: who currently has the given entity as object. |
 | `current_by_predicate` | Kernel-wide lookup: every currently active assertion for a predicate, any subject. |
 | `valid_at` | Returns assertions valid at a given point in valid time. |

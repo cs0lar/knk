@@ -1438,6 +1438,40 @@ void commit_hypothesis_is_excluded_from_current_and_valid_at() {
     cleanup(root);
 }
 
+void current_by_name_resolves_the_named_subject_and_returns_current_assertions() {
+    auto root = test_root("current_by_name_resolves_the_named_subject_and_returns_current_assertions");
+    KnowledgeKernel kernel(StorageConfig{root});
+
+    auto id =
+        kernel.commit_by_name("Alice", "works_at", Value::of_text("Acme"), JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.95);
+
+    auto by_name = kernel.current_by_name("Alice");
+
+    assert(by_name.size() == 1);
+    assert(by_name[0].id == id);
+
+    // Agrees with the id-based lookup for the same (interned) subject.
+    auto alice_id = kernel.find_entity("Alice");
+    assert(alice_id.has_value());
+    auto by_id = kernel.current(*alice_id);
+    assert(by_id.size() == 1);
+    assert(by_id[0].id == by_name[0].id);
+
+    cleanup(root);
+}
+
+void current_by_name_returns_empty_for_an_unknown_name() {
+    auto root = test_root("current_by_name_returns_empty_for_an_unknown_name");
+    KnowledgeKernel kernel(StorageConfig{root});
+
+    // "Alice" was never interned -- unlike commit_by_name, a read-only lookup must not spuriously mint
+    // a new entity for a name that was never committed.
+    assert(kernel.current_by_name("Alice").empty());
+    assert(!kernel.find_entity("Alice").has_value());
+
+    cleanup(root);
+}
+
 void current_by_object_returns_active_open_ended_assertions_referencing_the_entity() {
     auto root = test_root("current_by_object_returns_active_open_ended_assertions_referencing_the_entity");
 
@@ -1919,6 +1953,8 @@ int main() {
     get_unknown_assertion_returns_nullopt();
     current_assertion_is_preserved_across_kernels();
     current_assertion_returns_open_ended_assertion();
+    current_by_name_resolves_the_named_subject_and_returns_current_assertions();
+    current_by_name_returns_empty_for_an_unknown_name();
     current_by_object_returns_active_open_ended_assertions_referencing_the_entity();
     current_by_object_excludes_superseded_and_resolves_merged_entities();
     current_by_predicate_returns_every_active_open_ended_assertion_for_the_predicate();
