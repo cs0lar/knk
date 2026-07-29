@@ -22,7 +22,7 @@ using namespace knk;
 
 namespace {
 
-constexpr const char *PROTOCOL_VERSION = "2024-11-05";
+constexpr const char *PROTOCOL_VERSION = "2025-06-18";
 constexpr const char *SERVER_NAME = "knk-mcp-server";
 constexpr const char *SERVER_VERSION = "0.1.0";
 

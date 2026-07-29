@@ -108,7 +108,7 @@ against a running server for the full JSON Schema of each.
 
 ```bash
 {
-  echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"example-client","version":"0.1.0"}}}'
+  echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"example-client","version":"0.1.0"}}}'
   echo '{"jsonrpc":"2.0","method":"notifications/initialized"}'
   echo '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"intern_entity","arguments":{"name":"Alice"}}}'
   echo '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"intern_entity","arguments":{"name":"Acme"}}}'
@@ -121,7 +121,7 @@ against a running server for the full JSON Schema of each.
 `initialize`:
 
 ```json
-{"id":1,"jsonrpc":"2.0","result":{"capabilities":{"tools":{}},"protocolVersion":"2024-11-05","serverInfo":{"name":"knk-mcp-server","version":"0.1.0"}}}
+{"id":1,"jsonrpc":"2.0","result":{"capabilities":{"tools":{}},"protocolVersion":"2025-06-18","serverInfo":{"name":"knk-mcp-server","version":"0.1.0"}}}
 ```
 
 `intern_entity("Alice")`, `intern_entity("Acme")`, `intern_predicate("works_at")` — each returns the
