@@ -42,3 +42,8 @@ the PR that makes it — see `CONTRIBUTING.md`.
   full tool list.
 - Public-repo scaffolding: `README.md`, `LICENSE` (MIT), `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`,
   `SECURITY.md`, and CI (GitHub Actions build + test on push/PR).
+
+### Fixed
+
+- `mcp_server`'s `initialize` response advertised the original `2024-11-05` MCP protocol revision;
+  bumped to `2025-06-18` so newer clients that reject stale revisions can connect.
