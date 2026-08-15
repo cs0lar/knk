@@ -11,43 +11,51 @@ namespace knk::mcp {
 
 namespace {
 
-nlohmann::json integer_property(const std::string &description) {
-    return nlohmann::json{{"type", "integer"}, {"description", description}};
+// These return nlohmann::ordered_json, not json: object_schema below assembles them into a
+// "properties" object whose *emitted* key order is a positional calling convention for treelang-
+// style callers (see AGENTS.md's "MCP parameter ordering" rule). json's default object is
+// std::map-backed and re-sorts keys alphabetically on serialization, silently breaking that
+// convention the moment a schema has both required and optional parameters; ordered_json preserves
+// insertion order through dump().
+
+nlohmann::ordered_json integer_property(const std::string &description) {
+    return nlohmann::ordered_json{{"type", "integer"}, {"description", description}};
 }
 
-nlohmann::json number_property(const std::string &description) {
-    return nlohmann::json{{"type", "number"}, {"description", description}};
+nlohmann::ordered_json number_property(const std::string &description) {
+    return nlohmann::ordered_json{{"type", "number"}, {"description", description}};
 }
 
-nlohmann::json string_property(const std::string &description) {
-    return nlohmann::json{{"type", "string"}, {"description", description}};
+nlohmann::ordered_json string_property(const std::string &description) {
+    return nlohmann::ordered_json{{"type", "string"}, {"description", description}};
 }
 
-nlohmann::json boolean_property(const std::string &description) {
-    return nlohmann::json{{"type", "boolean"}, {"description", description}};
+nlohmann::ordered_json boolean_property(const std::string &description) {
+    return nlohmann::ordered_json{{"type", "boolean"}, {"description", description}};
 }
 
-nlohmann::json base64_string_property(const std::string &description) {
-    return nlohmann::json{{"type", "string"}, {"description", description + " (base64-encoded bytes)"}};
+nlohmann::ordered_json base64_string_property(const std::string &description) {
+    return nlohmann::ordered_json{{"type", "string"}, {"description", description + " (base64-encoded bytes)"}};
 }
 
-nlohmann::json value_property(const std::string &description) {
-    return nlohmann::json{{"type", "object"},
-                          {"description", description},
-                          {"properties",
-                           {{"kind", {{"type", "string"}, {"enum", {"text", "int64", "double", "bool", "timestamp"}}}},
-                            {"value", {{"description", "Interpreted according to kind."}}}}},
-                          {"required", nlohmann::json::array({"kind", "value"})}};
+nlohmann::ordered_json value_property(const std::string &description) {
+    return nlohmann::ordered_json{
+        {"type", "object"},
+        {"description", description},
+        {"properties",
+         {{"kind", {{"type", "string"}, {"enum", {"text", "int64", "double", "bool", "timestamp"}}}},
+          {"value", {{"description", "Interpreted according to kind."}}}}},
+        {"required", nlohmann::ordered_json::array({"kind", "value"})}};
 }
 
-nlohmann::json object_schema(std::vector<std::pair<std::string, nlohmann::json>> properties,
-                             std::vector<std::string> required) {
-    nlohmann::json properties_json = nlohmann::json::object();
+nlohmann::ordered_json object_schema(std::vector<std::pair<std::string, nlohmann::ordered_json>> properties,
+                                     std::vector<std::string> required) {
+    nlohmann::ordered_json properties_json = nlohmann::ordered_json::object();
     for (auto &[name, prop] : properties) {
         properties_json[name] = std::move(prop);
     }
 
-    nlohmann::json schema;
+    nlohmann::ordered_json schema;
     schema["type"] = "object";
     schema["properties"] = std::move(properties_json);
     schema["required"] = std::move(required);

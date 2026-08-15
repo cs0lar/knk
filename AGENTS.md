@@ -1711,6 +1711,30 @@ When concurrency is introduced:
 
 -- -
 
+## MCP Parameter Ordering
+
+**Added 2026-08-15, after #47.** `mcp_tools.cpp`'s `object_schema` property list is a *signature*,
+not a set. Declare parameters in signature order with **all optional parameters last**, and list
+`required` as a **prefix** of that order — e.g. `changes_since`'s schema declares
+`observed_since, limit, newest_first` with `required = [observed_since]`, not `limit, newest_first,
+observed_since` even though that would be equally valid JSON Schema.
+
+This is a wire-format guarantee, not a style preference: a treelang-style caller binds tool
+arguments positionally against the *emitted* `properties` order and takes a prefix for the values
+it supplies, so an optional parameter declared ahead of a required one silently shifts every
+argument after it — see #47 for the incident (introduced by #43's first optional MCP parameters,
+where `nlohmann::json`'s default `std::map`-backed object re-sorted `properties` alphabetically on
+serialization, moving `limit`/`newest_first` ahead of the required parameters they were declared
+after). `ToolSpec::input_schema` and every property-builder helper in `mcp_tools.cpp` use
+`nlohmann::ordered_json` for exactly this reason — do not change them back to `nlohmann::json`, and
+if a new JSON container sits between a schema and the wire (as `mcp/main.cpp`'s `tools/list`
+envelope does), it has to stay `ordered_json` all the way to `dump()` too, since assigning an
+`ordered_json` into a plain `json` object re-sorts it right back.
+
+`tests/mcp_tools_tests.cpp`'s `every_tool_schema_emits_required_as_a_prefix_of_properties_in_declared_order`
+guards this against the *serialized* schema (dump then re-parse with `ordered_json`), not the
+declared one, since the declarations were never wrong — only the serialization path was.
+
 ## Documentation Requirements
 
 Update documentation when changing semantics.

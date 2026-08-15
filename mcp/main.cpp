@@ -27,49 +27,55 @@ constexpr const char *PROTOCOL_VERSION = "2025-06-18";
 constexpr const char *SERVER_NAME = "knk-mcp-server";
 constexpr const char *SERVER_VERSION = "0.1.0";
 
-void write_message(const nlohmann::json &message) {
+void write_message(const nlohmann::ordered_json &message) {
     std::cout << message.dump() << "\n";
     std::cout.flush();
 }
 
-nlohmann::json rpc_result(const nlohmann::json &id, nlohmann::json result) {
-    return nlohmann::json{{"jsonrpc", "2.0"}, {"id", id}, {"result", std::move(result)}};
+nlohmann::ordered_json rpc_result(const nlohmann::json &id, nlohmann::ordered_json result) {
+    return nlohmann::ordered_json{{"jsonrpc", "2.0"}, {"id", id}, {"result", std::move(result)}};
 }
 
-nlohmann::json rpc_error(const nlohmann::json &id, int code, const std::string &message) {
-    return nlohmann::json{{"jsonrpc", "2.0"}, {"id", id}, {"error", {{"code", code}, {"message", message}}}};
+nlohmann::ordered_json rpc_error(const nlohmann::json &id, int code, const std::string &message) {
+    return nlohmann::ordered_json{{"jsonrpc", "2.0"}, {"id", id}, {"error", {{"code", code}, {"message", message}}}};
 }
 
-nlohmann::json handle_initialize() {
-    return nlohmann::json{{"protocolVersion", PROTOCOL_VERSION},
-                          {"capabilities", {{"tools", nlohmann::json::object()}}},
-                          {"serverInfo", {{"name", SERVER_NAME}, {"version", SERVER_VERSION}}}};
+nlohmann::ordered_json handle_initialize() {
+    return nlohmann::ordered_json{{"protocolVersion", PROTOCOL_VERSION},
+                                  {"capabilities", {{"tools", nlohmann::ordered_json::object()}}},
+                                  {"serverInfo", {{"name", SERVER_NAME}, {"version", SERVER_VERSION}}}};
 }
 
-nlohmann::json handle_tools_list() {
-    nlohmann::json tools = nlohmann::json::array();
+// Built with ordered_json end-to-end (not just ToolSpec::input_schema): assigning an ordered_json
+// value into a plain nlohmann::json object re-sorts its keys on the spot, so every container this
+// schema passes through on its way to the wire -- the per-tool entry, the "tools" array, the
+// "result" envelope -- has to stay ordered_json too, or the property order the client depends on
+// (see AGENTS.md's "MCP parameter ordering" rule) dies at whichever level converts back to json.
+nlohmann::ordered_json handle_tools_list() {
+    nlohmann::ordered_json tools = nlohmann::ordered_json::array();
 
     for (const auto &spec : mcp::tool_specs()) {
-        tools.push_back(
-            nlohmann::json{{"name", spec.name}, {"description", spec.description}, {"inputSchema", spec.input_schema}});
+        tools.push_back(nlohmann::ordered_json{
+            {"name", spec.name}, {"description", spec.description}, {"inputSchema", spec.input_schema}});
     }
 
-    return nlohmann::json{{"tools", tools}};
+    return nlohmann::ordered_json{{"tools", tools}};
 }
 
-nlohmann::json handle_tools_call(KnowledgeKernel &kernel, const nlohmann::json &params) {
+nlohmann::ordered_json handle_tools_call(KnowledgeKernel &kernel, const nlohmann::json &params) {
     std::string name = params.at("name").get<std::string>();
     nlohmann::json arguments = params.value("arguments", nlohmann::json::object());
 
     mcp::ToolCallResult call_result = mcp::handle_tool_call(kernel, name, arguments);
 
-    return nlohmann::json{{"content", nlohmann::json::array({{{"type", "text"}, {"text", call_result.content_text}}})},
-                          {"isError", call_result.is_error}};
+    return nlohmann::ordered_json{
+        {"content", nlohmann::ordered_json::array({{{"type", "text"}, {"text", call_result.content_text}}})},
+        {"isError", call_result.is_error}};
 }
 
 // Dispatches one JSON-RPC request/notification. Returns std::nullopt for notifications (no "id"
 // field), since JSON-RPC notifications never get a response, by spec.
-std::optional<nlohmann::json> handle_request(KnowledgeKernel &kernel, const nlohmann::json &request) {
+std::optional<nlohmann::ordered_json> handle_request(KnowledgeKernel &kernel, const nlohmann::json &request) {
     bool is_notification = !request.contains("id");
     nlohmann::json id = is_notification ? nlohmann::json(nullptr) : request.at("id");
 
@@ -77,7 +83,8 @@ std::optional<nlohmann::json> handle_request(KnowledgeKernel &kernel, const nloh
     try {
         method = request.at("method").get<std::string>();
     } catch (const std::exception &) {
-        return is_notification ? std::nullopt : std::optional<nlohmann::json>(rpc_error(id, -32600, "invalid request"));
+        return is_notification ? std::nullopt
+                               : std::optional<nlohmann::ordered_json>(rpc_error(id, -32600, "invalid request"));
     }
 
     if (method == "notifications/initialized" || method == "notifications/cancelled") {
@@ -95,10 +102,12 @@ std::optional<nlohmann::json> handle_request(KnowledgeKernel &kernel, const nloh
             return rpc_result(id, handle_tools_call(kernel, request.at("params")));
         }
 
-        return is_notification ? std::nullopt
-                               : std::optional<nlohmann::json>(rpc_error(id, -32601, "method not found: " + method));
+        return is_notification
+                   ? std::nullopt
+                   : std::optional<nlohmann::ordered_json>(rpc_error(id, -32601, "method not found: " + method));
     } catch (const std::exception &error) {
-        return is_notification ? std::nullopt : std::optional<nlohmann::json>(rpc_error(id, -32602, error.what()));
+        return is_notification ? std::nullopt
+                               : std::optional<nlohmann::ordered_json>(rpc_error(id, -32602, error.what()));
     }
 }
 

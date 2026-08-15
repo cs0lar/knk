@@ -3,6 +3,7 @@
 #include <iostream>
 #include <set>
 #include <string>
+#include <vector>
 
 #include "kernel/knowledge_kernel.hpp"
 #include "kernel/mcp_tools.hpp"
@@ -77,6 +78,31 @@ void tool_specs_cover_every_kernel_command_with_a_well_formed_schema() {
     }
 
     assert(actual_names == expected_names);
+}
+
+// Guards the wire-format invariant AGENTS.md's "MCP parameter ordering" rule documents: a
+// treelang-style caller binds tool arguments positionally against the *emitted* "properties"
+// order and takes a prefix for "required", so "required" must equal properties[0:len(required)]
+// once the schema is actually serialized -- not just as declared in mcp_tools.cpp. This dumps each
+// schema to a JSON string (as it would go over the wire) and re-parses with ordered_json, since
+// re-parsing with plain nlohmann::json would re-sort keys and hide exactly the bug this test
+// exists to catch (see #47: ToolSpec::input_schema used to be nlohmann::json, which silently
+// resorted "properties" alphabetically on dump(), breaking assertions_for_subject, commit_history,
+// and changes_since as soon as #43 gave them optional trailing parameters).
+void every_tool_schema_emits_required_as_a_prefix_of_properties_in_declared_order() {
+    for (const auto &spec : tool_specs()) {
+        nlohmann::ordered_json wire = nlohmann::ordered_json::parse(spec.input_schema.dump());
+
+        std::vector<std::string> required = wire.at("required").get<std::vector<std::string>>();
+        std::vector<std::string> property_order;
+        for (const auto &[name, prop] : wire.at("properties").items()) {
+            property_order.push_back(name);
+        }
+
+        assert(required.size() <= property_order.size());
+        std::vector<std::string> leading_properties(property_order.begin(), property_order.begin() + required.size());
+        assert(leading_properties == required);
+    }
 }
 
 void commit_tool_round_trips_ids_timestamps_and_confidence() {
@@ -340,6 +366,7 @@ void kernel_exception_from_execute_is_reported_as_a_tool_error_not_a_crash() {
 
 int main() {
     tool_specs_cover_every_kernel_command_with_a_well_formed_schema();
+    every_tool_schema_emits_required_as_a_prefix_of_properties_in_declared_order();
     commit_tool_round_trips_ids_timestamps_and_confidence();
     commit_by_name_tool_interns_names_and_commits();
     current_by_name_tool_resolves_the_named_subject();
