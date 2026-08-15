@@ -66,3 +66,12 @@ the PR that makes it — see `CONTRIBUTING.md`.
 - `mcp_server` no longer crashes with an unhandled-exception abort if the storage root can't be
   opened (e.g. it's already locked by another process); it now prints a clear error to stderr and
   exits with status 1.
+- MCP tool schemas now emit `properties` in the order they're declared, with `required` as a
+  prefix of that order, as `tools/list` sends them over the wire. `ToolSpec::input_schema` was
+  `nlohmann::json`, whose default object silently re-sorts keys alphabetically on serialization;
+  this was invisible until #43 added the first optional trailing parameters (`limit`/
+  `newest_first` on `assertions_for_subject`/`commit_history`/`changes_since`), at which point the
+  serialized schemas advertised those optional parameters *ahead* of the required ones — breaking
+  any caller (e.g. treelang) that binds arguments positionally against the emitted order. Fixed by
+  switching the schema-building path to `nlohmann::ordered_json` end-to-end. See #47 and
+  `AGENTS.md`'s new "MCP Parameter Ordering" section.

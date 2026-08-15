@@ -18,7 +18,11 @@ namespace knk::mcp {
 struct ToolSpec {
     std::string name;
     std::string description;
-    nlohmann::json input_schema; // JSON Schema object, per MCP's tools/list "inputSchema" field.
+    // JSON Schema object, per MCP's tools/list "inputSchema" field. ordered_json (not json) because
+    // callers bind arguments positionally against the emitted "properties" order (see AGENTS.md's
+    // "MCP parameter ordering" rule) -- json's default map-backed object would re-sort properties
+    // alphabetically on serialization and silently break that convention.
+    nlohmann::ordered_json input_schema;
 };
 
 // Every registered tool's name/description/schema, in a stable order (declaration order below).
