@@ -26,6 +26,7 @@ add_library(kernel
     src/entity_merge_log.cpp
     src/json_codec.cpp
     src/mcp_tools.cpp
+    src/storage_lock.cpp
 )
 
 target_include_directories(kernel
@@ -173,6 +174,10 @@ add_executable(mcp_tools_tests
     tests/mcp_tools_tests.cpp
 )
 
+add_executable(storage_lock_tests
+    tests/storage_lock_tests.cpp
+)
+
 target_link_libraries(knowledge_kernel_tests
     PRIVATE kernel
 )
@@ -246,6 +251,10 @@ target_link_libraries(json_codec_tests
 )
 
 target_link_libraries(mcp_tools_tests
+    PRIVATE kernel
+)
+
+target_link_libraries(storage_lock_tests
     PRIVATE kernel
 )
 
@@ -342,4 +351,9 @@ add_test(
 add_test(
     NAME mcp_tools_tests
     COMMAND mcp_tools_tests
+)
+
+add_test(
+    NAME storage_lock_tests
+    COMMAND storage_lock_tests
 )

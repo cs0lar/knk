@@ -180,11 +180,13 @@ void get_unknown_assertion_returns_nullopt() {
 void current_assertion_is_preserved_across_kernels() {
     auto root = test_root("current_assertion_preserves_result_across_kernels");
 
-    KnowledgeKernel kernel(StorageConfig{root});
+    {
+        KnowledgeKernel kernel(StorageConfig{root});
 
-    kernel.commit(ALICE, WORKS_AT, ACME, JAN_1_2023, JUL_1_2024, JUL_2_2024, 0.95);
+        kernel.commit(ALICE, WORKS_AT, ACME, JAN_1_2023, JUL_1_2024, JUL_2_2024, 0.95);
 
-    kernel.commit(ALICE, WORKS_AT, BETA, JUL_1_2024, OPEN_ENDED, JUL_2_2024, 0.90);
+        kernel.commit(ALICE, WORKS_AT, BETA, JUL_1_2024, OPEN_ENDED, JUL_2_2024, 0.90);
+    }
 
     KnowledgeKernel other_kernel(StorageConfig{root});
 
@@ -275,12 +277,15 @@ void retracted_assertion_is_excluded_from_current_queries() {
 void recovery_preserves_superseded_state() {
 
     auto root = test_root("recovery_preserves_superseded_state");
-    KnowledgeKernel kernel(StorageConfig{root});
+    AssertionId id;
+    AssertionId other_id;
+    {
+        KnowledgeKernel kernel(StorageConfig{root});
 
-    AssertionId id = kernel.commit(ALICE, WORKS_AT, ACME, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.95);
+        id = kernel.commit(ALICE, WORKS_AT, ACME, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.95);
 
-    AssertionId other_id =
-        kernel.commit_superseding(ALICE, WORKS_AT, BETA, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.95, id);
+        other_id = kernel.commit_superseding(ALICE, WORKS_AT, BETA, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.95, id);
+    }
 
     KnowledgeKernel other_kernel(StorageConfig{root});
 
@@ -300,12 +305,15 @@ void recovery_preserves_superseded_state() {
 void recovery_preserves_retracted_state() {
 
     auto root = test_root("recovery_preserves_retracted_state");
-    KnowledgeKernel kernel(StorageConfig{root});
+    AssertionId id;
+    AssertionId other_id;
+    {
+        KnowledgeKernel kernel(StorageConfig{root});
 
-    AssertionId id = kernel.commit(ALICE, WORKS_AT, ACME, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.95);
+        id = kernel.commit(ALICE, WORKS_AT, ACME, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.95);
 
-    AssertionId other_id =
-        kernel.commit_retraction(ALICE, WORKS_AT, ACME, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.95, id);
+        other_id = kernel.commit_retraction(ALICE, WORKS_AT, ACME, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.95, id);
+    }
 
     KnowledgeKernel other_kernel(StorageConfig{root});
 
@@ -340,11 +348,13 @@ void valid_at_returns_historical_assertion() {
 
 void valid_at_is_preserved_across_kernels() {
     auto root = test_root("valid_at_is_preserved_across_kernels");
-    KnowledgeKernel kernel(StorageConfig{root});
+    {
+        KnowledgeKernel kernel(StorageConfig{root});
 
-    kernel.commit(ALICE, WORKS_AT, ACME, JAN_1_2023, JUL_1_2024, JUL_2_2024, 0.95);
+        kernel.commit(ALICE, WORKS_AT, ACME, JAN_1_2023, JUL_1_2024, JUL_2_2024, 0.95);
 
-    kernel.commit(ALICE, WORKS_AT, BETA, JUL_1_2024, OPEN_ENDED, JUL_2_2024, 0.90);
+        kernel.commit(ALICE, WORKS_AT, BETA, JUL_1_2024, OPEN_ENDED, JUL_2_2024, 0.90);
+    }
 
     KnowledgeKernel other_kernel(StorageConfig{root});
     auto assertions = other_kernel.valid_at(ALICE, JAN_1_2024);
@@ -459,11 +469,14 @@ void replay_does_not_append_to_log() {
         auto id = kernel.commit(ALICE, WORKS_AT, ACME, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.95);
     }
 
-    KnowledgeKernel kernel(StorageConfig{root});
+    std::vector<Assertion> assertions;
+    {
+        KnowledgeKernel kernel(StorageConfig{root});
 
-    auto assertions = kernel.commit_history(ALICE, WORKS_AT);
+        assertions = kernel.commit_history(ALICE, WORKS_AT);
 
-    assert(assertions.size() == 1);
+        assert(assertions.size() == 1);
+    }
 
     KnowledgeKernel other_kernel(StorageConfig{root});
 
@@ -669,11 +682,14 @@ void corrupt_observed_time_index_falls_back_to_replay_and_self_heals() {
     auto index_path = StorageConfig{root}.observed_time_index_path();
     write_corrupt_record_size_after_valid_header(index_path);
 
-    KnowledgeKernel recovered_kernel(StorageConfig{root});
+    std::vector<Assertion> assertions;
+    {
+        KnowledgeKernel recovered_kernel(StorageConfig{root});
 
-    auto assertions = recovered_kernel.known_at(ALICE, JUL_1_2024);
-    assert(assertions.size() == 1);
-    assert(assertions[0].object == ACME);
+        assertions = recovered_kernel.known_at(ALICE, JUL_1_2024);
+        assert(assertions.size() == 1);
+        assert(assertions[0].object == ACME);
+    }
 
     // the self-heal rewrite above should have replaced the corrupt file, so a further
     // reopen still recovers correctly (this time via direct restore, not fallback).
@@ -720,10 +736,13 @@ void corrupt_subject_index_falls_back_to_replay_and_self_heals() {
     auto index_path = StorageConfig{root}.subject_index_path();
     write_corrupt_record_size_after_valid_header(index_path);
 
-    KnowledgeKernel recovered_kernel(StorageConfig{root});
+    std::vector<Assertion> assertions;
+    {
+        KnowledgeKernel recovered_kernel(StorageConfig{root});
 
-    auto assertions = recovered_kernel.assertions_for_subject(ALICE);
-    assert(assertions.size() == 2);
+        assertions = recovered_kernel.assertions_for_subject(ALICE);
+        assert(assertions.size() == 2);
+    }
 
     // the self-heal rewrite above should have replaced the corrupt file, so a further
     // reopen still recovers correctly (this time via direct restore, not fallback).
@@ -822,11 +841,14 @@ void corrupt_current_index_falls_back_to_replay_and_self_heals() {
     auto index_path = StorageConfig{root}.current_index_path();
     write_corrupt_record_size_after_valid_header(index_path);
 
-    KnowledgeKernel recovered_kernel(StorageConfig{root});
+    std::vector<Assertion> assertions;
+    {
+        KnowledgeKernel recovered_kernel(StorageConfig{root});
 
-    auto assertions = recovered_kernel.current(ALICE);
-    assert(assertions.size() == 1);
-    assert(assertions[0].object == BETA);
+        assertions = recovered_kernel.current(ALICE);
+        assert(assertions.size() == 1);
+        assert(assertions[0].object == BETA);
+    }
 
     // the self-heal rewrite above should have replaced the corrupt file, so a further
     // reopen still recovers correctly (this time via direct restore, not fallback).
@@ -1942,6 +1964,33 @@ void corrupt_entity_merge_log_is_fatal_on_startup() {
     cleanup(root);
 }
 
+void second_open_of_a_locked_storage_root_fails_and_leaves_the_holder_unaffected() {
+    auto root = test_root("second_open_of_a_locked_storage_root_fails_and_leaves_the_holder_unaffected");
+
+    KnowledgeKernel kernel(StorageConfig{root});
+    kernel.commit(ALICE, WORKS_AT, ACME, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.95);
+
+    bool threw = false;
+    try {
+        KnowledgeKernel contender(StorageConfig{root});
+    } catch (const std::runtime_error &e) {
+        threw = true;
+        assert(std::string(e.what()).find(root.string()) != std::string::npos);
+    }
+
+    assert(threw);
+
+    // The failed second open must not have disturbed the first kernel in any way.
+    auto current = kernel.current(ALICE);
+    assert(current.size() == 1);
+    assert(current[0].object == ACME);
+
+    AssertionId id = kernel.commit(ALICE, WORKS_AT, BETA, JUL_1_2024, OPEN_ENDED, JUL_2_2024, 0.90);
+    assert(kernel.get(id).has_value());
+
+    cleanup(root);
+}
+
 } // namespace
 
 int main() {
@@ -2023,6 +2072,7 @@ int main() {
     assertions_are_not_rewritten_by_a_merge();
     archive_segments_before_is_transparent_to_queries_and_survives_restart();
     corrupt_entity_merge_log_is_fatal_on_startup();
+    second_open_of_a_locked_storage_root_fails_and_leaves_the_holder_unaffected();
 
     std::cout << "All assertion_kernel tests passed.\n";
     return 0;

@@ -4,13 +4,14 @@
 namespace knk {
 
 StorageEngine::StorageEngine(StorageConfig config)
-    : config_(std::move(config)), assertion_log_(config_.segment_directory(), config_.max_records_per_segment),
+    : config_(std::move(config)), storage_lock_(config_.root),
+      assertion_log_(config_.segment_directory(), config_.max_records_per_segment),
       observed_time_index_log_(config_.observed_time_index_path()), subject_index_log_(config_.subject_index_path()),
       current_index_log_(config_.current_index_path()), checkpoint_(config_.checkpoint_path()),
       snapshot_store_(config_.snapshot_path()), entity_catalog_log_(config_.entity_catalog_path()),
       predicate_catalog_log_(config_.predicate_catalog_path()), payload_store_(config_.payload_directory()),
       provenance_log_(config_.provenance_log_path()), entity_merge_log_(config_.entity_merge_log_path()) {
-    std::filesystem::create_directories(config_.root);
+    // config_.root itself is already created by storage_lock_'s constructor, which runs first.
     std::filesystem::create_directories(config_.index_directory());
     std::filesystem::create_directories(config_.payload_directory());
     std::filesystem::create_directories(config_.catalog_directory());

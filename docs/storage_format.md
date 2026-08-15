@@ -13,6 +13,27 @@ variable-length payloads for the two catalog logs and the provenance log (see "E
 catalog" and "Provenance log") — and only the assertion log spreads that framing across multiple
 files instead of one; every other log remains a single file.
 
+## Storage root lock
+
+`LOCK`, at the storage root alongside `assertions.log`, is not a log or a data file: it exists
+purely as the target of an OS-level advisory lock (POSIX `flock()`, `LOCK_EX | LOCK_NB`), taken by
+`StorageEngine`'s constructor and held for its entire lifetime (`kernel/storage_lock.hpp`). Its
+contents are irrelevant and never read — only the lock state on the open file description matters.
+
+**Invariant enforced:** at most one live `StorageEngine`/`KnowledgeKernel` may hold a given storage
+root open at a time, matching the "single writer" model `AGENTS.md`'s Concurrency Rules section
+declares. **Why:** nothing previously checked this — two processes (or two live objects in one
+process) opening the same root would both replay the logs and both start appending, silently, with
+no error at either point; the failure only surfaced later as a log that no longer replayed cleanly.
+**Failure mode:** a second open while the root is held throws `std::runtime_error` naming the path;
+the holder is completely unaffected. **How it's tested:** `tests/storage_lock_tests.cpp` covers
+acquire/conflict/release directly, including a fork+`SIGKILL` test proving the lock is released by
+the kernel on an ungraceful holder exit with no manual cleanup; `tests/knowledge_kernel_tests.cpp`
+covers the same behavior through the public `KnowledgeKernel` API.
+
+This file is not covered by the shared header/record-frame format below — it holds no records, so
+there is no format to version.
+
 ## File layout
 
 Every individual file involved (each assertion-log segment file, each of the three index log files,

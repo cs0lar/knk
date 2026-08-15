@@ -19,6 +19,7 @@
 #include "kernel/provenance_log.hpp"
 #include "kernel/snapshot_store.hpp"
 #include "kernel/storage_config.hpp"
+#include "kernel/storage_lock.hpp"
 #include "kernel/subject_index_log.hpp"
 #include "kernel/time.hpp"
 #include "kernel/value.hpp"
@@ -92,6 +93,9 @@ class StorageEngine {
 
   private:
     StorageConfig config_;
+    // Declared before every log member so it is constructed first and released last, enforcing the
+    // single-writer model for the object's entire lifetime -- see kernel/storage_lock.hpp.
+    StorageLock storage_lock_;
     AssertionLog assertion_log_;
     ObservedTimeIndexLog observed_time_index_log_;
     SubjectIndexLog subject_index_log_;
