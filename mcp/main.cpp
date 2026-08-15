@@ -10,6 +10,7 @@
 // into the built binary manually.
 
 #include <iostream>
+#include <optional>
 #include <string>
 
 #include "kernel/knowledge_kernel.hpp"
@@ -109,7 +110,14 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    KnowledgeKernel kernel(StorageConfig{std::filesystem::path(argv[1])});
+    std::optional<KnowledgeKernel> kernel_storage;
+    try {
+        kernel_storage.emplace(StorageConfig{std::filesystem::path(argv[1])});
+    } catch (const std::exception &error) {
+        std::cerr << "mcp_server: failed to open storage root: " << error.what() << "\n";
+        return 1;
+    }
+    KnowledgeKernel &kernel = *kernel_storage;
 
     std::string line;
     while (std::getline(std::cin, line)) {

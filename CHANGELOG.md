@@ -43,7 +43,20 @@ the PR that makes it — see `CONTRIBUTING.md`.
 - Public-repo scaffolding: `README.md`, `LICENSE` (MIT), `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`,
   `SECURITY.md`, and CI (GitHub Actions build + test on push/PR).
 
+### Added
+
+- `StorageEngine` now takes an advisory exclusive lock (POSIX `flock()`) on the storage root for
+  its lifetime, enforcing the single-writer model `AGENTS.md`'s Concurrency Rules already declared
+  but nothing previously checked. A second concurrent open of the same root — via `mcp_server` or
+  any direct `libkernel.a` caller — now fails fast with a clear error naming the path instead of
+  silently corrupting the log; the lock is released automatically on process exit, including
+  `SIGKILL`, with no manual cleanup required. See `docs/storage_format.md`'s "Storage root lock"
+  section.
+
 ### Fixed
 
 - `mcp_server`'s `initialize` response advertised the original `2024-11-05` MCP protocol revision;
   bumped to `2025-06-18` so newer clients that reject stale revisions can connect.
+- `mcp_server` no longer crashes with an unhandled-exception abort if the storage root can't be
+  opened (e.g. it's already locked by another process); it now prints a clear error to stderr and
+  exits with status 1.

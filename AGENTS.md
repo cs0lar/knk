@@ -1691,6 +1691,15 @@ single writer
 many readers later
 ```
 
+**Added 2026-08-15: the single-writer half of this model is now enforced, not just declared.**
+`StorageEngine`'s constructor takes an advisory exclusive lock (POSIX `flock()`) on the storage
+root for its lifetime (`kernel/storage_lock.hpp`), so a second concurrent open of the same root —
+in `mcp_server`, or any caller linking `libkernel.a` directly — fails fast with a clear error
+instead of silently corrupting the log. This is enforcement of the already-declared model, not new
+concurrency: readers still don't exist, so every open (read or write) takes the exclusive lock
+today; a read-only open can switch to a shared lock additively once "many readers later" lands. See
+`docs/storage_format.md`'s "Storage root lock" section.
+
 Do not add concurrency prematurely.
 
 When concurrency is introduced:
