@@ -53,6 +53,12 @@ the PR that makes it — see `CONTRIBUTING.md`.
   `SIGKILL`, with no manual cleanup required. See `docs/storage_format.md`'s "Storage root lock"
   section.
 
+- `changes_since` gained optional `limit` and `newest_first` parameters, and `assertions_for_subject`/
+  `commit_history` gained an optional `limit` — all default to prior (unlimited, oldest-first)
+  behavior. Lets a caller answer "what's the single latest change" via
+  `changes_since(0, limit=1, newest_first=true)` instead of reading and discarding the entire log to
+  find the tail.
+
 ### Fixed
 
 - `mcp_server`'s `initialize` response advertised the original `2024-11-05` MCP protocol revision;

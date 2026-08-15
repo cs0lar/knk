@@ -320,7 +320,7 @@ std::optional<Assertion> KnowledgeKernel::get(AssertionId id) const {
     return assertions_[id - 1];
 }
 
-std::vector<Assertion> KnowledgeKernel::assertions_for_subject(EntityId subject) const {
+std::vector<Assertion> KnowledgeKernel::assertions_for_subject(EntityId subject, size_t limit) const {
     std::vector<Assertion> result;
 
     subject = catalog_.resolve(subject);
@@ -336,6 +336,10 @@ std::vector<Assertion> KnowledgeKernel::assertions_for_subject(EntityId subject)
         if (assertion.has_value()) {
             result.push_back(*assertion);
         }
+    }
+
+    if (limit > 0 && result.size() > limit) {
+        result.resize(limit);
     }
 
     return result;
@@ -588,7 +592,7 @@ std::vector<Assertion> KnowledgeKernel::observed_time_timeline(EntityId subject,
     return result;
 }
 
-std::vector<Assertion> KnowledgeKernel::commit_history(EntityId subject, PredicateId predicate) const {
+std::vector<Assertion> KnowledgeKernel::commit_history(EntityId subject, PredicateId predicate, size_t limit) const {
     std::vector<Assertion> result;
 
     subject = catalog_.resolve(subject);
@@ -611,10 +615,14 @@ std::vector<Assertion> KnowledgeKernel::commit_history(EntityId subject, Predica
 
     std::sort(result.begin(), result.end(), [](const Assertion &a, const Assertion &b) { return a.id < b.id; });
 
+    if (limit > 0 && result.size() > limit) {
+        result.resize(limit);
+    }
+
     return result;
 }
 
-std::vector<Assertion> KnowledgeKernel::changes_since(Timestamp observed_since) const {
+std::vector<Assertion> KnowledgeKernel::changes_since(Timestamp observed_since, size_t limit, bool newest_first) const {
     std::vector<Assertion> result;
 
     for (const auto &assertion : assertions_) {
@@ -623,12 +631,16 @@ std::vector<Assertion> KnowledgeKernel::changes_since(Timestamp observed_since) 
         }
     }
 
-    std::sort(result.begin(), result.end(), [](const Assertion &a, const Assertion &b) {
+    std::sort(result.begin(), result.end(), [newest_first](const Assertion &a, const Assertion &b) {
         if (a.observed_at != b.observed_at) {
-            return a.observed_at < b.observed_at;
+            return newest_first ? a.observed_at > b.observed_at : a.observed_at < b.observed_at;
         }
-        return a.id < b.id;
+        return newest_first ? a.id > b.id : a.id < b.id;
     });
+
+    if (limit > 0 && result.size() > limit) {
+        result.resize(limit);
+    }
 
     return result;
 }

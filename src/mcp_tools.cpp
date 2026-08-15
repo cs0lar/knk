@@ -23,6 +23,10 @@ nlohmann::json string_property(const std::string &description) {
     return nlohmann::json{{"type", "string"}, {"description", description}};
 }
 
+nlohmann::json boolean_property(const std::string &description) {
+    return nlohmann::json{{"type", "boolean"}, {"description", description}};
+}
+
 nlohmann::json base64_string_property(const std::string &description) {
     return nlohmann::json{{"type", "string"}, {"description", description + " (base64-encoded bytes)"}};
 }
@@ -59,6 +63,23 @@ double require_double(const nlohmann::json &args, const char *key) { return args
 std::string require_string(const nlohmann::json &args, const char *key) { return args.at(key).get<std::string>(); }
 
 size_t require_size(const nlohmann::json &args, const char *key) { return args.at(key).get<size_t>(); }
+
+// Unlike the require_* helpers, these tolerate a missing (or explicit null) key, returning
+// default_value instead -- for optional tool arguments like limit/newest_first, where omitting the
+// argument should mean "same as before this parameter existed," not a parse error.
+size_t optional_size(const nlohmann::json &args, const char *key, size_t default_value) {
+    if (!args.contains(key) || args.at(key).is_null()) {
+        return default_value;
+    }
+    return args.at(key).get<size_t>();
+}
+
+bool optional_bool(const nlohmann::json &args, const char *key, bool default_value) {
+    if (!args.contains(key) || args.at(key).is_null()) {
+        return default_value;
+    }
+    return args.at(key).get<bool>();
+}
 
 Value require_value(const nlohmann::json &args, const char *key) { return value_from_json(args.at(key)); }
 
@@ -243,11 +264,15 @@ const std::vector<ToolDefinition> &tool_definitions() {
                             return kernel.execute(GetCommand{require_id(args, "id")});
                         }});
 
-        defs.push_back({{"assertions_for_subject", "Returns every recorded assertion (any status) for a subject.",
-                         object_schema({{"subject", integer_property("Subject EntityId.")}}, {"subject"})},
-                        [](KnowledgeKernel &kernel, const nlohmann::json &args) -> KernelResult {
-                            return kernel.execute(AssertionsForSubjectCommand{require_id(args, "subject")});
-                        }});
+        defs.push_back(
+            {{"assertions_for_subject", "Returns every recorded assertion (any status) for a subject.",
+              object_schema({{"subject", integer_property("Subject EntityId.")},
+                             {"limit", integer_property("Maximum number of results (omit or 0 for no limit).")}},
+                            {"subject"})},
+             [](KnowledgeKernel &kernel, const nlohmann::json &args) -> KernelResult {
+                 return kernel.execute(
+                     AssertionsForSubjectCommand{require_id(args, "subject"), optional_size(args, "limit", 0)});
+             }});
 
         defs.push_back({{"current", "Returns every currently active, open-ended assertion for a subject.",
                          object_schema({{"subject", integer_property("Subject EntityId.")}}, {"subject"})},
@@ -328,24 +353,34 @@ const std::vector<ToolDefinition> &tool_definitions() {
                      ObservedTimeTimelineCommand{require_id(args, "subject"), require_id(args, "predicate")});
              }});
 
-        defs.push_back({{"commit_history",
-                         "Returns every recorded assertion (any status) for a subject/predicate, in commit "
-                         "order.",
-                         object_schema({{"subject", integer_property("Subject EntityId.")},
-                                        {"predicate", integer_property("Predicate PredicateId.")}},
-                                       {"subject", "predicate"})},
-                        [](KnowledgeKernel &kernel, const nlohmann::json &args) -> KernelResult {
-                            return kernel.execute(
-                                CommitHistoryCommand{require_id(args, "subject"), require_id(args, "predicate")});
-                        }});
+        defs.push_back(
+            {{"commit_history",
+              "Returns every recorded assertion (any status) for a subject/predicate, in commit "
+              "order.",
+              object_schema({{"subject", integer_property("Subject EntityId.")},
+                             {"predicate", integer_property("Predicate PredicateId.")},
+                             {"limit", integer_property("Maximum number of results (omit or 0 for no limit).")}},
+                            {"subject", "predicate"})},
+             [](KnowledgeKernel &kernel, const nlohmann::json &args) -> KernelResult {
+                 return kernel.execute(CommitHistoryCommand{require_id(args, "subject"), require_id(args, "predicate"),
+                                                            optional_size(args, "limit", 0)});
+             }});
 
         defs.push_back(
             {{"changes_since",
               "Kernel-wide, status-agnostic: every assertion observed at or after a cutoff, any "
               "subject or predicate.",
-              object_schema({{"observed_since", integer_property("Observed-at cutoff.")}}, {"observed_since"})},
+              object_schema(
+                  {{"observed_since", integer_property("Observed-at cutoff.")},
+                   {"limit", integer_property("Maximum number of results (omit or 0 for no limit).")},
+                   {"newest_first", boolean_property("If true, most-recently-observed first instead of oldest first "
+                                                     "(default false); combine with limit to fetch just the latest "
+                                                     "change(s) without reading the whole log.")}},
+                  {"observed_since"})},
              [](KnowledgeKernel &kernel, const nlohmann::json &args) -> KernelResult {
-                 return kernel.execute(ChangesSinceCommand{require_timestamp(args, "observed_since")});
+                 return kernel.execute(ChangesSinceCommand{require_timestamp(args, "observed_since"),
+                                                           optional_size(args, "limit", 0),
+                                                           optional_bool(args, "newest_first", false)});
              }});
 
         defs.push_back({{"explain", "Walks the supersession/retraction chain from an assertion back to its root.",

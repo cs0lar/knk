@@ -60,7 +60,7 @@ KernelResult KnowledgeKernel::execute(const KernelCommand &command) {
             } else if constexpr (std::is_same_v<T, GetCommand>) {
                 return get(cmd.id);
             } else if constexpr (std::is_same_v<T, AssertionsForSubjectCommand>) {
-                return assertions_for_subject(cmd.subject);
+                return assertions_for_subject(cmd.subject, cmd.limit);
             } else if constexpr (std::is_same_v<T, CurrentCommand>) {
                 return current(cmd.subject);
             } else if constexpr (std::is_same_v<T, CurrentByNameCommand>) {
@@ -80,9 +80,9 @@ KernelResult KnowledgeKernel::execute(const KernelCommand &command) {
             } else if constexpr (std::is_same_v<T, ObservedTimeTimelineCommand>) {
                 return observed_time_timeline(cmd.subject, cmd.predicate);
             } else if constexpr (std::is_same_v<T, CommitHistoryCommand>) {
-                return commit_history(cmd.subject, cmd.predicate);
+                return commit_history(cmd.subject, cmd.predicate, cmd.limit);
             } else if constexpr (std::is_same_v<T, ChangesSinceCommand>) {
-                return changes_since(cmd.observed_since);
+                return changes_since(cmd.observed_since, cmd.limit, cmd.newest_first);
             } else if constexpr (std::is_same_v<T, ExplainCommand>) {
                 return explain(cmd.id);
             } else if constexpr (std::is_same_v<T, FindConflictsCommand>) {
