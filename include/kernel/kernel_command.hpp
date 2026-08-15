@@ -123,6 +123,7 @@ struct GetCommand {
 
 struct AssertionsForSubjectCommand {
     EntityId subject;
+    size_t limit = 0;
 };
 
 struct CurrentCommand {
@@ -170,10 +171,13 @@ struct ObservedTimeTimelineCommand {
 struct CommitHistoryCommand {
     EntityId subject;
     PredicateId predicate;
+    size_t limit = 0;
 };
 
 struct ChangesSinceCommand {
     Timestamp observed_since;
+    size_t limit = 0;
+    bool newest_first = false;
 };
 
 struct ExplainCommand {

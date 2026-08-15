@@ -74,7 +74,11 @@ class KnowledgeKernel {
 
     std::optional<Assertion> get(AssertionId id) const;
 
-    std::vector<Assertion> assertions_for_subject(EntityId subject) const;
+    // limit caps the number of returned assertions to the given count; 0 (the default) means no
+    // cap, matching prior behavior. Order is otherwise unchanged (whatever assertions_for_subject
+    // already returns), so limit == N means "the first N of that order," not "the N most recent" --
+    // a caller wanting the tail should look at changes_since's newest_first instead.
+    std::vector<Assertion> assertions_for_subject(EntityId subject, size_t limit = 0) const;
 
     std::vector<Assertion> current(EntityId subject) const;
 
@@ -126,18 +130,29 @@ class KnowledgeKernel {
 
     std::vector<Assertion> observed_time_timeline(EntityId subject, PredicateId predicate) const;
 
-    std::vector<Assertion> commit_history(EntityId subject, PredicateId predicate) const;
+    // limit caps the returned count, same convention as assertions_for_subject's limit: 0 means no
+    // cap, and the cap applies after the existing id-ascending (commit-order) sort, so it's "the
+    // first N," not "the N most recent."
+    std::vector<Assertion> commit_history(EntityId subject, PredicateId predicate, size_t limit = 0) const;
 
     // Kernel-wide answer to "what changed since t": every assertion (any subject, any predicate)
     // with observed_at >= observed_since, sorted by observed_at then id for a stable order among
-    // ties. Status-agnostic like commit_history -- new commits, supersessions, retractions, and
-    // hypotheses all count as a "change" -- but unlike commit_history/observed_time_timeline this
-    // does not take a subject or predicate, since the whole point is discovering what changed
-    // without already knowing where to look. A straight scan over assertions_, not an index lookup:
-    // there is no persisted global observed-time ordering (IndexManager's observed-time index is
-    // per-subject), and Phase 9's Performance Rules require a demonstrated bottleneck plus a
-    // benchmark before adding one.
-    std::vector<Assertion> changes_since(Timestamp observed_since) const;
+    // ties (or the reverse of that order when newest_first is set -- see below). Status-agnostic
+    // like commit_history -- new commits, supersessions, retractions, and hypotheses all count as a
+    // "change" -- but unlike commit_history/observed_time_timeline this does not take a subject or
+    // predicate, since the whole point is discovering what changed without already knowing where to
+    // look. A straight scan over assertions_, not an index lookup: there is no persisted global
+    // observed-time ordering (IndexManager's observed-time index is per-subject), and Phase 9's
+    // Performance Rules require a demonstrated bottleneck plus a benchmark before adding one.
+    //
+    // limit caps the returned count (0, the default, means no cap -- unchanged prior behavior).
+    // newest_first, when true, reverses the sort so the most-recently-observed change (and, among
+    // ties, the highest id) comes first, then limit is applied to that order -- e.g.
+    // changes_since(0, /*limit=*/1, /*newest_first=*/true) answers "what's the single latest change"
+    // without the caller reading and discarding the rest of the log to find it. limit is still
+    // applied after the same full scan+sort as always: this fixes what a caller has to read, not
+    // the kernel's internal work, which stays a Phase 9 concern gated behind a benchmark.
+    std::vector<Assertion> changes_since(Timestamp observed_since, size_t limit = 0, bool newest_first = false) const;
 
     // Walks the supersession/retraction chain from the given assertion back to its root, following
     // supersedes_id/retracts_id one hop at a time. Returns the chain newest-first (the given

@@ -230,6 +230,48 @@ void neighbors_tool_round_trips_a_size_t_argument() {
     cleanup(root);
 }
 
+void changes_since_tool_supports_optional_limit_and_newest_first() {
+    auto root = test_root("changes_since_tool_supports_optional_limit_and_newest_first");
+    KnowledgeKernel kernel(StorageConfig{root});
+
+    kernel.commit(1, 10, 100, 1704067200, 0, 1719792000, 0.9);
+    AssertionId latest = kernel.commit(1, 10, 200, 1704067200, 0, 1719792001, 0.9);
+
+    // limit/newest_first are optional -- omitting them preserves the pre-existing behavior.
+    auto unbounded = handle_tool_call(kernel, "changes_since", nlohmann::json{{"observed_since", 0}});
+    assert(!unbounded.is_error);
+    assert(nlohmann::json::parse(unbounded.content_text).size() == 2);
+
+    auto latest_only = handle_tool_call(kernel, "changes_since",
+                                        nlohmann::json{{"observed_since", 0}, {"limit", 1}, {"newest_first", true}});
+    assert(!latest_only.is_error);
+    auto latest_only_json = nlohmann::json::parse(latest_only.content_text);
+    assert(latest_only_json.size() == 1);
+    assert(latest_only_json[0].at("id").get<AssertionId>() == latest);
+
+    cleanup(root);
+}
+
+void assertions_for_subject_and_commit_history_tools_support_optional_limit() {
+    auto root = test_root("assertions_for_subject_and_commit_history_tools_support_optional_limit");
+    KnowledgeKernel kernel(StorageConfig{root});
+
+    kernel.commit(1, 10, 100, 1704067200, 0, 1719792000, 0.9);
+    kernel.commit(1, 10, 200, 1704067200, 0, 1719792001, 0.9);
+
+    auto subject_limited =
+        handle_tool_call(kernel, "assertions_for_subject", nlohmann::json{{"subject", 1}, {"limit", 1}});
+    assert(!subject_limited.is_error);
+    assert(nlohmann::json::parse(subject_limited.content_text).size() == 1);
+
+    auto history_limited =
+        handle_tool_call(kernel, "commit_history", nlohmann::json{{"subject", 1}, {"predicate", 10}, {"limit", 1}});
+    assert(!history_limited.is_error);
+    assert(nlohmann::json::parse(history_limited.content_text).size() == 1);
+
+    cleanup(root);
+}
+
 void get_tool_returns_null_for_an_unknown_assertion() {
     auto root = test_root("get_tool_returns_null_for_an_unknown_assertion");
     KnowledgeKernel kernel(StorageConfig{root});
@@ -306,6 +348,8 @@ int main() {
     intern_document_tool_round_trips_base64_bytes();
     current_by_object_and_current_by_predicate_tools_round_trip();
     neighbors_tool_round_trips_a_size_t_argument();
+    changes_since_tool_supports_optional_limit_and_newest_first();
+    assertions_for_subject_and_commit_history_tools_support_optional_limit();
     get_tool_returns_null_for_an_unknown_assertion();
     find_conflicts_tool_returns_paired_assertions();
     unknown_tool_name_is_reported_as_a_tool_error();

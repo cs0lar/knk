@@ -438,6 +438,31 @@ void assertions_for_subject_returns_all_subject_assertions() {
     cleanup(root);
 }
 
+void assertions_for_subject_respects_limit() {
+    auto root = test_root("assertions_for_subject_respects_limit");
+    KnowledgeKernel kernel(StorageConfig{root});
+
+    kernel.commit(ALICE, WORKS_AT, ACME, JAN_1_2023, JUL_1_2024, JUL_2_2024, 0.95);
+    kernel.commit(ALICE, WORKS_AT, BETA, JUL_1_2024, OPEN_ENDED, JUL_2_2024, 0.90);
+
+    auto unlimited = kernel.assertions_for_subject(ALICE);
+    assert(unlimited.size() == 2);
+
+    auto limited = kernel.assertions_for_subject(ALICE, 1);
+    assert(limited.size() == 1);
+    assert(limited[0].object == ACME);
+
+    // limit == 0 means "no cap," the same as omitting it -- not "return nothing."
+    auto explicit_zero = kernel.assertions_for_subject(ALICE, 0);
+    assert(explicit_zero.size() == 2);
+
+    // A limit larger than the result set is a no-op, not an error.
+    auto over_limit = kernel.assertions_for_subject(ALICE, 100);
+    assert(over_limit.size() == 2);
+
+    cleanup(root);
+}
+
 void constructor_replays_assertions_and_continues_ids() {
     auto root = test_root("constructor_replays_assertions_and_continues_ids");
 
@@ -564,6 +589,26 @@ void commit_history_returns_history_of_recorded_assertions() {
     cleanup(root);
 }
 
+void commit_history_respects_limit() {
+    auto root = test_root("commit_history_respects_limit");
+    KnowledgeKernel kernel(StorageConfig{root});
+
+    AssertionId first = kernel.commit(ALICE, WORKS_AT, ACME, JAN_1_2020, OPEN_ENDED, JAN_1_2024, 0.95);
+    kernel.commit(ALICE, WORKS_AT, BETA, JUL_1_2024, OPEN_ENDED, JUL_1_2024, 0.90);
+    kernel.commit_superseding(ALICE, WORKS_AT, ACME, JAN_1_2020, JAN_1_2023, JUL_2_2024, 0.90, first);
+
+    auto unlimited = kernel.commit_history(ALICE, WORKS_AT);
+    assert(unlimited.size() == 3);
+
+    // limit applies after the existing id-ascending sort -- the first N in commit order.
+    auto limited = kernel.commit_history(ALICE, WORKS_AT, 2);
+    assert(limited.size() == 2);
+    assert(limited[0].id == unlimited[0].id);
+    assert(limited[1].id == unlimited[1].id);
+
+    cleanup(root);
+}
+
 void changes_since_returns_assertions_observed_at_or_after_cutoff_sorted_by_observed_at() {
     auto root = test_root("changes_since_returns_assertions_observed_at_or_after_cutoff_sorted_by_observed_at");
 
@@ -614,6 +659,35 @@ void changes_since_is_status_agnostic_and_spans_multiple_subjects() {
     assert(changes[2].id == retraction);
     assert(changes[3].id == hypothesis);
     assert(changes[3].status == AssertionStatus::Hypothesis);
+
+    cleanup(root);
+}
+
+void changes_since_respects_limit_and_newest_first() {
+    auto root = test_root("changes_since_respects_limit_and_newest_first");
+    KnowledgeKernel kernel(StorageConfig{root});
+
+    kernel.commit(ALICE, WORKS_AT, ACME, JAN_1_2020, OPEN_ENDED, JAN_1_2024, 0.95);
+    AssertionId middle = kernel.commit(ALICE, WORKS_AT, BETA, JUL_1_2024, OPEN_ENDED, JUL_1_2024, 0.90);
+    AssertionId latest = kernel.commit(ALICE, WORKS_AT, GAMMA, JUL_8_2024, OPEN_ENDED, JUL_8_2024, 0.90);
+
+    // The motivating case: "what's the single latest change" without reading the whole log.
+    auto just_latest = kernel.changes_since(0, /*limit=*/1, /*newest_first=*/true);
+    assert(just_latest.size() == 1);
+    assert(just_latest[0].id == latest);
+
+    auto latest_two = kernel.changes_since(0, /*limit=*/2, /*newest_first=*/true);
+    assert(latest_two.size() == 2);
+    assert(latest_two[0].id == latest);
+    assert(latest_two[1].id == middle);
+
+    // newest_first alone (no limit) reverses the whole result, not just truncates it.
+    auto all_newest_first = kernel.changes_since(0, /*limit=*/0, /*newest_first=*/true);
+    auto all_oldest_first = kernel.changes_since(0);
+    assert(all_newest_first.size() == all_oldest_first.size());
+    for (size_t i = 0; i < all_oldest_first.size(); ++i) {
+        assert(all_newest_first[i].id == all_oldest_first[all_oldest_first.size() - 1 - i].id);
+    }
 
     cleanup(root);
 }
@@ -2018,13 +2092,16 @@ int main() {
     valid_at_known_at_respects_both_times();
     known_at_excludes_future_observed_fact();
     assertions_for_subject_returns_all_subject_assertions();
+    assertions_for_subject_respects_limit();
     constructor_replays_assertions_and_continues_ids();
     replay_does_not_append_to_log();
     conflicting_active_assertions_can_coexist();
     valid_time_timeline_only_returns_active_assertions_sorted_by_valid_from();
     commit_history_returns_history_of_recorded_assertions();
+    commit_history_respects_limit();
     changes_since_returns_assertions_observed_at_or_after_cutoff_sorted_by_observed_at();
     changes_since_is_status_agnostic_and_spans_multiple_subjects();
+    changes_since_respects_limit_and_newest_first();
     observed_time_timeline_only_return_active_assertions_sorted_by_observed_at();
     known_at_is_restored_from_persisted_observed_time_index_across_kernels();
     corrupt_observed_time_index_falls_back_to_replay_and_self_heals();

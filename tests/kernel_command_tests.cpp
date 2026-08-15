@@ -356,6 +356,12 @@ void assertions_for_subject_command_round_trips() {
     auto v = std::get<std::vector<Assertion>>(kernel.execute(AssertionsForSubjectCommand{s.alice}));
     assert(ids(d) == ids(v));
 
+    // limit round-trips too, not just the default (unlimited) case.
+    auto d_limited = kernel.assertions_for_subject(s.alice, 1);
+    auto v_limited = std::get<std::vector<Assertion>>(kernel.execute(AssertionsForSubjectCommand{s.alice, 1}));
+    assert(ids(d_limited) == ids(v_limited));
+    assert(v_limited.size() == 1);
+
     cleanup(root);
 }
 
@@ -483,6 +489,12 @@ void commit_history_command_round_trips() {
     auto v = std::get<std::vector<Assertion>>(kernel.execute(CommitHistoryCommand{s.alice, s.works_at}));
     assert(ids(d) == ids(v));
 
+    // limit round-trips too, not just the default (unlimited) case.
+    auto d_limited = kernel.commit_history(s.alice, s.works_at, 1);
+    auto v_limited = std::get<std::vector<Assertion>>(kernel.execute(CommitHistoryCommand{s.alice, s.works_at, 1}));
+    assert(ids(d_limited) == ids(v_limited));
+    assert(v_limited.size() == 1);
+
     cleanup(root);
 }
 
@@ -495,6 +507,12 @@ void changes_since_command_round_trips() {
     auto v = std::get<std::vector<Assertion>>(kernel.execute(ChangesSinceCommand{0}));
     assert(ids(d) == ids(v));
     assert(!v.empty());
+
+    // limit and newest_first round-trip too, not just the defaults.
+    auto d_latest = kernel.changes_since(0, 1, true);
+    auto v_latest = std::get<std::vector<Assertion>>(kernel.execute(ChangesSinceCommand{0, 1, true}));
+    assert(ids(d_latest) == ids(v_latest));
+    assert(v_latest.size() == 1);
 
     cleanup(root);
 }

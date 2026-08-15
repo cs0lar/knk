@@ -77,7 +77,7 @@ against a running server for the full JSON Schema of each.
 | Tool | Description |
 |---|---|
 | `get` | Fetches a single assertion by id. |
-| `assertions_for_subject` | Returns every recorded assertion (any status) for a subject. |
+| `assertions_for_subject` | Returns every recorded assertion (any status) for a subject. Optional `limit` caps the result count (0/omitted = no cap). |
 | `current` | Returns every currently active, open-ended assertion for a subject. |
 | `current_by_name` | Returns every currently active, open-ended assertion for a subject looked up by name; empty (not an error) if the name was never interned. |
 | `current_by_object` | Reverse-direction lookup: who currently has the given entity as object. |
@@ -87,8 +87,8 @@ against a running server for the full JSON Schema of each.
 | `valid_at_known_at` | Combines valid_at and known_at cutoffs. |
 | `valid_time_timeline` | Returns active assertions for a subject/predicate sorted by valid_from. |
 | `observed_time_timeline` | Returns active assertions for a subject/predicate sorted by observed_at. |
-| `commit_history` | Returns every recorded assertion (any status) for a subject/predicate, in commit order. |
-| `changes_since` | Kernel-wide, status-agnostic: every assertion observed at or after a cutoff, any subject or predicate. |
+| `commit_history` | Returns every recorded assertion (any status) for a subject/predicate, in commit order. Optional `limit` caps the result count (0/omitted = no cap). |
+| `changes_since` | Kernel-wide, status-agnostic: every assertion observed at or after a cutoff, any subject or predicate. Optional `limit` caps the result count and optional `newest_first` reverses the order (most-recently-observed first) — combine both to fetch just the latest change(s) without reading the whole log. |
 | `explain` | Walks the supersession/retraction chain from an assertion back to its root. |
 | `find_conflicts` | Finds overlapping active assertions for a subject/predicate with different objects. |
 | `find_entity` | Looks up a previously interned entity's id by name. |
