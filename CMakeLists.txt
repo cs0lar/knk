@@ -103,7 +103,11 @@ add_executable(knowledge_kernel_tests
 )
 
 add_executable(assertion_log_tests
-    tests/assertion_log_tests.cpp
+    tests/assertion_log_tests.cpp   
+)
+
+add_executable(storage_engine_tests
+    tests/storage_engine_tests.cpp
 )
 
 add_executable(index_manager_tests
@@ -183,6 +187,10 @@ target_link_libraries(knowledge_kernel_tests
 )
 
 target_link_libraries(assertion_log_tests
+    PRIVATE kernel
+)
+
+target_link_libraries(storage_engine_tests
     PRIVATE kernel
 )
 
@@ -266,6 +274,11 @@ add_test(
 add_test(
     NAME assertion_log_tests
     COMMAND assertion_log_tests
+)
+
+add_test(
+    NAME storage_engine_tests 
+    COMMAND storage_engine_tests
 )
 
 add_test(
