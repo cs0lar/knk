@@ -11,14 +11,14 @@ using namespace knk;
 
 namespace {
 
-// 辅助函数：创建独立的临时测试目录
+// Helper function: Create an isolated temporary test directory
 std::filesystem::path test_root(const std::string &name) {
     auto dir = std::filesystem::temp_directory_path() / name;
     std::filesystem::remove_all(dir);
     return dir;
 }
 
-// 辅助函数：生成一条模拟断言数据
+// Helper function: Generate mock assertion data
 Assertion make_assertion(AssertionId id, EntityId subject) {
     return Assertion{.id = id,
                      .subject = subject,
@@ -31,11 +31,11 @@ Assertion make_assertion(AssertionId id, EntityId subject) {
                      .status = AssertionStatus::Active};
 }
 
-// 测试 1：测试基本的追加写入与读取
+// Test 1: Verify basic append and read functionality
 void storage_engine_appends_and_reads_assertions() {
     auto dir = test_root("kernel_se_appends_and_reads");
     
-    // 使用 C++20 指派初始化器，与代码库风格保持一致
+    // Use C++20 designated initializers to maintain consistency with the codebase style
     StorageConfig config{.root = dir, .max_records_per_segment = 100};
     StorageEngine engine(config);
 
@@ -49,24 +49,24 @@ void storage_engine_appends_and_reads_assertions() {
     std::filesystem::remove_all(dir);
 }
 
-// 测试 2：测试模拟奔溃/重启后的数据重放恢复 (Recovery via Replay)
+// Test 2: Verify data recovery via replay after a simulated crash/restart
 void storage_engine_recovers_data_on_reopen() {
     auto dir = test_root("kernel_se_recovers_data");
     StorageConfig config{.root = dir, .max_records_per_segment = 100};
 
     {
-        // 第一次打开：写入两条数据
+        // First run: Append two records
         StorageEngine engine(config);
         engine.append_assertion(make_assertion(1, 1));
         engine.append_assertion(make_assertion(2, 2));
-    } // 离开作用域，engine 销毁，storage_lock_ 释放
+    } // Out of scope: engine is destroyed, storage_lock_ is released
 
     {
-        // 第二次打开：模拟基于已存在数据的目录重启
+        // Second run: Simulate restart using the directory with existing data
         StorageEngine engine_reopened(config);
         auto assertions = engine_reopened.load_assertions();
         
-        // 验证数据已成功恢复
+        // Verify that data was successfully recovered
         assert(assertions.size() == 2);
         assert(assertions[0].id == 1);
         assert(assertions[1].id == 2);
@@ -75,20 +75,20 @@ void storage_engine_recovers_data_on_reopen() {
     std::filesystem::remove_all(dir);
 }
 
-// 测试 3：测试它对下游日志（例如 AssertionLog）归档功能的协调委托
+// Test 3: Verify delegation of archiving and hints to downstream logs
 void storage_engine_delegates_archiving_and_hints() {
     auto dir = test_root("kernel_se_delegates_archiving");
-    StorageConfig config{.root = dir, .max_records_per_segment = 2}; // 容量设为2，强制分段
+    StorageConfig config{.root = dir, .max_records_per_segment = 2}; // Set capacity to 2 to force segment creation
     
     StorageEngine engine(config);
     engine.append_assertion(make_assertion(1, 1));
     engine.append_assertion(make_assertion(2, 2));
     engine.append_assertion(make_assertion(3, 3));
 
-    // 验证行数提示的传递
+    // Verify the propagation of the record count hint
     assert(engine.assertion_log_record_count_hint() == 3);
 
-    // 验证归档功能的委派
+    // Verify the delegation of the archiving function
     engine.archive_segments_before(3);
     auto assertions = engine.load_assertions_after(2);
     
