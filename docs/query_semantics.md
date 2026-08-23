@@ -1,4 +1,4 @@
-﻿# Query semantics
+# Query semantics
 
 This document describes what each public `KnowledgeKernel` query method returns and, just as importantly, what it excludes.
 
