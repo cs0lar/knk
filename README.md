@@ -119,6 +119,7 @@ work has started.
 
 - [`AGENTS.md`](AGENTS.md) — the authoritative spec: architecture, assertion semantics, storage
   rules, roadmap, testing requirements, and style.
+- [`docs/query_semantics.md`](docs/query_semantics.md) - what each query method returns and excludes.
 - [`docs/storage_format.md`](docs/storage_format.md) — on-disk format and durability model.
 - [`docs/mcp_server.md`](docs/mcp_server.md) — MCP tool reference and protocol usage.
 - [`docs/benchmarks.md`](docs/benchmarks.md) — benchmark methodology and baseline numbers.
