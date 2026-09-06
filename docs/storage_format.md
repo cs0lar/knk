@@ -367,8 +367,8 @@ Every `append()` closes its `std::ofstream` and then fsyncs the file (`knk::fsyn
 `include/kernel/durability.hpp`) before returning, so a commit is not considered durable until the
 data has actually reached physical disk, not just the OS page cache.
 
-`append_batch()` (the batch counterpart on `AssertionLog` and the three index logs, used only by
-`KnowledgeKernel::commit_batch`) writes every record of a batch under **one** open/close/fsync per
+`append_batch()` (the batch counterpart on `AssertionLog`, the three index logs, and the provenance
+log — used by `KnowledgeKernel::commit_batch` and `record_provenance_batch`) writes every record of a batch under **one** open/close/fsync per
 file instead of one per record — the record bytes on disk are byte-identical to what the same
 records appended one at a time would produce, so nothing downstream can tell the two apart. What
 changes is the size of the crash window, not the format:

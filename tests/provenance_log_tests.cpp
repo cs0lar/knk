@@ -36,6 +36,48 @@ void provenance_log_appends_and_reads_records() {
     std::filesystem::remove(path);
 }
 
+void provenance_log_append_batch_writes_every_record_in_order() {
+    auto path = std::filesystem::temp_directory_path() / "kernel_provenance_log_append_batch_test.log";
+    std::filesystem::remove(path);
+
+    ProvenanceLog log(path);
+
+    // Variable-length method strings, empty one included, since this log frames a length-prefixed
+    // payload rather than a fixed-size struct like the index logs.
+    std::vector<ProvenanceRecord> batch{ProvenanceRecord{1, 500, 1719792000, "manual_entry"},
+                                        ProvenanceRecord{2, 501, 1719878400, ""},
+                                        ProvenanceRecord{3, 502, 1719961200, "restated_from_legacy_field"}};
+    log.append_batch(batch);
+
+    auto records = log.read_all();
+
+    assert(records.size() == 3);
+    assert(records[0].assertion_id == 1 && records[0].method == "manual_entry");
+    assert(records[1].assertion_id == 2 && records[1].method.empty());
+    assert(records[2].assertion_id == 3 && records[2].method == "restated_from_legacy_field");
+
+    // A batch writes the same header-then-frames layout a sequence of appends would, so a later
+    // single append continues the same file rather than starting a second header.
+    log.append(ProvenanceRecord{4, 503, 1720450412, "manual_entry"});
+    assert(log.read_all().size() == 4);
+
+    std::filesystem::remove(path);
+}
+
+void provenance_log_append_batch_is_a_no_op_for_an_empty_batch() {
+    auto path = std::filesystem::temp_directory_path() / "kernel_provenance_log_append_batch_empty_test.log";
+    std::filesystem::remove(path);
+
+    ProvenanceLog log(path);
+
+    log.append_batch({});
+
+    assert(!std::filesystem::exists(path));
+    assert(log.read_all().empty());
+
+    std::filesystem::remove(path);
+}
+
 void provenance_log_returns_empty_when_missing() {
     auto path = std::filesystem::temp_directory_path() / "kernel_missing_provenance_log.log";
     std::filesystem::remove(path);
@@ -250,6 +292,8 @@ void provenance_log_rejects_malformed_method_length() {
 
 int main() {
     provenance_log_appends_and_reads_records();
+    provenance_log_append_batch_writes_every_record_in_order();
+    provenance_log_append_batch_is_a_no_op_for_an_empty_batch();
     provenance_log_returns_empty_when_missing();
     provenance_log_rejects_invalid_record_size();
     provenance_log_rejects_missing_or_invalid_header();

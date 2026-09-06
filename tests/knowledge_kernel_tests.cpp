@@ -15,6 +15,7 @@
 #include "kernel/ids.hpp"
 #include "kernel/index_manager.hpp"
 #include "kernel/knowledge_kernel.hpp"
+#include "kernel/provenance_log.hpp"
 #include "kernel/status.hpp"
 #include "kernel/storage_config.hpp"
 #include "kernel/storage_engine.hpp"
@@ -1726,6 +1727,152 @@ void find_conflicts_detects_overlapping_active_assertions_for_the_same_subject_p
     cleanup(root);
 }
 
+void record_provenance_batch_records_provenance_for_every_assertion() {
+    auto root = test_root("record_provenance_batch_records_provenance_for_every_assertion");
+    KnowledgeKernel kernel(StorageConfig{root});
+
+    // The shape this exists for: commit a batch, then attach provenance to every id it returned,
+    // zipping the ids with sources rather than looking each assertion up.
+    EntityId source = kernel.intern_entity("migration_job");
+    auto ids = kernel.commit_batch({
+        {ALICE, WORKS_AT, ACME, JAN_1_2020, OPEN_ENDED, JUL_2_2024, 0.95},
+        {BETA, WORKS_AT, ACME, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.95},
+        {GAMMA, WORKS_AT, ACME, JUL_1_2024, OPEN_ENDED, JUL_2_2024, 0.95},
+    });
+
+    std::vector<ProvenanceRecord> records;
+    for (AssertionId id : ids) {
+        records.push_back(ProvenanceRecord{id, source, JUL_2_2024, "restated_from_legacy_field"});
+    }
+
+    kernel.record_provenance_batch(records);
+
+    for (AssertionId id : ids) {
+        auto record = kernel.provenance_for(id);
+        assert(record.has_value());
+        assert(record->assertion_id == id);
+        assert(record->source == source);
+        assert(record->method == "restated_from_legacy_field");
+    }
+
+    cleanup(root);
+}
+
+void record_provenance_batch_rejects_an_unknown_target_without_writing_anything() {
+    auto root = test_root("record_provenance_batch_rejects_an_unknown_target_without_writing_anything");
+    KnowledgeKernel kernel(StorageConfig{root});
+
+    EntityId source = kernel.intern_entity("ingestion_pipeline");
+    AssertionId id = kernel.commit(ALICE, WORKS_AT, ACME, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.95);
+
+    // Second record targets an id that was never committed. Every target is validated before
+    // anything is appended, so the valid first record must not land either.
+    bool exception_thrown = false;
+    try {
+        kernel.record_provenance_batch({ProvenanceRecord{id, source, JUL_2_2024, "manual_entry"},
+                                        ProvenanceRecord{id + 99, source, JUL_2_2024, "manual_entry"}});
+    } catch (const std::runtime_error &) {
+        exception_thrown = true;
+    }
+
+    assert(exception_thrown);
+    assert(!kernel.provenance_for(id).has_value());
+
+    // A zero id is rejected the same way record_provenance rejects it.
+    exception_thrown = false;
+    try {
+        kernel.record_provenance_batch({ProvenanceRecord{0, source, JUL_2_2024, "manual_entry"}});
+    } catch (const std::runtime_error &) {
+        exception_thrown = true;
+    }
+
+    assert(exception_thrown);
+
+    cleanup(root);
+}
+
+void record_provenance_batch_is_preserved_across_kernel_restarts() {
+    auto root = test_root("record_provenance_batch_is_preserved_across_kernel_restarts");
+
+    std::vector<AssertionId> ids;
+    EntityId source = 0;
+    {
+        KnowledgeKernel kernel(StorageConfig{root});
+        source = kernel.intern_entity("migration_job");
+        ids = kernel.commit_batch({
+            {ALICE, WORKS_AT, ACME, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.95},
+            {BETA, WORKS_AT, ACME, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.95},
+        });
+
+        kernel.record_provenance_batch({ProvenanceRecord{ids[0], source, JUL_2_2024, "restated"},
+                                        ProvenanceRecord{ids[1], source, JUL_3_2024, "restated"}});
+    }
+
+    KnowledgeKernel recovered(StorageConfig{root});
+
+    assert(recovered.provenance_for(ids[0])->source == source);
+    assert(recovered.provenance_for(ids[0])->recorded_at == JUL_2_2024);
+    assert(recovered.provenance_for(ids[1])->recorded_at == JUL_3_2024);
+
+    cleanup(root);
+}
+
+void record_provenance_batch_last_record_for_an_assertion_wins() {
+    auto root = test_root("record_provenance_batch_last_record_for_an_assertion_wins");
+
+    AssertionId id = 0;
+    EntityId second_source = 0;
+    {
+        KnowledgeKernel kernel(StorageConfig{root});
+
+        EntityId first_source = kernel.intern_entity("ingestion_pipeline");
+        second_source = kernel.intern_entity("migration_job");
+        id = kernel.commit(ALICE, WORKS_AT, ACME, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.95);
+
+        // provenance.log is append-only and last-writer-wins per assertion (see the kernel
+        // constructor's replay). A batch containing two records for one assertion must resolve the
+        // same way in memory as it will after a restart -- the later one.
+        kernel.record_provenance_batch({ProvenanceRecord{id, first_source, JUL_2_2024, "first"},
+                                        ProvenanceRecord{id, second_source, JUL_3_2024, "second"}});
+
+        assert(kernel.provenance_for(id)->method == "second");
+        assert(kernel.provenance_for(id)->source == second_source);
+    }
+
+    KnowledgeKernel recovered(StorageConfig{root});
+    assert(recovered.provenance_for(id)->method == "second");
+    assert(recovered.provenance_for(id)->source == second_source);
+
+    cleanup(root);
+}
+
+void record_provenance_batch_rejects_an_oversized_batch_and_ignores_an_empty_one() {
+    auto root = test_root("record_provenance_batch_rejects_an_oversized_batch_and_ignores_an_empty_one");
+    KnowledgeKernel kernel(StorageConfig{root});
+
+    EntityId source = kernel.intern_entity("migration_job");
+    AssertionId id = kernel.commit(ALICE, WORKS_AT, ACME, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.95);
+
+    std::vector<ProvenanceRecord> too_many(KnowledgeKernel::MAX_BATCH_SIZE + 1,
+                                           ProvenanceRecord{id, source, JUL_2_2024, "manual_entry"});
+
+    bool exception_thrown = false;
+    try {
+        kernel.record_provenance_batch(too_many);
+    } catch (const std::runtime_error &) {
+        exception_thrown = true;
+    }
+
+    assert(exception_thrown);
+    assert(!kernel.provenance_for(id).has_value());
+
+    // An empty list writes nothing and throws nothing.
+    kernel.record_provenance_batch({});
+    assert(!kernel.provenance_for(id).has_value());
+
+    cleanup(root);
+}
+
 void record_provenance_rejects_an_unknown_assertion_target() {
     auto root = test_root("record_provenance_rejects_an_unknown_assertion_target");
     KnowledgeKernel kernel(StorageConfig{root});
@@ -2462,6 +2609,11 @@ int main() {
     corrupt_payload_is_fatal_on_startup();
     provenance_is_recorded_and_resolves_to_a_source_entity();
     record_provenance_rejects_an_unknown_assertion_target();
+    record_provenance_batch_records_provenance_for_every_assertion();
+    record_provenance_batch_rejects_an_unknown_target_without_writing_anything();
+    record_provenance_batch_is_preserved_across_kernel_restarts();
+    record_provenance_batch_last_record_for_an_assertion_wins();
+    record_provenance_batch_rejects_an_oversized_batch_and_ignores_an_empty_one();
     provenance_is_preserved_across_kernel_restarts();
     corrupt_provenance_log_is_fatal_on_startup();
     commit_hypothesis_is_excluded_from_current_and_valid_at();

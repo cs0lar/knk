@@ -52,6 +52,9 @@ KernelResult KnowledgeKernel::execute(const KernelCommand &command) {
             } else if constexpr (std::is_same_v<T, RecordProvenanceCommand>) {
                 record_provenance(cmd.assertion_id, cmd.source, cmd.recorded_at, cmd.method);
                 return std::monostate{};
+            } else if constexpr (std::is_same_v<T, RecordProvenanceBatchCommand>) {
+                record_provenance_batch(cmd.records);
+                return std::monostate{};
             } else if constexpr (std::is_same_v<T, CommitHypothesisCommand>) {
                 return commit_hypothesis(cmd.subject, cmd.predicate, cmd.object, cmd.valid_from, cmd.valid_to,
                                          cmd.observed_at, cmd.confidence, cmd.source, cmd.recorded_at, cmd.method);

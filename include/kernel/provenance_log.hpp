@@ -1,6 +1,7 @@
 #pragma once
 
 #include <filesystem>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -28,6 +29,13 @@ class ProvenanceLog {
     explicit ProvenanceLog(std::filesystem::path path);
 
     void append(const ProvenanceRecord &record);
+
+    // Appends every record with one file open and one fsync, instead of one of each per record --
+    // the provenance half of a batch commit's cost (see KnowledgeKernel::record_provenance_batch).
+    // Records are written in the order given; a crash before the fsync returns can leave any prefix
+    // of them durable, which read_all already handles as an ordinary torn trailing frame. An empty
+    // span writes nothing at all, rather than creating a header-only file.
+    void append_batch(std::span<const ProvenanceRecord> records);
 
     std::vector<ProvenanceRecord> read_all() const;
 

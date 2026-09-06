@@ -865,6 +865,32 @@ void KnowledgeKernel::record_provenance(AssertionId assertion_id, EntityId sourc
     provenance_[assertion_id] = ProvenanceRecord{assertion_id, source, recorded_at, std::move(method)};
 }
 
+void KnowledgeKernel::record_provenance_batch(const std::vector<ProvenanceRecord> &records) {
+    if (records.size() > MAX_BATCH_SIZE) {
+        throw std::runtime_error("batch exceeds maximum size");
+    }
+
+    if (records.empty()) {
+        return;
+    }
+
+    // Every target is validated up front, so a bad id anywhere in the list rejects the whole call
+    // before a single record is appended -- record_provenance's "a failed call persists nothing"
+    // property, extended to the list rather than applied one record at a time.
+    for (const auto &record : records) {
+        if (record.assertion_id == 0 || !get(record.assertion_id).has_value()) {
+            throw std::runtime_error("invalid provenance target");
+        }
+    }
+
+    // Durable-before-visible, same ordering record_provenance uses, just once for the whole list.
+    storage_.append_provenance_entries(records);
+
+    for (const auto &record : records) {
+        provenance_[record.assertion_id] = record;
+    }
+}
+
 std::optional<ProvenanceRecord> KnowledgeKernel::provenance_for(AssertionId assertion_id) const {
     auto it = provenance_.find(assertion_id);
     if (it == provenance_.end()) {

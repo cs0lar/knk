@@ -245,6 +245,28 @@ class KnowledgeKernel {
     // durable append, so a failed call never persists a dangling provenance record.
     void record_provenance(AssertionId assertion_id, EntityId source, Timestamp recorded_at, std::string method);
 
+    // record_provenance's batch counterpart, and the other half of commit_batch: one fsync on the
+    // provenance log for the whole list rather than one per record. This is what makes attaching
+    // provenance to a batch affordable -- commit_batch returns its ids in input order precisely so a
+    // caller can zip them with sources here, and without this the per-record fsyncs cost several
+    // times the batch they describe.
+    //
+    // Deliberately a separate call rather than per-entry provenance inside commit_batch. Provenance
+    // written inside the batch could, after a crash, reference assertion ids the batch's durable
+    // prefix never committed -- and startup replay of provenance.log fills its map without validating
+    // targets, so those would linger as provenance for assertions get() does not know. Recording
+    // afterwards means every target is already committed, so the validation below checks against real
+    // state.
+    //
+    // Every target is validated before anything is appended, so one bad id rejects the whole call
+    // without writing a record or mutating the in-memory map -- the same all-or-nothing property
+    // record_provenance has, extended to the list. Beyond that check, durability is prefix-shaped
+    // exactly like commit_batch's: a crash can leave the first k records durable. That is benign
+    // here in a way it is not for assertions -- provenance.log is append-only and last-writer-wins per
+    // assertion, so re-running the same call after a crash simply re-records the missing tail.
+    // Bounded by MAX_BATCH_SIZE, checked before any validation or append. An empty list is a no-op.
+    void record_provenance_batch(const std::vector<ProvenanceRecord> &records);
+
     std::optional<ProvenanceRecord> provenance_for(AssertionId assertion_id) const;
 
     // Merges absorb into keep: a one-way, append-only redirect durably recorded in EntityMergeLog,

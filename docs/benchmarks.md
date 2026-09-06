@@ -27,7 +27,9 @@ cmake --build build-release --target commit_benchmark query_benchmark replay_ben
   `commit_superseding()` throughput against a single, repeatedly-superseded subject/predicate (adds
   `mark_superseded`'s current-index removal on every call), and `commit_batch()` throughput over the
   *same* workload as the first of those — identical records, identical index updates, issued as one
-  call instead of N, so the difference is purely the collapsed durability boundary.
+  call instead of N, so the difference is purely the collapsed durability boundary. A fourth section
+  attaches provenance to a committed batch both ways (`record_provenance` per assertion vs. one
+  `record_provenance_batch`) against the same batch, isolating the provenance log's fsync count.
 * **`query_benchmark`** — read-path throughput (`current`, `valid_at`, `known_at`, `neighbors`) over a
   kernel pre-populated with 5,000 subjects, each with a `WORKS_AT` and a `LIVES_IN` assertion (the
   latter chained subject-to-subject so `neighbors` has real edges to walk).
@@ -94,6 +96,26 @@ the same 10,000-assertion batch would still be ~5 fsyncs, so the speedup there w
 than the 67x measured here. Per-assertion throughput is slightly lower at 10k than at 1k
 (1.34M vs 1.49M/sec), consistent with the batch's O(n) in-memory work (building the record vectors
 and `apply()`-ing each entry) becoming visible once the fixed fsync cost is amortized away.
+
+### `commit_benchmark` — provenance for a batch (2026-09-06)
+
+Recorded when `record_provenance_batch` was added, on the same machine and in the same run as the
+`commit_batch` numbers above (so directly comparable to them, and to nothing in the 2026-07-20
+baseline).
+
+```
+== provenance for a committed batch -- per record vs. batched ==
+record_provenance x1000                                  8.245 ms
+record_provenance_batch(1000)                            0.159 ms
+record_provenance x10000                                82.172 ms
+record_provenance_batch(10000)                           1.562 ms
+```
+
+Attaching provenance one record at a time cost **8.5x the batch it describes** (82 ms against
+`commit_batch`'s ~7-10 ms for the same 10,000 assertions) — i.e. provenance was ~89% of the total
+work, and was the one place per-assertion fsync cost survived on the batch path.
+`record_provenance_batch` collapses it to a single fsync: **~53x faster**, and provenance drops to
+~18% of the pair. The ratio grows with `fsync` latency for the same reason `commit_batch`'s does.
 
 ### `query_benchmark`
 
