@@ -1336,10 +1336,27 @@ applied and in what order"). Revisit only alongside a deliberate format-version 
 
 **How is it tested?** `tests/knowledge_kernel_tests.cpp` (id order and continuation, per-entry valid
 time, index parity with single commits, restart, over-sized rejection, empty batch, a batch spanning
-segment boundaries read back after a forced full replay), `tests/assertion_log_tests.cpp` and the
+segment boundaries read back after a forced full replay; and for the name-based overload: interning
+and input order, reuse of existing catalog ids across repeated batches, restart, and an over-sized
+batch interning nothing), `tests/assertion_log_tests.cpp` and the
 three index-log test files (`append_batch` record order, empty-batch no-op, and the segments-stay-
 exactly-full invariant mid-batch), `tests/kernel_command_tests.cpp`, and `tests/mcp_tools_tests.cpp`.
 `benchmarks/commit_benchmark.cpp` measures it against the identical `commit()` workload.
+
+**The name-based overload.** `commit_batch_by_name` (added 2026-09-06 alongside the above) stands to
+`commit_batch` exactly as `commit_by_name` stands to `commit`: it interns each entry's subject name,
+predicate name, and object `Value`, then calls `commit_batch` with the resolved entries. Pure
+composition of existing idempotent primitives — no new storage, no new invariants, and every
+guarantee above carries over unchanged.
+
+One thing does not carry over, and is worth stating plainly: **interning happens before the batch's
+durability boundary**, so each genuinely new name is its own catalog append and fsync. A batch of all-
+new names therefore costs one fsync per new name plus the batch's own five; the case this exists for
+— restating a field for subjects the kernel already knows, under one predicate — interns nothing new
+for the subjects and at most one new predicate, which is why it is affordable. A crash partway
+through interning is harmless rather than partial: catalog entries are id/name mappings with no
+assertion attached yet, and interning is idempotent, so a retry reuses the same ids and commits
+again. The `MAX_BATCH_SIZE` check runs before any interning, so a rejected batch interns nothing.
 
 **Deliberately out of scope.** A batch holds plain appends only: no supersession, retraction, or
 hypothesis entries, and no per-entry provenance. Each of those carries target validation or a second
@@ -1872,8 +1889,9 @@ Implementation:
  surface (`InternDocumentCommand::content` / `DocumentContentCommand`'s return) — JSON has no native
  binary type.
 * `include/kernel/mcp_tools.hpp` / `src/mcp_tools.cpp` — the pure, I/O-free half of the server: one
- MCP tool per `KernelCommand` variant (41 total, after `commit_by_name` and `current_by_name` — see
- Phase 5's "Current implementation status" — added the 39th and 40th, and `commit_batch` the 41st),
+ MCP tool per `KernelCommand` variant (42 total, after `commit_by_name` and `current_by_name` — see
+ Phase 5's "Current implementation status" — added the 39th and 40th, and `commit_batch`/
+ `commit_batch_by_name` the 41st and 42nd),
  named after the mirrored
  `KnowledgeKernel` method
  (`"commit"`, `"current_by_object"`, ...), each with a JSON Schema `inputSchema` built from its

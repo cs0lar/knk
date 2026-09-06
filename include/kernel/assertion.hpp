@@ -1,8 +1,11 @@
 #pragma once
 
+#include <string>
+
 #include "kernel/ids.hpp"
 #include "kernel/status.hpp"
 #include "kernel/time.hpp"
+#include "kernel/value.hpp"
 
 namespace knk {
 
@@ -36,6 +39,23 @@ struct PendingAssertion {
     EntityId subject;
     PredicateId predicate;
     EntityId object;
+
+    Timestamp valid_from;
+    Timestamp valid_to;
+    Timestamp observed_at;
+
+    double confidence;
+};
+
+// PendingAssertion's name-based counterpart, as handed to KnowledgeKernel::commit_batch_by_name --
+// the same relationship commit_by_name has to commit. Subject and predicate are names and the object
+// is a Value (a text Value names an entity, any other kind is a literal), exactly as in
+// commit_by_name's signature; the kernel interns all three and hands the resulting ids to
+// commit_batch.
+struct PendingNamedAssertion {
+    std::string subject_name;
+    std::string predicate_name;
+    Value object;
 
     Timestamp valid_from;
     Timestamp valid_to;
