@@ -1,6 +1,7 @@
 #pragma once
 
 #include <filesystem>
+#include <span>
 #include <vector>
 
 #include "kernel/assertion.hpp"
@@ -21,6 +22,19 @@ class AssertionLog {
     explicit AssertionLog(std::filesystem::path segment_directory, size_t max_records_per_segment);
 
     void append(const Assertion &assertion);
+
+    // Appends every record with one file open and one fsync per segment touched, instead of one of
+    // each per record -- the durability boundary a batch commit is built on (see
+    // KnowledgeKernel::commit_batch). Records are written in the order given, and a segment is filled
+    // to capacity and fsynced before the next one is opened, so the class's "every non-active segment
+    // holds exactly max_records_per_segment complete records" invariant holds mid-batch exactly as it
+    // does between single appends.
+    //
+    // This is not an atomic multi-record write and does not pretend to be: a crash before the fsync
+    // returns can leave any prefix of the batch durable (0 to all of it). It can only ever be a
+    // prefix, never a gap or a reordering, because records are written in order and only the trailing
+    // frame of the active segment can be torn -- read_all/read_after drop exactly that one frame.
+    void append_batch(std::span<const Assertion> assertions);
 
     std::vector<Assertion> read_all() const;
 

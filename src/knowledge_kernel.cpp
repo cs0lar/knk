@@ -221,6 +221,73 @@ AssertionId KnowledgeKernel::commit(EntityId subject, PredicateId predicate, Ent
     return id;
 }
 
+std::vector<AssertionId> KnowledgeKernel::commit_batch(const std::vector<PendingAssertion> &entries) {
+    // Checked before anything is built or appended, so an over-sized batch leaves next_id_ and every
+    // log untouched -- the same "a failed call burns no id" property commit_superseding/
+    // commit_retraction get from validating their target first.
+    if (entries.size() > MAX_BATCH_SIZE) {
+        throw std::runtime_error("batch exceeds maximum size");
+    }
+
+    if (entries.empty()) {
+        return {};
+    }
+
+    std::vector<Assertion> assertions;
+    assertions.reserve(entries.size());
+
+    std::vector<AssertionId> ids;
+    ids.reserve(entries.size());
+
+    std::vector<ObservedTimeIndexRecord> observed_time_records;
+    observed_time_records.reserve(entries.size());
+
+    std::vector<SubjectIndexRecord> subject_records;
+    subject_records.reserve(entries.size());
+
+    std::vector<CurrentIndexRecord> current_records;
+    current_records.reserve(entries.size());
+
+    AssertionId id = next_id_;
+
+    for (const auto &entry : entries) {
+        Assertion assertion{id,
+                            entry.subject,
+                            entry.predicate,
+                            entry.object,
+                            entry.valid_from,
+                            entry.valid_to,
+                            entry.observed_at,
+                            entry.confidence,
+                            AssertionStatus::Active};
+
+        observed_time_records.push_back(
+            ObservedTimeIndexRecord{assertion.subject, assertion.observed_at, assertion.id});
+        subject_records.push_back(SubjectIndexRecord{assertion.subject, assertion.id});
+        current_records.push_back(
+            CurrentIndexRecord{assertion.subject, assertion.predicate, assertion.id, is_current_assertion(assertion)});
+
+        assertions.push_back(assertion);
+        ids.push_back(id);
+
+        ++id;
+    }
+
+    // Durable-before-visible, in the same order a single commit uses -- assertion log, then the three
+    // index logs, then the checkpoint -- just once for the whole batch instead of once per assertion.
+    storage_.append_assertions(assertions);
+    storage_.append_observed_time_entries(observed_time_records);
+    storage_.append_subject_entries(subject_records);
+    storage_.append_current_index_entries(current_records);
+    storage_.write_checkpoint(assertions.back().id);
+
+    for (const auto &assertion : assertions) {
+        apply(assertion);
+    }
+
+    return ids;
+}
+
 AssertionId KnowledgeKernel::commit_by_name(std::string_view subject_name, std::string_view predicate_name,
                                             const Value &object, Timestamp valid_from, Timestamp valid_to,
                                             Timestamp observed_at, double confidence) {

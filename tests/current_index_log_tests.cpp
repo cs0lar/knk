@@ -36,6 +36,47 @@ void current_index_log_appends_and_reads_records() {
     std::filesystem::remove(path);
 }
 
+void current_index_log_append_batch_writes_every_record_in_order() {
+    auto path = std::filesystem::temp_directory_path() / "kernel_current_index_log_append_batch_test.idx";
+    std::filesystem::remove(path);
+
+    CurrentIndexLog log(path);
+
+    std::vector<CurrentIndexRecord> batch{CurrentIndexRecord{1, 10, 1, true}, CurrentIndexRecord{1, 20, 2, false},
+                                          CurrentIndexRecord{2, 10, 3, true}};
+    log.append_batch(batch);
+
+    auto records = log.read_all();
+
+    assert(records.size() == 3);
+    assert(records[0].subject == 1 && records[0].predicate == 10 && records[0].assertion_id == 1 && records[0].active);
+    assert(records[1].subject == 1 && records[1].predicate == 20 && records[1].assertion_id == 2 && !records[1].active);
+    assert(records[2].subject == 2 && records[2].predicate == 10 && records[2].assertion_id == 3 && records[2].active);
+
+    // A batch writes the same header-then-frames layout a sequence of appends would, so a later
+    // single append continues the same file rather than starting a second header.
+    log.append(CurrentIndexRecord{3, 10, 4, true});
+    assert(log.read_all().size() == 4);
+
+    std::filesystem::remove(path);
+}
+
+void current_index_log_append_batch_is_a_no_op_for_an_empty_batch() {
+    auto path = std::filesystem::temp_directory_path() / "kernel_current_index_log_append_batch_empty_test.idx";
+    std::filesystem::remove(path);
+
+    CurrentIndexLog log(path);
+
+    log.append_batch({});
+
+    // No header-only file left behind: an empty batch must leave the log indistinguishable from
+    // one that was never written to.
+    assert(!std::filesystem::exists(path));
+    assert(log.read_all().empty());
+
+    std::filesystem::remove(path);
+}
+
 void current_index_log_returns_empty_when_missing() {
     auto path = std::filesystem::temp_directory_path() / "kernel_missing_current_index_log.idx";
     std::filesystem::remove(path);
@@ -234,6 +275,8 @@ void current_index_log_overwrite_all_replaces_prior_contents() {
 
 int main() {
     current_index_log_appends_and_reads_records();
+    current_index_log_append_batch_writes_every_record_in_order();
+    current_index_log_append_batch_is_a_no_op_for_an_empty_batch();
     current_index_log_returns_empty_when_missing();
     current_index_log_rejects_invalid_record_size();
     current_index_log_rejects_missing_or_invalid_header();

@@ -7,7 +7,9 @@
 #include <fstream>
 #include <iostream>
 #include <ostream>
+#include <stdexcept>
 #include <string>
+#include <vector>
 
 #include "kernel/assertion.hpp"
 #include "kernel/ids.hpp"
@@ -210,6 +212,192 @@ void current_assertion_returns_open_ended_assertion() {
 
     assert(current.size() == 1);
     assert(current[0].object == BETA);
+
+    cleanup(root);
+}
+
+void commit_batch_returns_consecutive_ids_in_input_order() {
+    auto root = test_root("commit_batch_returns_consecutive_ids_in_input_order");
+    KnowledgeKernel kernel(StorageConfig{root});
+
+    AssertionId existing = kernel.commit(ALICE, WORKS_AT, ACME, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.95);
+
+    auto ids = kernel.commit_batch({
+        {BETA, LIVES_IN, GAMMA, JAN_1_2020, OPEN_ENDED, JUL_2_2024, 0.90},
+        {GAMMA, LIVES_IN, ACME, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.80},
+        {UNIVERSITY, LIVES_IN, STARTUP, JUL_1_2024, OPEN_ENDED, JUL_2_2024, 0.70},
+    });
+
+    assert(ids.size() == 3);
+    assert(ids[0] == existing + 1);
+    assert(ids[1] == existing + 2);
+    assert(ids[2] == existing + 3);
+
+    // Input order is the contract a caller relies on to attach provenance without a lookup per
+    // assertion, so check each returned id resolves to the entry at the same input position.
+    assert(kernel.get(ids[0])->subject == BETA);
+    assert(kernel.get(ids[1])->subject == GAMMA);
+    assert(kernel.get(ids[2])->subject == UNIVERSITY);
+
+    // A subsequent single commit continues the same id sequence -- the batch consumed exactly three.
+    assert(kernel.commit(ALICE, LIVES_IN, BETA, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.95) == ids[2] + 1);
+
+    cleanup(root);
+}
+
+void commit_batch_preserves_per_entry_valid_time() {
+    auto root = test_root("commit_batch_preserves_per_entry_valid_time");
+    KnowledgeKernel kernel(StorageConfig{root});
+
+    // The motivating case: restating a field for several subjects, each entry keeping the valid_from
+    // of the record it derives from rather than being stamped with one time for the whole batch.
+    auto ids = kernel.commit_batch({
+        {ALICE, LIVES_IN, ACME, JAN_1_2020, OPEN_ENDED, JUL_2_2024, 0.95},
+        {BETA, LIVES_IN, ACME, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.95},
+        {GAMMA, LIVES_IN, ACME, JUL_1_2024, OPEN_ENDED, JUL_2_2024, 0.95},
+    });
+
+    assert(kernel.get(ids[0])->valid_from == JAN_1_2020);
+    assert(kernel.get(ids[1])->valid_from == JAN_1_2023);
+    assert(kernel.get(ids[2])->valid_from == JUL_1_2024);
+
+    // Each entry's own valid_from is what valid_at sees, not the batch's newest.
+    assert(kernel.valid_at(ALICE, JAN_1_2023).size() == 1);
+    assert(kernel.valid_at(BETA, JAN_1_2023).size() == 1);
+    assert(kernel.valid_at(GAMMA, JAN_1_2023).empty());
+
+    cleanup(root);
+}
+
+void commit_batch_entries_are_queryable_and_indexed_like_single_commits() {
+    auto root = test_root("commit_batch_entries_are_queryable_and_indexed_like_single_commits");
+    KnowledgeKernel kernel(StorageConfig{root});
+
+    kernel.commit_batch({
+        {ALICE, WORKS_AT, ACME, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.95},
+        {ALICE, LIVES_IN, BETA, JAN_1_2023, JUL_1_2024, JUL_2_2024, 0.90},
+        {GAMMA, WORKS_AT, ACME, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.85},
+    });
+
+    // Every index a single commit feeds must be fed identically by a batch: subject, current-state
+    // (both directions and by predicate), and observed-time.
+    assert(kernel.assertions_for_subject(ALICE).size() == 2);
+
+    auto current = kernel.current(ALICE);
+    assert(current.size() == 1);
+    assert(current[0].predicate == WORKS_AT);
+
+    assert(kernel.current_by_object(ACME).size() == 2);
+    assert(kernel.current_by_predicate(WORKS_AT).size() == 2);
+    assert(kernel.known_at(ALICE, JUL_3_2024).size() == 2);
+    assert(kernel.known_at(ALICE, JAN_1_2023).empty());
+
+    cleanup(root);
+}
+
+void commit_batch_is_preserved_across_kernel_restarts() {
+    auto root = test_root("commit_batch_is_preserved_across_kernel_restarts");
+
+    std::vector<AssertionId> ids;
+    {
+        KnowledgeKernel kernel(StorageConfig{root});
+        ids = kernel.commit_batch({
+            {ALICE, WORKS_AT, ACME, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.95},
+            {BETA, WORKS_AT, GAMMA, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.90},
+        });
+    }
+
+    KnowledgeKernel recovered(StorageConfig{root});
+
+    // The batch writes its checkpoint after the index logs, so this restart takes the trusted-index
+    // fast path -- which only returns the right answer if the batch's index entries were durable too,
+    // not just its assertion records.
+    assert(recovered.get(ids[0])->object == ACME);
+    assert(recovered.get(ids[1])->object == GAMMA);
+    assert(recovered.current(ALICE).size() == 1);
+    assert(recovered.current(BETA).size() == 1);
+    assert(recovered.assertions_for_subject(ALICE).size() == 1);
+
+    // Ids continue past the batch after a restart, same as after a single commit.
+    assert(recovered.commit(GAMMA, WORKS_AT, ACME, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.95) == ids[1] + 1);
+
+    cleanup(root);
+}
+
+void commit_batch_rejects_an_oversized_batch_without_writing_or_burning_ids() {
+    auto root = test_root("commit_batch_rejects_an_oversized_batch_without_writing_or_burning_ids");
+    KnowledgeKernel kernel(StorageConfig{root});
+
+    std::vector<PendingAssertion> too_many(
+        KnowledgeKernel::MAX_BATCH_SIZE + 1,
+        PendingAssertion{ALICE, WORKS_AT, ACME, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.95});
+
+    bool exception_thrown = false;
+    try {
+        kernel.commit_batch(too_many);
+    } catch (const std::runtime_error &) {
+        exception_thrown = true;
+    }
+
+    assert(exception_thrown);
+
+    // Same property failed_supersession_does_not_persist_or_burn_id checks for the single-commit
+    // paths: a rejected call leaves the id sequence and the log untouched.
+    assert(kernel.commit(ALICE, WORKS_AT, ACME, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.95) == 1);
+    assert(kernel.assertions_for_subject(ALICE).size() == 1);
+
+    cleanup(root);
+}
+
+void empty_commit_batch_is_a_no_op() {
+    auto root = test_root("empty_commit_batch_is_a_no_op");
+    KnowledgeKernel kernel(StorageConfig{root});
+
+    assert(kernel.commit_batch({}).empty());
+
+    // No id burned, nothing written: the next commit is still id 1 and survives a restart as such.
+    assert(kernel.commit(ALICE, WORKS_AT, ACME, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.95) == 1);
+
+    cleanup(root);
+}
+
+void commit_batch_spanning_a_segment_boundary_is_read_back_whole() {
+    auto root = test_root("commit_batch_spanning_a_segment_boundary_is_read_back_whole");
+
+    // Three records per segment, so a single 7-entry batch fills one partly-used segment, rolls
+    // through two more, and lands mid-segment -- the case where append_batch has to split its writes
+    // and still leave every non-active segment exactly full.
+    StorageConfig config{root};
+    config.max_records_per_segment = 3;
+
+    std::vector<AssertionId> ids;
+    {
+        KnowledgeKernel kernel(StorageConfig{config});
+        kernel.commit(ALICE, WORKS_AT, ACME, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.95);
+
+        std::vector<PendingAssertion> entries;
+        for (size_t i = 0; i < 7; ++i) {
+            entries.push_back(PendingAssertion{BETA, WORKS_AT, GAMMA, JAN_1_2023, OPEN_ENDED,
+                                               JUL_2_2024 + static_cast<Timestamp>(i), 0.90});
+        }
+
+        ids = kernel.commit_batch(entries);
+    }
+
+    // Forcing a full replay (rather than the trusted-index path) is what actually re-reads every
+    // segment, including the boundaries the batch wrote across.
+    std::filesystem::remove(config.checkpoint_path());
+
+    KnowledgeKernel recovered(StorageConfig{config});
+
+    auto assertions = recovered.assertions_for_subject(BETA);
+    assert(assertions.size() == 7);
+
+    for (size_t i = 0; i < ids.size(); ++i) {
+        auto assertion = recovered.get(ids[i]);
+        assert(assertion.has_value());
+        assert(assertion->observed_at == JUL_2_2024 + static_cast<Timestamp>(i));
+    }
 
     cleanup(root);
 }
@@ -643,11 +831,11 @@ void changes_since_is_status_agnostic_and_spans_multiple_subjects() {
     AssertionId superseding =
         kernel.commit_superseding(ALICE, WORKS_AT, BETA, JUL_8_2024, OPEN_ENDED, SUPERSEDING_AT, 0.90, original);
 
-    AssertionId retraction = kernel.commit_retraction(UNIVERSITY, LIVES_IN, BETA, JAN_1_2023, OPEN_ENDED,
-                                                       JUL_8_2024, 0.90, other_subject);
+    AssertionId retraction =
+        kernel.commit_retraction(UNIVERSITY, LIVES_IN, BETA, JAN_1_2023, OPEN_ENDED, JUL_8_2024, 0.90, other_subject);
 
     AssertionId hypothesis = kernel.commit_hypothesis(ALICE, WORKS_AT, GAMMA, JAN_1_2020, OPEN_ENDED, HYPOTHESIS_AT,
-                                                       0.5, STARTUP, HYPOTHESIS_AT, "churn_model");
+                                                      0.5, STARTUP, HYPOTHESIS_AT, "churn_model");
 
     auto changes = kernel.changes_since(JUL_2_2024);
 
@@ -1347,7 +1535,7 @@ void explain_walks_the_supersession_chain_to_its_root() {
     // An unknown id explains to nothing.
     assert(kernel.explain(999).empty());
     assert(kernel.explain(0).empty());
-    
+
     cleanup(root);
 }
 
@@ -1375,7 +1563,7 @@ void provenance_is_recorded_and_resolves_to_a_source_entity() {
     // An assertion with no recorded provenance resolves to nullopt.
     auto other_id = kernel.commit(ALICE, WORKS_AT, BETA, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.9);
     assert(!kernel.provenance_for(other_id).has_value());
-  
+
     cleanup(root);
 }
 
@@ -1401,10 +1589,10 @@ void find_conflicts_detects_overlapping_active_assertions_for_the_same_subject_p
     // acme/beta, and the new acme conflicts with beta too (different object, overlapping) -- but the
     // two ACME assertions do not conflict with each other.
     assert(conflicts.size() == 2);
-    
+
     cleanup(root);
 }
-    
+
 void record_provenance_rejects_an_unknown_assertion_target() {
     auto root = test_root("record_provenance_rejects_an_unknown_assertion_target");
     KnowledgeKernel kernel(StorageConfig{root});
@@ -1443,7 +1631,7 @@ void find_conflicts_excludes_non_overlapping_and_resolved_assertions() {
 
     // No assertions at all for a subject -> no conflicts.
     assert(kernel.find_conflicts(UNIVERSITY, WORKS_AT).empty());
-    
+
     cleanup(root);
 }
 
@@ -2081,6 +2269,13 @@ int main() {
     current_by_object_returns_active_open_ended_assertions_referencing_the_entity();
     current_by_object_excludes_superseded_and_resolves_merged_entities();
     current_by_predicate_returns_every_active_open_ended_assertion_for_the_predicate();
+    commit_batch_returns_consecutive_ids_in_input_order();
+    commit_batch_preserves_per_entry_valid_time();
+    commit_batch_entries_are_queryable_and_indexed_like_single_commits();
+    commit_batch_is_preserved_across_kernel_restarts();
+    commit_batch_rejects_an_oversized_batch_without_writing_or_burning_ids();
+    empty_commit_batch_is_a_no_op();
+    commit_batch_spanning_a_segment_boundary_is_read_back_whole();
     superseded_assertion_is_excluded_from_current_queries();
     failed_supersession_does_not_persist_or_burn_id();
     retracted_assertion_is_excluded_from_current_queries();

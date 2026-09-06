@@ -48,6 +48,15 @@ nlohmann::ordered_json value_property(const std::string &description) {
         {"required", nlohmann::ordered_json::array({"kind", "value"})}};
 }
 
+nlohmann::ordered_json array_property(const std::string &description, size_t max_items, nlohmann::ordered_json items) {
+    nlohmann::ordered_json schema;
+    schema["type"] = "array";
+    schema["description"] = description;
+    schema["maxItems"] = max_items;
+    schema["items"] = std::move(items);
+    return schema;
+}
+
 nlohmann::ordered_json object_schema(std::vector<std::pair<std::string, nlohmann::ordered_json>> properties,
                                      std::vector<std::string> required) {
     nlohmann::ordered_json properties_json = nlohmann::ordered_json::object();
@@ -90,6 +99,28 @@ bool optional_bool(const nlohmann::json &args, const char *key, bool default_val
 }
 
 Value require_value(const nlohmann::json &args, const char *key) { return value_from_json(args.at(key)); }
+
+std::vector<PendingAssertion> require_pending_assertions(const nlohmann::json &args, const char *key) {
+    const auto &entries = args.at(key);
+    if (!entries.is_array()) {
+        throw std::runtime_error("entries must be an array");
+    }
+
+    std::vector<PendingAssertion> result;
+    result.reserve(entries.size());
+
+    // Each entry is validated by the same require_* helpers a single-assertion tool uses, so a
+    // malformed entry anywhere in the list throws before kernel.execute is reached and the batch never
+    // starts -- handle_tool_call turns that into an ordinary is_error result.
+    for (const auto &entry : entries) {
+        result.push_back(PendingAssertion{require_id(entry, "subject"), require_id(entry, "predicate"),
+                                          require_id(entry, "object"), require_timestamp(entry, "valid_from"),
+                                          require_timestamp(entry, "valid_to"), require_timestamp(entry, "observed_at"),
+                                          require_double(entry, "confidence")});
+    }
+
+    return result;
+}
 
 std::vector<std::byte> require_bytes(const nlohmann::json &args, const char *key) {
     return base64_decode(args.at(key).get<std::string>());
@@ -141,6 +172,34 @@ const std::vector<ToolDefinition> &tool_definitions() {
                                          require_value(args, "object"), require_timestamp(args, "valid_from"),
                                          require_timestamp(args, "valid_to"), require_timestamp(args, "observed_at"),
                                          require_double(args, "confidence")});
+             }});
+
+        defs.push_back(
+            {{"commit_batch",
+              "Commits many new active assertions in one call, under a single durability boundary "
+              "(one fsync per log for the whole batch, not per assertion). At most " +
+                  std::to_string(KnowledgeKernel::MAX_BATCH_SIZE) +
+                  " entries; a larger list is rejected without writing anything. Each entry carries its "
+                  "own valid_from/valid_to/observed_at. Returns the new AssertionIds in input order. "
+                  "Not atomic: a crash mid-batch leaves a prefix of the entries committed, never a gap, "
+                  "so a caller resumes at the first uncommitted entry. Plain appends only -- use "
+                  "commit_superseding or commit_retraction for corrections.",
+              object_schema(
+                  {{"entries",
+                    array_property(
+                        "Assertions to commit, in order.", KnowledgeKernel::MAX_BATCH_SIZE,
+                        object_schema({{"subject", integer_property("Subject EntityId.")},
+                                       {"predicate", integer_property("Predicate PredicateId.")},
+                                       {"object", integer_property("Object EntityId.")},
+                                       {"valid_from", integer_property("Valid-from timestamp.")},
+                                       {"valid_to", integer_property("Valid-to timestamp; 0 means open-ended.")},
+                                       {"observed_at", integer_property("Observed-at timestamp.")},
+                                       {"confidence", number_property("Confidence in [0,1].")}},
+                                      {"subject", "predicate", "object", "valid_from", "valid_to", "observed_at",
+                                       "confidence"}))}},
+                  {"entries"})},
+             [](KnowledgeKernel &kernel, const nlohmann::json &args) -> KernelResult {
+                 return kernel.execute(CommitBatchCommand{require_pending_assertions(args, "entries")});
              }});
 
         defs.push_back({{"commit_retraction", "Commits a retraction record for an existing assertion.",

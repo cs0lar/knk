@@ -2,6 +2,7 @@
 #include <array>
 #include <cstring>
 #include <fstream>
+#include <span>
 #include <stdexcept>
 
 #include "kernel/checksum.hpp"
@@ -76,6 +77,14 @@ bool read_and_validate_header(std::ifstream &in) {
 ObservedTimeIndexLog::ObservedTimeIndexLog(std::filesystem::path path) : path_(std::move(path)) {}
 
 void ObservedTimeIndexLog::append(const ObservedTimeIndexRecord &record) {
+    append_batch(std::span<const ObservedTimeIndexRecord>(&record, 1));
+}
+
+void ObservedTimeIndexLog::append_batch(std::span<const ObservedTimeIndexRecord> records) {
+    if (records.empty()) {
+        return;
+    }
+
     std::filesystem::create_directories(path_.parent_path());
 
     bool file_is_new = !std::filesystem::exists(path_) || std::filesystem::file_size(path_) == 0;
@@ -89,7 +98,9 @@ void ObservedTimeIndexLog::append(const ObservedTimeIndexRecord &record) {
         write_header(out);
     }
 
-    write_record(out, record);
+    for (const auto &record : records) {
+        write_record(out, record);
+    }
 
     out.close();
     fsync_file(path_);

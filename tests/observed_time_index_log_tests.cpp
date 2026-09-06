@@ -37,6 +37,47 @@ void observed_time_index_log_appends_and_reads_records() {
     std::filesystem::remove(path);
 }
 
+void observed_time_index_log_append_batch_writes_every_record_in_order() {
+    auto path = std::filesystem::temp_directory_path() / "kernel_observed_time_index_log_append_batch_test.idx";
+    std::filesystem::remove(path);
+
+    ObservedTimeIndexLog log(path);
+
+    std::vector<ObservedTimeIndexRecord> batch{ObservedTimeIndexRecord{1, 100, 1}, ObservedTimeIndexRecord{1, 200, 2},
+                                               ObservedTimeIndexRecord{2, 300, 3}};
+    log.append_batch(batch);
+
+    auto records = log.read_all();
+
+    assert(records.size() == 3);
+    assert(records[0].subject == 1 && records[0].observed_at == 100 && records[0].assertion_id == 1);
+    assert(records[1].subject == 1 && records[1].observed_at == 200 && records[1].assertion_id == 2);
+    assert(records[2].subject == 2 && records[2].observed_at == 300 && records[2].assertion_id == 3);
+
+    // A batch writes the same header-then-frames layout a sequence of appends would, so a later
+    // single append continues the same file rather than starting a second header.
+    log.append(ObservedTimeIndexRecord{3, 400, 4});
+    assert(log.read_all().size() == 4);
+
+    std::filesystem::remove(path);
+}
+
+void observed_time_index_log_append_batch_is_a_no_op_for_an_empty_batch() {
+    auto path = std::filesystem::temp_directory_path() / "kernel_observed_time_index_log_append_batch_empty_test.idx";
+    std::filesystem::remove(path);
+
+    ObservedTimeIndexLog log(path);
+
+    log.append_batch({});
+
+    // No header-only file left behind: an empty batch must leave the log indistinguishable from
+    // one that was never written to.
+    assert(!std::filesystem::exists(path));
+    assert(log.read_all().empty());
+
+    std::filesystem::remove(path);
+}
+
 void observed_time_index_log_returns_empty_when_missing() {
     auto path = std::filesystem::temp_directory_path() / "kernel_missing_observed_time_index_log.idx";
     std::filesystem::remove(path);
@@ -236,6 +277,8 @@ void observed_time_index_log_overwrite_all_replaces_prior_contents() {
 
 int main() {
     observed_time_index_log_appends_and_reads_records();
+    observed_time_index_log_append_batch_writes_every_record_in_order();
+    observed_time_index_log_append_batch_is_a_no_op_for_an_empty_batch();
     observed_time_index_log_returns_empty_when_missing();
     observed_time_index_log_rejects_invalid_record_size();
     observed_time_index_log_rejects_missing_or_invalid_header();

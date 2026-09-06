@@ -367,6 +367,25 @@ Every `append()` closes its `std::ofstream` and then fsyncs the file (`knk::fsyn
 `include/kernel/durability.hpp`) before returning, so a commit is not considered durable until the
 data has actually reached physical disk, not just the OS page cache.
 
+`append_batch()` (the batch counterpart on `AssertionLog` and the three index logs, used only by
+`KnowledgeKernel::commit_batch`) writes every record of a batch under **one** open/close/fsync per
+file instead of one per record — the record bytes on disk are byte-identical to what the same
+records appended one at a time would produce, so nothing downstream can tell the two apart. What
+changes is the size of the crash window, not the format:
+
+* A crash before the fsync returns can leave any **prefix** of the batch durable — never a gap and
+  never a reordering, since records are written in order and only the trailing frame of the active
+  segment can be torn (which `read_all`/`read_after` already drop). Batch ids are consecutive, so the
+  surviving prefix is a contiguous id range and the caller resumes at the first missing one.
+* This is deliberately **not** an atomic multi-record write. Making it one would need a
+  batch-commit marker record, i.e. a new record type and a format version bump for every reader;
+  `commit_batch`'s contract promises the prefix guarantee the current format actually supports
+  rather than an atomicity it doesn't.
+* `AssertionLog::append_batch` still fills a segment to capacity and fsyncs it before opening the
+  next one, so the "every non-active segment holds exactly `max_records_per_segment` complete
+  records" invariant that makes segment boundaries pure id arithmetic holds mid-batch too.
+* An empty batch writes nothing at all — no header-only file or segment is created.
+
 `overwrite_all()` (the three index logs' self-heal rewrite) writes via `knk::write_file_atomically`:
 the full new content is written to a `.tmp` file, fsynced, then `rename`d over the real path
 (atomic on the same filesystem), followed by an fsync of the parent directory (the standard
@@ -394,6 +413,10 @@ crc32]`. Unlike the four data logs, reading a checkpoint **never throws** — it
 optimization hint for `KnowledgeKernel`'s startup fast path, not authoritative data. Any problem
 (missing file, bad magic/version, bad crc) degrades to `0` (the codebase's existing "no assertion"
 sentinel), which just costs an extra full replay on the next startup, never data loss.
+
+`commit_batch` writes the checkpoint once, after the whole batch's index appends, so a crash
+anywhere inside a batch leaves the checkpoint behind the log and the next startup rebuilds every
+index from it — the same self-heal a torn single commit already gets, just covering more records.
 
 `KnowledgeKernel`'s constructor trusts the persisted indexes only if every index file loaded
 cleanly *and* the checkpoint equals the highest `AssertionId` present in `assertions.log`;

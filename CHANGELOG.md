@@ -53,6 +53,19 @@ the PR that makes it — see `CONTRIBUTING.md`.
   `SIGKILL`, with no manual cleanup required. See `docs/storage_format.md`'s "Storage root lock"
   section.
 
+- `commit_batch` commits many new active assertions in a single call under one durability boundary:
+  one fsync per underlying log for the whole batch rather than one per assertion (~67x the
+  throughput of the equivalent `commit()` loop on the machine measured in `docs/benchmarks.md`, and
+  a larger factor the slower `fsync` is). Each entry carries its own `valid_from`/`valid_to`/
+  `observed_at`, so restating a field across a whole population preserves per-record valid time, and
+  the new ids come back in input order so a caller can attach provenance without a lookup per
+  assertion. Batches are capped at `KnowledgeKernel::MAX_BATCH_SIZE` (10,000); an over-sized batch is
+  rejected before anything is written and burns no `AssertionId`. Durability is prefix-shaped rather
+  than atomic — a crash mid-batch leaves the first *k* entries committed, never a gap or a
+  reordering, and consecutive ids make *k* exactly recoverable. Available as a `CommitBatchCommand`
+  and as the `commit_batch` MCP tool. Plain appends only: corrections still go through
+  `commit_superseding`/`commit_retraction`.
+
 - `changes_since` gained optional `limit` and `newest_first` parameters, and `assertions_for_subject`/
   `commit_history` gained an optional `limit` — all default to prior (unlimited, oldest-first)
   behavior. Lets a caller answer "what's the single latest change" via

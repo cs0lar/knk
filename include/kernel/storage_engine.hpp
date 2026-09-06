@@ -32,6 +32,12 @@ class StorageEngine {
 
     void append_assertion(const Assertion &assertion);
 
+    // The batch counterparts of the four append_* methods below: each collapses what would be one
+    // fsync per record into one per underlying log, which is the whole point of a batch commit (see
+    // KnowledgeKernel::commit_batch). Coordination only -- like every other method here, these know
+    // nothing about what the records mean.
+    void append_assertions(std::span<const Assertion> assertions);
+
     std::vector<Assertion> load_assertions() const;
 
     std::vector<Assertion> load_assertions_after(AssertionId last_seen_id) const;
@@ -42,17 +48,23 @@ class StorageEngine {
 
     void append_observed_time_entry(EntityId subject, Timestamp observed_at, AssertionId id);
 
+    void append_observed_time_entries(std::span<const ObservedTimeIndexRecord> records);
+
     std::vector<ObservedTimeIndexRecord> load_observed_time_index() const;
 
     void rewrite_observed_time_index(const std::vector<ObservedTimeIndexRecord> &records);
 
     void append_subject_entry(EntityId subject, AssertionId id);
 
+    void append_subject_entries(std::span<const SubjectIndexRecord> records);
+
     std::vector<SubjectIndexRecord> load_subject_index() const;
 
     void rewrite_subject_index(const std::vector<SubjectIndexRecord> &records);
 
     void append_current_index_entry(EntityId subject, PredicateId predicate, AssertionId id, bool active);
+
+    void append_current_index_entries(std::span<const CurrentIndexRecord> records);
 
     std::vector<CurrentIndexRecord> load_current_index() const;
 

@@ -34,6 +34,46 @@ void subject_index_log_appends_and_reads_records() {
     std::filesystem::remove(path);
 }
 
+void subject_index_log_append_batch_writes_every_record_in_order() {
+    auto path = std::filesystem::temp_directory_path() / "kernel_subject_index_log_append_batch_test.idx";
+    std::filesystem::remove(path);
+
+    SubjectIndexLog log(path);
+
+    std::vector<SubjectIndexRecord> batch{SubjectIndexRecord{1, 1}, SubjectIndexRecord{1, 2}, SubjectIndexRecord{2, 3}};
+    log.append_batch(batch);
+
+    auto records = log.read_all();
+
+    assert(records.size() == 3);
+    assert(records[0].subject == 1 && records[0].assertion_id == 1);
+    assert(records[1].subject == 1 && records[1].assertion_id == 2);
+    assert(records[2].subject == 2 && records[2].assertion_id == 3);
+
+    // A batch writes the same header-then-frames layout a sequence of appends would, so a later
+    // single append continues the same file rather than starting a second header.
+    log.append(SubjectIndexRecord{3, 4});
+    assert(log.read_all().size() == 4);
+
+    std::filesystem::remove(path);
+}
+
+void subject_index_log_append_batch_is_a_no_op_for_an_empty_batch() {
+    auto path = std::filesystem::temp_directory_path() / "kernel_subject_index_log_append_batch_empty_test.idx";
+    std::filesystem::remove(path);
+
+    SubjectIndexLog log(path);
+
+    log.append_batch({});
+
+    // No header-only file left behind: an empty batch must leave the log indistinguishable from
+    // one that was never written to.
+    assert(!std::filesystem::exists(path));
+    assert(log.read_all().empty());
+
+    std::filesystem::remove(path);
+}
+
 void subject_index_log_returns_empty_when_missing() {
     auto path = std::filesystem::temp_directory_path() / "kernel_missing_subject_index_log.idx";
     std::filesystem::remove(path);
@@ -230,6 +270,8 @@ void subject_index_log_overwrite_all_replaces_prior_contents() {
 
 int main() {
     subject_index_log_appends_and_reads_records();
+    subject_index_log_append_batch_writes_every_record_in_order();
+    subject_index_log_append_batch_is_a_no_op_for_an_empty_batch();
     subject_index_log_returns_empty_when_missing();
     subject_index_log_rejects_invalid_record_size();
     subject_index_log_rejects_missing_or_invalid_header();
