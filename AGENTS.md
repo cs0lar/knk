@@ -1302,6 +1302,57 @@ Before changing this behavior, update tests and document the decision.
 
 -- -
 
+## Batch Commits
+
+**Added 2026-09-06, for #51.** `KnowledgeKernel::commit_batch` appends many new Active assertions in
+one call. Everything about the records it writes is identical to committing them one at a time — the
+same frames in `assertions.log`, the same three index-log entries each, ids assigned consecutively in
+input order. The only thing that changes is how many durability boundaries the work costs: one fsync
+per underlying log for the whole batch (5 total: assertion log, three index logs, checkpoint) rather
+than 5 per assertion.
+
+**What is the invariant?** Durability is *prefix-shaped*, not all-or-none. A crash mid-batch leaves
+the first k entries durable for some 0 <= k <= N, never a gap and never a reordering. Everything else
+a single commit guarantees still holds unchanged: durable-before-visible ordering (assertion log,
+index logs, checkpoint, then `apply()`), no burned ids on a rejected call, and append-only records.
+
+**Why this design?** True all-or-none would need a batch-commit marker record in the log, i.e. a new
+record type and a format version bump for every reader, plus replay logic that discards trailing
+records not covered by a marker. Rather than claim an atomicity the format does not support, this
+promises exactly what it does: because records are written in order and only the active segment's
+trailing frame can be torn, the surviving prefix is a contiguous id range, so a caller can determine
+k exactly and resume at input index k instead of guessing. #51 explicitly allows this trade
+("or — if all-or-none is the wrong bargain for an append-only log — reports precisely how many were
+applied and in what order"). Revisit only alongside a deliberate format-version change.
+
+**What are the failure modes?**
+
+* Crash mid-batch — a prefix is durable; the checkpoint is written last, so it lags the log and the
+  next startup rebuilds every index from the log, the same self-heal a torn single commit gets.
+* Over-sized batch — rejected with `std::runtime_error` before anything is built or appended, so no
+  id is burned and no record is written. `MAX_BATCH_SIZE` is a bound on caller-supplied input, not a
+  tuning knob: an unbounded list must never become an unbounded write.
+* Empty batch — a no-op returning an empty vector; no log file or segment is created.
+
+**How is it tested?** `tests/knowledge_kernel_tests.cpp` (id order and continuation, per-entry valid
+time, index parity with single commits, restart, over-sized rejection, empty batch, a batch spanning
+segment boundaries read back after a forced full replay), `tests/assertion_log_tests.cpp` and the
+three index-log test files (`append_batch` record order, empty-batch no-op, and the segments-stay-
+exactly-full invariant mid-batch), `tests/kernel_command_tests.cpp`, and `tests/mcp_tools_tests.cpp`.
+`benchmarks/commit_benchmark.cpp` measures it against the identical `commit()` workload.
+
+**Deliberately out of scope.** A batch holds plain appends only: no supersession, retraction, or
+hypothesis entries, and no per-entry provenance. Each of those carries target validation or a second
+durable write that would have to interleave with the batch's single boundary — a different and much
+less obviously correct feature. Returning ids in input order is what lets a caller record provenance
+itself afterwards without a lookup per assertion. Note also that this is emphatically **not** a
+predicate merge: #51 asks for restating a field as new appends precisely because merging predicates
+would retroactively change the meaning of assertions people already made under a name they chose,
+which is the one thing the append-only guarantee exists to prevent. There is no predicate merge and
+this section does not introduce one.
+
+-- -
+
 ## Query Semantics
 
 Normal queries should exclude:
@@ -1821,8 +1872,9 @@ Implementation:
  surface (`InternDocumentCommand::content` / `DocumentContentCommand`'s return) — JSON has no native
  binary type.
 * `include/kernel/mcp_tools.hpp` / `src/mcp_tools.cpp` — the pure, I/O-free half of the server: one
- MCP tool per `KernelCommand` variant (40 total, after `commit_by_name` and `current_by_name` — see
- Phase 5's "Current implementation status" — added the 39th and 40th), named after the mirrored
+ MCP tool per `KernelCommand` variant (41 total, after `commit_by_name` and `current_by_name` — see
+ Phase 5's "Current implementation status" — added the 39th and 40th, and `commit_batch` the 41st),
+ named after the mirrored
  `KnowledgeKernel` method
  (`"commit"`, `"current_by_object"`, ...), each with a JSON Schema `inputSchema` built from its
  fields. Deliberately not a single generic "execute a `KernelCommand` blob" tool — MCP tool schemas

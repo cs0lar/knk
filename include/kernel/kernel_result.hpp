@@ -26,9 +26,10 @@ namespace knk {
 //
 // Void-returning commands (write_snapshot, record_provenance) yield std::monostate.
 //
-// std::vector<EntityId> covers both neighbors (vector<EntityId>) and co_occurring_predicates
-// (vector<PredicateId>) for the same reason the scalar ids above collapse: EntityId/PredicateId are
-// the same uint64_t alias, so the two return types are identical and share one alternative.
+// std::vector<EntityId> covers neighbors (vector<EntityId>), co_occurring_predicates
+// (vector<PredicateId>), and commit_batch (vector<AssertionId>) for the same reason the scalar ids
+// above collapse: EntityId/PredicateId/AssertionId are the same uint64_t alias, so those return
+// types are identical and share one alternative.
 using KernelResult = std::variant<std::monostate,                               // write_snapshot, record_provenance
                                   AssertionId,                                  // commit family; intern_* (ids)
                                   std::optional<Assertion>,                     // get
@@ -39,6 +40,6 @@ using KernelResult = std::variant<std::monostate,                               
                                   std::optional<Value>,                         // entity_value
                                   std::optional<std::vector<std::byte>>,        // document_content
                                   std::optional<ProvenanceRecord>,              // provenance_for
-                                  std::vector<EntityId>>;                       // neighbors, co_occurring_predicates
+                                  std::vector<EntityId>>; // neighbors, co_occurring_predicates, commit_batch
 
 } // namespace knk

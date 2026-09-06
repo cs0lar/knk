@@ -28,6 +28,7 @@ void cleanup(const std::filesystem::path &path) { std::filesystem::remove_all(pa
 void tool_specs_cover_every_kernel_command_with_a_well_formed_schema() {
     std::set<std::string> expected_names{"commit",
                                          "commit_by_name",
+                                         "commit_batch",
                                          "commit_retraction",
                                          "commit_superseding",
                                          "write_snapshot",
@@ -150,6 +151,95 @@ void commit_by_name_tool_interns_names_and_commits() {
     assert(kernel.predicate_name(committed->predicate) == "works_at");
 
     cleanup(root);
+}
+
+void commit_batch_tool_commits_every_entry_and_returns_ids_in_input_order() {
+    auto root = test_root("commit_batch_tool_commits_every_entry_and_returns_ids_in_input_order");
+    KnowledgeKernel kernel(StorageConfig{root});
+
+    nlohmann::json args{{"entries",
+                         {{{"subject", 1},
+                           {"predicate", 10},
+                           {"object", 100},
+                           {"valid_from", 1704067200},
+                           {"valid_to", 0},
+                           {"observed_at", 1719792000},
+                           {"confidence", 0.9}},
+                          {{"subject", 2},
+                           {"predicate", 10},
+                           {"object", 100},
+                           {"valid_from", 1672531200},
+                           {"valid_to", 0},
+                           {"observed_at", 1719792000},
+                           {"confidence", 0.8}}}}};
+
+    auto result = handle_tool_call(kernel, "commit_batch", args);
+    assert(!result.is_error);
+
+    auto ids = nlohmann::json::parse(result.content_text).get<std::vector<AssertionId>>();
+    assert(ids.size() == 2);
+
+    // Input order, and each entry's own valid_from -- the two properties a caller restating a field
+    // across a population depends on.
+    assert(kernel.get(ids[0])->subject == 1);
+    assert(kernel.get(ids[0])->valid_from == 1704067200);
+    assert(kernel.get(ids[1])->subject == 2);
+    assert(kernel.get(ids[1])->valid_from == 1672531200);
+
+    cleanup(root);
+}
+
+void commit_batch_tool_reports_a_malformed_entry_as_a_tool_error() {
+    auto root = test_root("commit_batch_tool_reports_a_malformed_entry_as_a_tool_error");
+    KnowledgeKernel kernel(StorageConfig{root});
+
+    // Second entry is missing "confidence": the batch must be rejected whole, before any of it is
+    // committed, and surface as an is_error result rather than throwing out of handle_tool_call.
+    nlohmann::json args{{"entries",
+                         {{{"subject", 1},
+                           {"predicate", 10},
+                           {"object", 100},
+                           {"valid_from", 1704067200},
+                           {"valid_to", 0},
+                           {"observed_at", 1719792000},
+                           {"confidence", 0.9}},
+                          {{"subject", 2},
+                           {"predicate", 10},
+                           {"object", 100},
+                           {"valid_from", 1672531200},
+                           {"valid_to", 0},
+                           {"observed_at", 1719792000}}}}};
+
+    auto result = handle_tool_call(kernel, "commit_batch", args);
+    assert(result.is_error);
+    assert(!kernel.get(1).has_value());
+
+    // A non-array "entries" is likewise a tool error, not a crash.
+    auto not_an_array = handle_tool_call(kernel, "commit_batch", nlohmann::json{{"entries", 7}});
+    assert(not_an_array.is_error);
+
+    cleanup(root);
+}
+
+void commit_batch_tool_schema_states_its_bound() {
+    // The issue this tool answers asks for the batch bound to be discoverable from the tool itself,
+    // not just enforced at call time -- so both the description and the schema must carry it.
+    for (const auto &spec : tool_specs()) {
+        if (spec.name != "commit_batch") {
+            continue;
+        }
+
+        assert(spec.description.find(std::to_string(KnowledgeKernel::MAX_BATCH_SIZE)) != std::string::npos);
+
+        const auto &entries = spec.input_schema.at("properties").at("entries");
+        assert(entries.at("type") == "array");
+        assert(entries.at("maxItems") == KnowledgeKernel::MAX_BATCH_SIZE);
+        assert(entries.at("items").at("type") == "object");
+
+        return;
+    }
+
+    assert(false && "commit_batch tool not registered");
 }
 
 void intern_entity_tool_round_trips_a_string_argument() {
@@ -370,6 +460,9 @@ int main() {
     commit_tool_round_trips_ids_timestamps_and_confidence();
     commit_by_name_tool_interns_names_and_commits();
     current_by_name_tool_resolves_the_named_subject();
+    commit_batch_tool_commits_every_entry_and_returns_ids_in_input_order();
+    commit_batch_tool_reports_a_malformed_entry_as_a_tool_error();
+    commit_batch_tool_schema_states_its_bound();
     intern_entity_tool_round_trips_a_string_argument();
     intern_value_tool_round_trips_a_tagged_value_argument();
     intern_document_tool_round_trips_base64_bytes();

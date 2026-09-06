@@ -20,6 +20,10 @@ StorageEngine::StorageEngine(StorageConfig config)
 
 void StorageEngine::append_assertion(const Assertion &assertion) { assertion_log_.append(assertion); }
 
+void StorageEngine::append_assertions(std::span<const Assertion> assertions) {
+    assertion_log_.append_batch(assertions);
+}
+
 std::vector<Assertion> StorageEngine::load_assertions() const { return assertion_log_.read_all(); }
 
 std::vector<Assertion> StorageEngine::load_assertions_after(AssertionId last_seen_id) const {
@@ -36,6 +40,10 @@ void StorageEngine::append_observed_time_entry(EntityId subject, Timestamp obser
     observed_time_index_log_.append(ObservedTimeIndexRecord{subject, observed_at, id});
 }
 
+void StorageEngine::append_observed_time_entries(std::span<const ObservedTimeIndexRecord> records) {
+    observed_time_index_log_.append_batch(records);
+}
+
 std::vector<ObservedTimeIndexRecord> StorageEngine::load_observed_time_index() const {
     return observed_time_index_log_.read_all();
 }
@@ -48,6 +56,10 @@ void StorageEngine::append_subject_entry(EntityId subject, AssertionId id) {
     subject_index_log_.append(SubjectIndexRecord(subject, id));
 }
 
+void StorageEngine::append_subject_entries(std::span<const SubjectIndexRecord> records) {
+    subject_index_log_.append_batch(records);
+}
+
 std::vector<SubjectIndexRecord> StorageEngine::load_subject_index() const { return subject_index_log_.read_all(); }
 
 void StorageEngine::rewrite_subject_index(const std::vector<SubjectIndexRecord> &records) {
@@ -56,6 +68,10 @@ void StorageEngine::rewrite_subject_index(const std::vector<SubjectIndexRecord> 
 
 void StorageEngine::append_current_index_entry(EntityId subject, PredicateId predicate, AssertionId id, bool active) {
     current_index_log_.append(CurrentIndexRecord{subject, predicate, id, active});
+}
+
+void StorageEngine::append_current_index_entries(std::span<const CurrentIndexRecord> records) {
+    current_index_log_.append_batch(records);
 }
 
 std::vector<CurrentIndexRecord> StorageEngine::load_current_index() const { return current_index_log_.read_all(); }

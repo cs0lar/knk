@@ -37,6 +37,15 @@ void write_header(std::ofstream &out) {
     write_or_throw(out, reinterpret_cast<const char *>(&version), sizeof(version));
 }
 
+void write_record(std::ofstream &out, const Assertion &assertion) {
+    uint32_t record_size = ASSERTION_RECORD_SIZE;
+    uint32_t crc = crc32(&assertion, sizeof(assertion));
+
+    write_or_throw(out, reinterpret_cast<const char *>(&record_size), sizeof(record_size));
+    write_or_throw(out, reinterpret_cast<const char *>(&assertion), sizeof(assertion));
+    write_or_throw(out, reinterpret_cast<const char *>(&crc), sizeof(crc));
+}
+
 // Returns false if the segment is empty, or has a torn header (fewer than HEADER_SIZE bytes). A torn
 // header can only legitimately occur in the active (last) segment, from a crash mid-write on its
 // very first-ever append; tolerate_partial is false for any earlier segment, where a torn header is
@@ -227,38 +236,47 @@ AssertionLog::AssertionLog(std::filesystem::path segment_directory, size_t max_r
     }
 }
 
-void AssertionLog::append(const Assertion &assertion) {
-    if (active_segment_count_ >= max_records_per_segment_) {
-        ++active_segment_index_;
-        active_segment_count_ = 0;
+void AssertionLog::append(const Assertion &assertion) { append_batch(std::span<const Assertion>(&assertion, 1)); }
+
+void AssertionLog::append_batch(std::span<const Assertion> assertions) {
+    size_t written = 0;
+
+    while (written < assertions.size()) {
+        if (active_segment_count_ >= max_records_per_segment_) {
+            ++active_segment_index_;
+            active_segment_count_ = 0;
+        }
+
+        // Never write past the active segment's capacity in one open: the rest of the batch rolls into
+        // the next segment on the following iteration, preserving the exactly-full guarantee that makes
+        // segment boundaries pure id arithmetic (see the class comment).
+        size_t count = std::min(max_records_per_segment_ - active_segment_count_, assertions.size() - written);
+
+        auto path = segment_path(segment_directory_, active_segment_index_);
+
+        std::filesystem::create_directories(segment_directory_);
+
+        bool segment_is_new = !std::filesystem::exists(path) || std::filesystem::file_size(path) == 0;
+
+        std::ofstream out(path, std::ios::binary | std::ios::app);
+        if (!out) {
+            throw std::runtime_error("failed to open fact log segment for append");
+        }
+
+        if (segment_is_new) {
+            write_header(out);
+        }
+
+        for (size_t i = 0; i < count; ++i) {
+            write_record(out, assertions[written + i]);
+        }
+
+        out.close();
+        fsync_file(path);
+
+        active_segment_count_ += count;
+        written += count;
     }
-
-    auto path = segment_path(segment_directory_, active_segment_index_);
-
-    std::filesystem::create_directories(segment_directory_);
-
-    bool segment_is_new = !std::filesystem::exists(path) || std::filesystem::file_size(path) == 0;
-
-    std::ofstream out(path, std::ios::binary | std::ios::app);
-    if (!out) {
-        throw std::runtime_error("failed to open fact log segment for append");
-    }
-
-    if (segment_is_new) {
-        write_header(out);
-    }
-
-    uint32_t record_size = ASSERTION_RECORD_SIZE;
-    uint32_t crc = crc32(&assertion, sizeof(assertion));
-
-    write_or_throw(out, reinterpret_cast<const char *>(&record_size), sizeof(record_size));
-    write_or_throw(out, reinterpret_cast<const char *>(&assertion), sizeof(assertion));
-    write_or_throw(out, reinterpret_cast<const char *>(&crc), sizeof(crc));
-
-    out.close();
-    fsync_file(path);
-
-    ++active_segment_count_;
 }
 
 std::vector<Assertion> AssertionLog::read_all() const {

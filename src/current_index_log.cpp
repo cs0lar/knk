@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <fstream>
 #include <ios>
+#include <span>
 #include <stdexcept>
 #include <vector>
 
@@ -81,6 +82,14 @@ bool read_and_validate_header(std::ifstream &in) {
 CurrentIndexLog::CurrentIndexLog(std::filesystem::path path) : path_(std::move(path)) {}
 
 void CurrentIndexLog::append(const CurrentIndexRecord &record) {
+    append_batch(std::span<const CurrentIndexRecord>(&record, 1));
+}
+
+void CurrentIndexLog::append_batch(std::span<const CurrentIndexRecord> records) {
+    if (records.empty()) {
+        return;
+    }
+
     std::filesystem::create_directories(path_.parent_path());
 
     bool file_is_new = !std::filesystem::exists(path_) || std::filesystem::file_size(path_) == 0;
@@ -94,7 +103,9 @@ void CurrentIndexLog::append(const CurrentIndexRecord &record) {
         write_header(out);
     }
 
-    write_record(out, record);
+    for (const auto &record : records) {
+        write_record(out, record);
+    }
 
     out.close();
     fsync_file(path_);

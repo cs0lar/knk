@@ -350,6 +350,86 @@ void assertion_log_rolls_over_to_a_new_segment_when_capacity_is_reached() {
     std::filesystem::remove_all(dir);
 }
 
+void assertion_log_append_batch_writes_every_record_in_order() {
+    auto dir = std::filesystem::temp_directory_path() / "kernel_append_batch_log";
+    std::filesystem::remove_all(dir);
+
+    AssertionLog log(dir, 100);
+
+    std::vector<Assertion> batch{make_assertion(1, 1), make_assertion(2, 2), make_assertion(3, 3)};
+    log.append_batch(batch);
+
+    auto all = log.read_all();
+    assert(all.size() == 3);
+    assert(all[0].id == 1 && all[1].id == 2 && all[2].id == 3);
+    assert(all[0].subject == 1 && all[1].subject == 2 && all[2].subject == 3);
+
+    // One batch is one segment file with one header, not one file per record.
+    assert(std::filesystem::file_size(segment_file(dir, 0)) == HEADER_SIZE + 3 * FRAME_SIZE);
+
+    // A batch is a plain append, so a single append continues straight after it.
+    log.append(make_assertion(4, 4));
+    assert(log.read_all().size() == 4);
+
+    std::filesystem::remove_all(dir);
+}
+
+void assertion_log_append_batch_is_a_no_op_for_an_empty_batch() {
+    auto dir = std::filesystem::temp_directory_path() / "kernel_append_batch_empty_log";
+    std::filesystem::remove_all(dir);
+
+    AssertionLog log(dir, 100);
+
+    log.append_batch({});
+
+    // No header-only segment left behind: an empty batch must not make the log look non-empty.
+    assert(!std::filesystem::exists(segment_file(dir, 0)));
+    assert(log.read_all().empty());
+    assert(log.record_count_hint() == 0);
+
+    std::filesystem::remove_all(dir);
+}
+
+void assertion_log_append_batch_rolls_segments_and_keeps_them_exactly_full() {
+    auto dir = std::filesystem::temp_directory_path() / "kernel_append_batch_rollover_log";
+    std::filesystem::remove_all(dir);
+
+    AssertionLog log(dir, 2);
+
+    // One record first, so the batch starts mid-segment and every subsequent boundary lands inside
+    // it -- the case where append_batch must split its writes across three segment files.
+    log.append(make_assertion(1, 1));
+
+    std::vector<Assertion> batch;
+    for (AssertionId id = 2; id <= 6; ++id) {
+        batch.push_back(make_assertion(id, id));
+    }
+    log.append_batch(batch);
+
+    // The invariant read_after's id arithmetic depends on: every non-active segment holds exactly
+    // max_records_per_segment complete records, mid-batch boundaries included.
+    assert(std::filesystem::file_size(segment_file(dir, 0)) == HEADER_SIZE + 2 * FRAME_SIZE);
+    assert(std::filesystem::file_size(segment_file(dir, 1)) == HEADER_SIZE + 2 * FRAME_SIZE);
+    assert(std::filesystem::file_size(segment_file(dir, 2)) == HEADER_SIZE + 2 * FRAME_SIZE);
+    assert(!std::filesystem::exists(segment_file(dir, 3)));
+
+    auto all = log.read_all();
+    assert(all.size() == 6);
+    for (size_t i = 0; i < all.size(); ++i) {
+        assert(all[i].id == static_cast<AssertionId>(i + 1));
+    }
+
+    assert(log.record_count_hint() == 6);
+
+    // read_after's whole-segment skipping still lands on the right records after a batch wrote
+    // across those boundaries.
+    auto tail = log.read_after(3);
+    assert(tail.size() == 3);
+    assert(tail[0].id == 4 && tail[1].id == 5 && tail[2].id == 6);
+
+    std::filesystem::remove_all(dir);
+}
+
 void assertion_log_read_all_spans_multiple_segments_in_order() {
     auto dir = std::filesystem::temp_directory_path() / "kernel_read_all_multi_segment_log";
     std::filesystem::remove_all(dir);
@@ -561,6 +641,9 @@ int main() {
     assertion_log_read_after_recovers_tail_checksum_mismatch_as_torn_write();
     assertion_log_record_count_hint_matches_appended_record_count();
     assertion_log_rolls_over_to_a_new_segment_when_capacity_is_reached();
+    assertion_log_append_batch_writes_every_record_in_order();
+    assertion_log_append_batch_is_a_no_op_for_an_empty_batch();
+    assertion_log_append_batch_rolls_segments_and_keeps_them_exactly_full();
     assertion_log_read_all_spans_multiple_segments_in_order();
     assertion_log_read_after_skips_whole_segments_before_the_seek_point();
     assertion_log_read_after_seeks_within_the_straddling_segment();

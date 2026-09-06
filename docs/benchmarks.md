@@ -23,9 +23,11 @@ cmake --build build-release --target commit_benchmark query_benchmark replay_ben
 ## What each one measures
 
 * **`commit_benchmark`** — sequential `commit()` throughput with distinct subjects/objects per call
-  (isolates the append/index/checkpoint path from supersession bookkeeping), and
+  (isolates the append/index/checkpoint path from supersession bookkeeping),
   `commit_superseding()` throughput against a single, repeatedly-superseded subject/predicate (adds
-  `mark_superseded`'s current-index removal on every call).
+  `mark_superseded`'s current-index removal on every call), and `commit_batch()` throughput over the
+  *same* workload as the first of those — identical records, identical index updates, issued as one
+  call instead of N, so the difference is purely the collapsed durability boundary.
 * **`query_benchmark`** — read-path throughput (`current`, `valid_at`, `known_at`, `neighbors`) over a
   kernel pre-populated with 5,000 subjects, each with a `WORKS_AT` and a `LIVES_IN` assertion (the
   latter chained subject-to-subject so `neighbors` has real edges to walk).
@@ -61,6 +63,37 @@ commit_superseding_throughput(10000)                    57.413 commits/sec
 `commit()` is flat at ~67-69 commits/sec regardless of scale (1k vs 10k) — consistent with per-commit
 `fsync` being the dominant cost, not any O(n) in-memory work. `commit_superseding()` is ~15% slower
 per call, the added cost of one extra current-index tombstone write plus `mark_superseded`.
+
+The `commit_batch()` section of this benchmark did not exist on 2026-07-20; its numbers were recorded
+separately (below) and are **not** comparable to the figures above, which came from a much
+slower-`fsync` machine.
+
+### `commit_benchmark` — `commit_batch()` vs `commit()` (2026-09-06)
+
+Recorded when `commit_batch` was added, on different hardware from the 2026-07-20 baseline above
+(this machine's `fsync` is ~300x faster, which is why `commit()` reads ~20,000/sec here rather than
+~67/sec). Only the *ratio* within this run is meaningful; it does not supersede the baseline above.
+
+```
+== commit() -- distinct subjects ==
+commit_throughput(1000)                              19829.113 commits/sec
+commit_throughput(10000)                             20070.836 commits/sec
+
+== commit_batch() -- distinct subjects, one durability boundary ==
+commit_batch_throughput(1000)                      1491916.053 commits/sec
+commit_batch_throughput(1000) whole batch                0.670 ms/batch
+commit_batch_throughput(10000)                     1344881.743 commits/sec
+commit_batch_throughput(10000) whole batch               7.436 ms/batch
+```
+
+Same records, same index writes, ~67x the throughput: 10,000 assertions take 7.4 ms as one batch
+versus ~498 ms as 10,000 commits. The gap is entirely the fsync count — a batch performs 5 fsyncs
+total (assertion log, three index logs, checkpoint) regardless of size, where N commits perform 5N.
+It follows that the ratio *grows* with `fsync` latency: on the 2026-07-20 container (~15 ms/fsync)
+the same 10,000-assertion batch would still be ~5 fsyncs, so the speedup there would be far larger
+than the 67x measured here. Per-assertion throughput is slightly lower at 10k than at 1k
+(1.34M vs 1.49M/sec), consistent with the batch's O(n) in-memory work (building the record vectors
+and `apply()`-ing each entry) becoming visible once the fixed fsync cost is amortized away.
 
 ### `query_benchmark`
 

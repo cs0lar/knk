@@ -41,6 +41,37 @@ class KnowledgeKernel {
     AssertionId commit_by_name(std::string_view subject_name, std::string_view predicate_name, const Value &object,
                                Timestamp valid_from, Timestamp valid_to, Timestamp observed_at, double confidence);
 
+    // The largest batch commit_batch accepts. A bound, not a tuning knob: it caps how much a single
+    // caller can buffer in memory (and how much a torn batch can leave half-applied) before the
+    // kernel refuses, so an unbounded caller-supplied list can never become an unbounded write. A
+    // caller with more than this splits into several batches, each its own durability boundary.
+    static constexpr size_t MAX_BATCH_SIZE = 10'000;
+
+    // Commits many new Active assertions under a single durability boundary: one fsync per underlying
+    // log for the whole batch instead of one per assertion, which is what makes restating a field
+    // across a whole population affordable. Returns the new ids in input order (entries take
+    // consecutive ids), so a caller can record per-assertion provenance afterwards without a lookup
+    // per assertion. Throws std::runtime_error if entries.size() exceeds MAX_BATCH_SIZE -- before
+    // appending anything, so an over-sized batch burns no AssertionId and writes no record. An empty
+    // batch is a no-op returning an empty vector, touching no log.
+    //
+    // Durability is prefix-shaped, not all-or-none, and the distinction is deliberate. The log's
+    // append-only format has no multi-record commit marker, and adding one would mean a new record
+    // type and a format version bump for every reader -- so rather than claim atomicity it cannot
+    // deliver, this guarantees the strongest thing the format actually supports: a crash mid-batch
+    // leaves the first k entries durable for some 0 <= k <= entries.size(), never a gap and never a
+    // reordering. Because ids are consecutive and assigned in input order, k is exactly recoverable
+    // afterwards -- the surviving prefix is a contiguous id range, so a caller resumes at input index
+    // k rather than guessing. The three index logs and the checkpoint are written after the assertion
+    // log, so a crash between them leaves the checkpoint behind the log and startup rebuilds every
+    // index from it, exactly as it already does for a torn single commit.
+    //
+    // Deliberately only plain appends: no supersession, retraction, or hypothesis entries, and no
+    // per-entry provenance. Each of those has target validation or a second durable write that would
+    // have to interleave with the batch's single boundary, which is a different (and much less
+    // obviously correct) feature than the one this solves.
+    std::vector<AssertionId> commit_batch(const std::vector<PendingAssertion> &entries);
+
     AssertionId commit_retraction(EntityId subject, PredicateId predicate, EntityId object, Timestamp valid_from,
                                   Timestamp valid_to, Timestamp observed_at, double confidence,
                                   AssertionId retracts_id);
