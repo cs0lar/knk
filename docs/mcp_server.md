@@ -46,7 +46,7 @@ one-liner, which works for testing but isn't how a real MCP client talks to it.
 
 ## Tools
 
-One tool per `KnowledgeKernel` method, 41 total — the exact set `KernelCommand` reifies (see
+One tool per `KnowledgeKernel` method, 42 total — the exact set `KernelCommand` reifies (see
 `include/kernel/kernel_command.hpp`). Argument and return types follow the method signatures directly:
 `EntityId`/`PredicateId`/`AssertionId` are JSON integers, `Timestamp` is a JSON integer (Unix seconds),
 `confidence` is a JSON number, raw bytes (`intern_document`'s `content`, `document_content`'s return
@@ -61,6 +61,7 @@ against a running server for the full JSON Schema of each.
 | `commit` | Commits a new active assertion. |
 | `commit_by_name` | Commits a new active assertion from names/literals instead of ids, interning subject, predicate, and object as needed (idempotent). |
 | `commit_batch` | Commits many new active assertions in one call under a single durability boundary. At most 10,000 entries, each with its own valid time; returns the new AssertionIds in input order. Not atomic — a crash mid-batch commits a prefix, never a gap. |
+| `commit_batch_by_name` | Commits many new active assertions in one call from names/literals instead of ids, interning each entry's subject, predicate, and object as needed (idempotent). Same batch semantics as `commit_batch`. |
 | `commit_retraction` | Commits a retraction record for an existing assertion. |
 | `commit_superseding` | Commits a replacement assertion, marking the superseded one as such. |
 | `write_snapshot` | Persists a full snapshot of current in-memory assertions. |

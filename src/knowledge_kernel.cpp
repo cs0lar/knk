@@ -288,6 +288,25 @@ std::vector<AssertionId> KnowledgeKernel::commit_batch(const std::vector<Pending
     return ids;
 }
 
+std::vector<AssertionId> KnowledgeKernel::commit_batch_by_name(const std::vector<PendingNamedAssertion> &entries) {
+    // Checked here as well as in commit_batch below, so an over-sized batch is rejected before any of
+    // its names are interned rather than after -- a rejected call must leave no trace at all.
+    if (entries.size() > MAX_BATCH_SIZE) {
+        throw std::runtime_error("batch exceeds maximum size");
+    }
+
+    std::vector<PendingAssertion> resolved;
+    resolved.reserve(entries.size());
+
+    for (const auto &entry : entries) {
+        resolved.push_back(PendingAssertion{intern_entity(entry.subject_name), intern_predicate(entry.predicate_name),
+                                            intern_value(entry.object), entry.valid_from, entry.valid_to,
+                                            entry.observed_at, entry.confidence});
+    }
+
+    return commit_batch(resolved);
+}
+
 AssertionId KnowledgeKernel::commit_by_name(std::string_view subject_name, std::string_view predicate_name,
                                             const Value &object, Timestamp valid_from, Timestamp valid_to,
                                             Timestamp observed_at, double confidence) {

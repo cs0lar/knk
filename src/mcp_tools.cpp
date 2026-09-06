@@ -122,6 +122,26 @@ std::vector<PendingAssertion> require_pending_assertions(const nlohmann::json &a
     return result;
 }
 
+std::vector<PendingNamedAssertion> require_pending_named_assertions(const nlohmann::json &args, const char *key) {
+    const auto &entries = args.at(key);
+    if (!entries.is_array()) {
+        throw std::runtime_error("entries must be an array");
+    }
+
+    std::vector<PendingNamedAssertion> result;
+    result.reserve(entries.size());
+
+    for (const auto &entry : entries) {
+        result.push_back(
+            PendingNamedAssertion{require_string(entry, "subject_name"), require_string(entry, "predicate_name"),
+                                  require_value(entry, "object"), require_timestamp(entry, "valid_from"),
+                                  require_timestamp(entry, "valid_to"), require_timestamp(entry, "observed_at"),
+                                  require_double(entry, "confidence")});
+    }
+
+    return result;
+}
+
 std::vector<std::byte> require_bytes(const nlohmann::json &args, const char *key) {
     return base64_decode(args.at(key).get<std::string>());
 }
@@ -200,6 +220,35 @@ const std::vector<ToolDefinition> &tool_definitions() {
                   {"entries"})},
              [](KnowledgeKernel &kernel, const nlohmann::json &args) -> KernelResult {
                  return kernel.execute(CommitBatchCommand{require_pending_assertions(args, "entries")});
+             }});
+
+        defs.push_back(
+            {{"commit_batch_by_name",
+              "Commits many new active assertions in one call from names/literals instead of ids, "
+              "interning each entry's subject, predicate, and object as needed (idempotent). Same "
+              "batch semantics as commit_batch -- at most " +
+                  std::to_string(KnowledgeKernel::MAX_BATCH_SIZE) +
+                  " entries, each with its own valid_from/valid_to/observed_at, ids returned in input "
+                  "order, and a crash mid-batch leaves a prefix committed. Interning happens before "
+                  "the batch, so a genuinely new name costs its own durable write; names already known "
+                  "cost nothing.",
+              object_schema(
+                  {{"entries",
+                    array_property(
+                        "Assertions to commit, in order.", KnowledgeKernel::MAX_BATCH_SIZE,
+                        object_schema({{"subject_name", string_property("Subject entity name.")},
+                                       {"predicate_name", string_property("Predicate name.")},
+                                       {"object", value_property("Object: a text value names an entity, any "
+                                                                 "other kind is a literal.")},
+                                       {"valid_from", integer_property("Valid-from timestamp.")},
+                                       {"valid_to", integer_property("Valid-to timestamp; 0 means open-ended.")},
+                                       {"observed_at", integer_property("Observed-at timestamp.")},
+                                       {"confidence", number_property("Confidence in [0,1].")}},
+                                      {"subject_name", "predicate_name", "object", "valid_from", "valid_to",
+                                       "observed_at", "confidence"}))}},
+                  {"entries"})},
+             [](KnowledgeKernel &kernel, const nlohmann::json &args) -> KernelResult {
+                 return kernel.execute(CommitBatchByNameCommand{require_pending_named_assertions(args, "entries")});
              }});
 
         defs.push_back({{"commit_retraction", "Commits a retraction record for an existing assertion.",

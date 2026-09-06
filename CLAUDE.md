@@ -106,7 +106,7 @@ its own and is rebuilt in a linear pass over `assertions_` on the fast path.
 - **Batch commits are prefix-durable, not atomic.** `commit_batch` collapses N assertions into one fsync per log; a
   crash mid-batch leaves the first *k* entries committed — never a gap or a reordering, and ids are consecutive so
   *k* is recoverable. Don't describe it as all-or-none; making it so would need a log format change (see AGENTS.md's
-  "Batch Commits").
+  "Batch Commits"). `commit_batch_by_name` interns *before* that boundary, so a new name is its own fsync.
 - **Append-only.** Corrections/removals are new records: `commit_superseding` marks the old assertion `Superseded`,
   `commit_retraction` writes a `Retraction`-status audit record and marks the target `Retracted`. Both validate their
   target ID exists before appending, so a failed call never burns an `AssertionId` or persists an invalid record.

@@ -29,6 +29,7 @@ void tool_specs_cover_every_kernel_command_with_a_well_formed_schema() {
     std::set<std::string> expected_names{"commit",
                                          "commit_by_name",
                                          "commit_batch",
+                                         "commit_batch_by_name",
                                          "commit_retraction",
                                          "commit_superseding",
                                          "write_snapshot",
@@ -221,11 +222,58 @@ void commit_batch_tool_reports_a_malformed_entry_as_a_tool_error() {
     cleanup(root);
 }
 
-void commit_batch_tool_schema_states_its_bound() {
-    // The issue this tool answers asks for the batch bound to be discoverable from the tool itself,
-    // not just enforced at call time -- so both the description and the schema must carry it.
+void commit_batch_by_name_tool_interns_names_and_commits_every_entry() {
+    auto root = test_root("commit_batch_by_name_tool_interns_names_and_commits_every_entry");
+    KnowledgeKernel kernel(StorageConfig{root});
+
+    nlohmann::json args{{"entries",
+                         {{{"subject_name", "Alice"},
+                           {"predicate_name", "works_at"},
+                           {"object", {{"kind", "text"}, {"value", "Acme"}}},
+                           {"valid_from", 1704067200},
+                           {"valid_to", 0},
+                           {"observed_at", 1719792000},
+                           {"confidence", 0.9}},
+                          {{"subject_name", "Bob"},
+                           {"predicate_name", "works_at"},
+                           {"object", {{"kind", "int64"}, {"value", 42}}},
+                           {"valid_from", 1672531200},
+                           {"valid_to", 0},
+                           {"observed_at", 1719792000},
+                           {"confidence", 0.8}}}}};
+
+    auto result = handle_tool_call(kernel, "commit_batch_by_name", args);
+    assert(!result.is_error);
+
+    auto ids = nlohmann::json::parse(result.content_text).get<std::vector<AssertionId>>();
+    assert(ids.size() == 2);
+
+    assert(kernel.entity_name(kernel.get(ids[0])->subject) == "Alice");
+    assert(kernel.entity_name(kernel.get(ids[0])->object) == "Acme");
+    assert(kernel.predicate_name(kernel.get(ids[0])->predicate) == "works_at");
+    assert(kernel.get(ids[0])->valid_from == 1704067200);
+
+    // A tagged non-text object survives the wire as a literal, same as commit_by_name's object.
+    assert(kernel.entity_value(kernel.get(ids[1])->object) == Value::of_int64(42));
+    assert(kernel.get(ids[1])->valid_from == 1672531200);
+
+    // A malformed entry is a tool error, and nothing is committed.
+    auto bad =
+        handle_tool_call(kernel, "commit_batch_by_name", nlohmann::json{{"entries", {{{"subject_name", "Dana"}}}}});
+    assert(bad.is_error);
+    assert(!kernel.find_entity("Dana").has_value());
+
+    cleanup(root);
+}
+
+void batch_tool_schemas_state_their_bound() {
+    // The issue these tools answer asks for the batch bound to be discoverable from the tool itself,
+    // not just enforced at call time -- so both the description and the schema must carry it, for
+    // every batch tool.
+    std::set<std::string> checked;
+
     for (const auto &spec : tool_specs()) {
-        if (spec.name != "commit_batch") {
+        if (spec.name != "commit_batch" && spec.name != "commit_batch_by_name") {
             continue;
         }
 
@@ -236,10 +284,10 @@ void commit_batch_tool_schema_states_its_bound() {
         assert(entries.at("maxItems") == KnowledgeKernel::MAX_BATCH_SIZE);
         assert(entries.at("items").at("type") == "object");
 
-        return;
+        checked.insert(spec.name);
     }
 
-    assert(false && "commit_batch tool not registered");
+    assert((checked == std::set<std::string>{"commit_batch", "commit_batch_by_name"}));
 }
 
 void intern_entity_tool_round_trips_a_string_argument() {
@@ -462,7 +510,8 @@ int main() {
     current_by_name_tool_resolves_the_named_subject();
     commit_batch_tool_commits_every_entry_and_returns_ids_in_input_order();
     commit_batch_tool_reports_a_malformed_entry_as_a_tool_error();
-    commit_batch_tool_schema_states_its_bound();
+    commit_batch_by_name_tool_interns_names_and_commits_every_entry();
+    batch_tool_schemas_state_their_bound();
     intern_entity_tool_round_trips_a_string_argument();
     intern_value_tool_round_trips_a_tagged_value_argument();
     intern_document_tool_round_trips_base64_bytes();

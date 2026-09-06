@@ -72,6 +72,22 @@ class KnowledgeKernel {
     // obviously correct) feature than the one this solves.
     std::vector<AssertionId> commit_batch(const std::vector<PendingAssertion> &entries);
 
+    // commit_batch's name-based overload, standing to it exactly as commit_by_name stands to commit:
+    // interns each entry's subject name, predicate name, and object Value (all idempotent, so names
+    // already in the catalog cost nothing), then commits the resolved entries through commit_batch
+    // itself. Every guarantee above carries over unchanged -- ids in input order, per-entry valid
+    // time, MAX_BATCH_SIZE, prefix-shaped durability.
+    //
+    // One thing does not carry over: interning happens *before* the batch's durability boundary, and
+    // each genuinely new name is its own catalog append and fsync. So a batch of all-new names costs
+    // one fsync per new name plus the batch's own, while the case this exists for -- restating a
+    // field for subjects the kernel already knows, under one predicate -- interns nothing new for the
+    // subjects and at most one new predicate. A crash partway through interning is harmless rather
+    // than partial: catalog entries are id/name mappings with no assertion attached yet, interning is
+    // idempotent, so a retry reuses the same ids and simply commits again. The size check runs before
+    // any interning, so a rejected batch interns nothing at all.
+    std::vector<AssertionId> commit_batch_by_name(const std::vector<PendingNamedAssertion> &entries);
+
     AssertionId commit_retraction(EntityId subject, PredicateId predicate, EntityId object, Timestamp valid_from,
                                   Timestamp valid_to, Timestamp observed_at, double confidence,
                                   AssertionId retracts_id);

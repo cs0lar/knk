@@ -140,6 +140,29 @@ void commit_batch_command_round_trips() {
     cleanup(root);
 }
 
+void commit_batch_by_name_command_round_trips() {
+    auto root = test_root("commit_batch_by_name_command_round_trips");
+    KnowledgeKernel direct(StorageConfig{root / "direct"});
+    KnowledgeKernel via(StorageConfig{root / "via"});
+
+    std::vector<PendingNamedAssertion> entries{
+        {"Alice", "works_at", Value::of_text("Acme"), JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.90},
+        {"Bob", "works_at", Value::of_text("Acme"), JAN_1_2024, OPEN_ENDED, JUL_2_2024, 0.80}};
+
+    auto d = direct.commit_batch_by_name(entries);
+    auto v = std::get<std::vector<EntityId>>(via.execute(CommitBatchByNameCommand{entries}));
+
+    assert(d == v);
+    assert(v.size() == 2);
+
+    // Twin kernels start from identical state, so the interned ids must match too, not just the
+    // assertion ids.
+    assert(direct.get(d[0])->subject == via.get(v[0])->subject);
+    assert(via.entity_name(via.get(v[1])->subject) == "Bob");
+
+    cleanup(root);
+}
+
 void commit_by_name_command_round_trips() {
     auto root = test_root("commit_by_name_command_round_trips");
     KnowledgeKernel direct(StorageConfig{root / "direct"});
@@ -739,6 +762,7 @@ void resolve_entity_command_round_trips() {
 int main() {
     commit_command_round_trips();
     commit_batch_command_round_trips();
+    commit_batch_by_name_command_round_trips();
     commit_by_name_command_round_trips();
     commit_superseding_command_round_trips();
     commit_retraction_command_round_trips();

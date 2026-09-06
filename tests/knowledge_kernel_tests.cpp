@@ -19,6 +19,7 @@
 #include "kernel/storage_config.hpp"
 #include "kernel/storage_engine.hpp"
 #include "kernel/time.hpp"
+#include "kernel/value.hpp"
 
 using namespace knk;
 
@@ -356,6 +357,138 @@ void empty_commit_batch_is_a_no_op() {
     assert(kernel.commit_batch({}).empty());
 
     // No id burned, nothing written: the next commit is still id 1 and survives a restart as such.
+    assert(kernel.commit(ALICE, WORKS_AT, ACME, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.95) == 1);
+
+    cleanup(root);
+}
+
+void commit_batch_by_name_interns_names_and_commits_in_input_order() {
+    auto root = test_root("commit_batch_by_name_interns_names_and_commits_in_input_order");
+    KnowledgeKernel kernel(StorageConfig{root});
+
+    auto ids = kernel.commit_batch_by_name({
+        {"Alice", "works_at", Value::of_text("Acme"), JAN_1_2020, OPEN_ENDED, JUL_2_2024, 0.95},
+        {"Bob", "works_at", Value::of_text("Acme"), JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.90},
+        {"Carol", "headcount", Value::of_int64(42), JUL_1_2024, OPEN_ENDED, JUL_2_2024, 0.85},
+    });
+
+    assert(ids.size() == 3);
+    assert(ids[0] == 1 && ids[1] == 2 && ids[2] == 3);
+
+    auto first = kernel.get(ids[0]);
+    assert(kernel.entity_name(first->subject) == "Alice");
+    assert(kernel.predicate_name(first->predicate) == "works_at");
+    assert(kernel.entity_name(first->object) == "Acme");
+    assert(first->valid_from == JAN_1_2020);
+
+    // Repeated names inside one batch intern once, exactly as repeated commit_by_name calls would:
+    // Alice and Bob share the "Acme" object and the "works_at" predicate.
+    auto second = kernel.get(ids[1]);
+    assert(second->object == first->object);
+    assert(second->predicate == first->predicate);
+    assert(second->valid_from == JAN_1_2023);
+
+    // A non-text object stays a literal rather than becoming a named entity.
+    auto third = kernel.get(ids[2]);
+    assert(kernel.entity_value(third->object) == Value::of_int64(42));
+    assert(!kernel.entity_name(third->object).has_value());
+
+    assert(kernel.current_by_name("Alice").size() == 1);
+    assert(kernel.current_by_name("Bob").size() == 1);
+
+    cleanup(root);
+}
+
+void commit_batch_by_name_reuses_existing_catalog_ids() {
+    auto root = test_root("commit_batch_by_name_reuses_existing_catalog_ids");
+    KnowledgeKernel kernel(StorageConfig{root});
+
+    // The motivating case: the subjects and the predicate already exist, so the batch interns
+    // nothing new and every id it resolves is one the catalog already held.
+    EntityId alice = kernel.intern_entity("Alice");
+    EntityId bob = kernel.intern_entity("Bob");
+    PredicateId works_at = kernel.intern_predicate("works_at");
+    EntityId acme = kernel.intern_value(Value::of_text("Acme"));
+
+    auto ids = kernel.commit_batch_by_name({
+        {"Alice", "works_at", Value::of_text("Acme"), JAN_1_2020, OPEN_ENDED, JUL_2_2024, 0.95},
+        {"Bob", "works_at", Value::of_text("Acme"), JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.90},
+    });
+
+    assert(kernel.get(ids[0])->subject == alice);
+    assert(kernel.get(ids[0])->predicate == works_at);
+    assert(kernel.get(ids[0])->object == acme);
+    assert(kernel.get(ids[1])->subject == bob);
+
+    // Interning is idempotent, so a second identical batch still resolves to the same entity ids --
+    // only the assertion ids differ.
+    auto again = kernel.commit_batch_by_name({
+        {"Alice", "works_at", Value::of_text("Acme"), JAN_1_2020, OPEN_ENDED, JUL_3_2024, 0.95},
+    });
+
+    assert(again[0] != ids[0]);
+    assert(kernel.get(again[0])->subject == alice);
+    assert(kernel.get(again[0])->object == acme);
+
+    cleanup(root);
+}
+
+void commit_batch_by_name_is_preserved_across_kernel_restarts() {
+    auto root = test_root("commit_batch_by_name_is_preserved_across_kernel_restarts");
+
+    std::vector<AssertionId> ids;
+    {
+        KnowledgeKernel kernel(StorageConfig{root});
+        ids = kernel.commit_batch_by_name({
+            {"Alice", "works_at", Value::of_text("Acme"), JAN_1_2020, OPEN_ENDED, JUL_2_2024, 0.95},
+            {"Bob", "works_at", Value::of_text("Acme"), JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.90},
+        });
+    }
+
+    KnowledgeKernel recovered(StorageConfig{root});
+
+    // Both halves have to survive: the catalog entries the batch interned, and the assertions the
+    // batch committed against them.
+    assert(recovered.find_entity("Alice").has_value());
+    assert(recovered.find_predicate("works_at").has_value());
+    assert(recovered.current_by_name("Alice").size() == 1);
+    assert(recovered.current_by_name("Bob").size() == 1);
+    assert(recovered.get(ids[1])->valid_from == JAN_1_2023);
+
+    cleanup(root);
+}
+
+void commit_batch_by_name_rejects_an_oversized_batch_without_interning_anything() {
+    auto root = test_root("commit_batch_by_name_rejects_an_oversized_batch_without_interning_anything");
+    KnowledgeKernel kernel(StorageConfig{root});
+
+    std::vector<PendingNamedAssertion> too_many(
+        KnowledgeKernel::MAX_BATCH_SIZE + 1,
+        PendingNamedAssertion{"Alice", "works_at", Value::of_text("Acme"), JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.95});
+
+    bool exception_thrown = false;
+    try {
+        kernel.commit_batch_by_name(too_many);
+    } catch (const std::runtime_error &) {
+        exception_thrown = true;
+    }
+
+    assert(exception_thrown);
+
+    // The size check runs before any interning, so a rejected batch leaves no catalog entries behind
+    // either -- not just no assertions.
+    assert(!kernel.find_entity("Alice").has_value());
+    assert(!kernel.find_predicate("works_at").has_value());
+    assert(kernel.commit(ALICE, WORKS_AT, ACME, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.95) == 1);
+
+    cleanup(root);
+}
+
+void empty_commit_batch_by_name_is_a_no_op() {
+    auto root = test_root("empty_commit_batch_by_name_is_a_no_op");
+    KnowledgeKernel kernel(StorageConfig{root});
+
+    assert(kernel.commit_batch_by_name({}).empty());
     assert(kernel.commit(ALICE, WORKS_AT, ACME, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.95) == 1);
 
     cleanup(root);
@@ -2275,6 +2408,11 @@ int main() {
     commit_batch_is_preserved_across_kernel_restarts();
     commit_batch_rejects_an_oversized_batch_without_writing_or_burning_ids();
     empty_commit_batch_is_a_no_op();
+    commit_batch_by_name_interns_names_and_commits_in_input_order();
+    commit_batch_by_name_reuses_existing_catalog_ids();
+    commit_batch_by_name_is_preserved_across_kernel_restarts();
+    commit_batch_by_name_rejects_an_oversized_batch_without_interning_anything();
+    empty_commit_batch_by_name_is_a_no_op();
     commit_batch_spanning_a_segment_boundary_is_read_back_whole();
     superseded_assertion_is_excluded_from_current_queries();
     failed_supersession_does_not_persist_or_burn_id();

@@ -50,6 +50,10 @@ struct CommitBatchCommand {
     std::vector<PendingAssertion> entries;
 };
 
+struct CommitBatchByNameCommand {
+    std::vector<PendingNamedAssertion> entries;
+};
+
 struct CommitRetractionCommand {
     EntityId subject;
     PredicateId predicate;
@@ -243,16 +247,15 @@ struct ResolveEntityCommand {
     EntityId id;
 };
 
-using KernelCommand =
-    std::variant<CommitCommand, CommitByNameCommand, CommitBatchCommand, CommitRetractionCommand,
-                 CommitSupersedingCommand, WriteSnapshotCommand, InternEntityCommand, InternValueCommand,
-                 InternPredicateCommand, InternDocumentCommand, RecordProvenanceCommand, CommitHypothesisCommand,
-                 MergeEntitiesCommand, ArchiveSegmentsBeforeCommand, GetCommand, AssertionsForSubjectCommand,
-                 CurrentCommand, CurrentByNameCommand, CurrentByObjectCommand, CurrentByPredicateCommand,
-                 ValidAtCommand, KnownAtCommand, ValidAtKnownAtCommand, ValidTimeTimelineCommand,
-                 ObservedTimeTimelineCommand, CommitHistoryCommand, ChangesSinceCommand, ExplainCommand,
-                 FindConflictsCommand, FindEntityCommand, FindValueCommand, FindPredicateCommand, EntityNameCommand,
-                 EntityValueCommand, PredicateNameCommand, DocumentContentCommand, ProvenanceForCommand,
-                 HypothesesForCommand, NeighborsCommand, CoOccurringPredicatesCommand, ResolveEntityCommand>;
+using KernelCommand = std::variant<
+    CommitCommand, CommitByNameCommand, CommitBatchCommand, CommitBatchByNameCommand, CommitRetractionCommand,
+    CommitSupersedingCommand, WriteSnapshotCommand, InternEntityCommand, InternValueCommand, InternPredicateCommand,
+    InternDocumentCommand, RecordProvenanceCommand, CommitHypothesisCommand, MergeEntitiesCommand,
+    ArchiveSegmentsBeforeCommand, GetCommand, AssertionsForSubjectCommand, CurrentCommand, CurrentByNameCommand,
+    CurrentByObjectCommand, CurrentByPredicateCommand, ValidAtCommand, KnownAtCommand, ValidAtKnownAtCommand,
+    ValidTimeTimelineCommand, ObservedTimeTimelineCommand, CommitHistoryCommand, ChangesSinceCommand, ExplainCommand,
+    FindConflictsCommand, FindEntityCommand, FindValueCommand, FindPredicateCommand, EntityNameCommand,
+    EntityValueCommand, PredicateNameCommand, DocumentContentCommand, ProvenanceForCommand, HypothesesForCommand,
+    NeighborsCommand, CoOccurringPredicatesCommand, ResolveEntityCommand>;
 
 } // namespace knk

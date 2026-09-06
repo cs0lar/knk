@@ -66,6 +66,15 @@ the PR that makes it — see `CONTRIBUTING.md`.
   and as the `commit_batch` MCP tool. Plain appends only: corrections still go through
   `commit_superseding`/`commit_retraction`.
 
+- `commit_batch_by_name` is `commit_batch`'s name-based overload, standing to it as `commit_by_name`
+  does to `commit`: it interns each entry's subject name, predicate name, and object `Value` (all
+  idempotent), then commits the resolved entries through `commit_batch`, so every batch guarantee
+  carries over. Note that interning happens *before* the batch's durability boundary, so a genuinely
+  new name costs its own durable write — the intended case, restating a field for subjects already in
+  the catalog, interns nothing new for the subjects and at most one new predicate. An over-sized batch
+  is rejected before any interning, leaving no catalog entries behind either. Available as a
+  `CommitBatchByNameCommand` and as the `commit_batch_by_name` MCP tool.
+
 - `changes_since` gained optional `limit` and `newest_first` parameters, and `assertions_for_subject`/
   `commit_history` gained an optional `limit` — all default to prior (unlimited, oldest-first)
   behavior. Lets a caller answer "what's the single latest change" via
