@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "kernel/knowledge_kernel.hpp"
+#include "kernel/provenance_log.hpp"
 #include "kernel/storage_config.hpp"
 #include "kernel/time.hpp"
 
@@ -92,6 +93,48 @@ void commit_batch_throughput(size_t count) {
     std::filesystem::remove_all(root);
 }
 
+// Attaching provenance to a batch, the two ways: one record_provenance call per assertion versus one
+// record_provenance_batch for all of them. Measured against the same committed batch, so the only
+// difference is how many fsyncs the provenance log takes. This is the one place per-assertion fsync
+// cost survived on the batch path, which is why it is worth measuring next to the batch itself.
+void provenance_for_a_batch(size_t count) {
+    auto root = fresh_root("provenance_for_a_batch_" + std::to_string(count));
+    KnowledgeKernel kernel(StorageConfig{root});
+
+    std::vector<PendingAssertion> entries;
+    entries.reserve(count);
+    for (size_t i = 0; i < count; ++i) {
+        entries.push_back(PendingAssertion{static_cast<EntityId>(i + 1), WORKS_AT, static_cast<EntityId>(i + 1'000'000),
+                                           0, OPEN_ENDED, 0, 1.0});
+    }
+
+    auto ids = kernel.commit_batch(entries);
+    EntityId source = kernel.intern_entity("migration_job");
+
+    Timer per_record_timer;
+    for (AssertionId id : ids) {
+        kernel.record_provenance(id, source, 0, "restated_from_legacy_field");
+    }
+    double per_record_elapsed = per_record_timer.elapsed_seconds();
+
+    // Re-recording the same assertions: provenance is last-writer-wins per assertion, so this writes
+    // the same number of records and leaves the same final state, making the two directly comparable.
+    std::vector<ProvenanceRecord> records;
+    records.reserve(count);
+    for (AssertionId id : ids) {
+        records.push_back(ProvenanceRecord{id, source, 0, "restated_from_legacy_field"});
+    }
+
+    Timer batch_timer;
+    kernel.record_provenance_batch(records);
+    double batch_elapsed = batch_timer.elapsed_seconds();
+
+    report("record_provenance x" + std::to_string(count), per_record_elapsed * 1000.0, "ms");
+    report("record_provenance_batch(" + std::to_string(count) + ")", batch_elapsed * 1000.0, "ms");
+
+    std::filesystem::remove_all(root);
+}
+
 } // namespace
 
 int main() {
@@ -108,6 +151,10 @@ int main() {
     section("commit_batch() -- distinct subjects, one durability boundary");
     commit_batch_throughput(1'000);
     commit_batch_throughput(10'000);
+
+    section("provenance for a committed batch -- per record vs. batched");
+    provenance_for_a_batch(1'000);
+    provenance_for_a_batch(10'000);
 
     return 0;
 }

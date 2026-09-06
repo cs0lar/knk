@@ -46,7 +46,7 @@ one-liner, which works for testing but isn't how a real MCP client talks to it.
 
 ## Tools
 
-One tool per `KnowledgeKernel` method, 42 total — the exact set `KernelCommand` reifies (see
+One tool per `KnowledgeKernel` method, 43 total — the exact set `KernelCommand` reifies (see
 `include/kernel/kernel_command.hpp`). Argument and return types follow the method signatures directly:
 `EntityId`/`PredicateId`/`AssertionId` are JSON integers, `Timestamp` is a JSON integer (Unix seconds),
 `confidence` is a JSON number, raw bytes (`intern_document`'s `content`, `document_content`'s return
@@ -70,6 +70,7 @@ against a running server for the full JSON Schema of each.
 | `intern_predicate` | Interns a named predicate, returning its PredicateId (idempotent). |
 | `intern_document` | Interns raw document bytes, returning an EntityId. |
 | `record_provenance` | Records which source produced a given assertion, and by what method. |
+| `record_provenance_batch` | Records provenance for many assertions in one call under a single durability boundary. At most 10,000 records; every target is validated first, so one unknown id rejects the whole call without writing anything. |
 | `commit_hypothesis` | Commits a labeled, machine-suggested (Hypothesis-status) assertion. |
 | `merge_entities` | Merges absorb into keep: a one-way, append-only redirect. |
 | `archive_segments_before` | Archives (compacts, does not delete) log segments entirely before an AssertionId. |

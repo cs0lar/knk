@@ -38,6 +38,7 @@ void tool_specs_cover_every_kernel_command_with_a_well_formed_schema() {
                                          "intern_predicate",
                                          "intern_document",
                                          "record_provenance",
+                                         "record_provenance_batch",
                                          "commit_hypothesis",
                                          "merge_entities",
                                          "archive_segments_before",
@@ -266,6 +267,43 @@ void commit_batch_by_name_tool_interns_names_and_commits_every_entry() {
     cleanup(root);
 }
 
+void record_provenance_batch_tool_records_every_entry_and_rejects_an_unknown_target() {
+    auto root = test_root("record_provenance_batch_tool_records_every_entry_and_rejects_an_unknown_target");
+    KnowledgeKernel kernel(StorageConfig{root});
+
+    EntityId source = kernel.intern_entity("migration_job");
+    auto ids = kernel.commit_batch(
+        {{1, 10, 100, 0, OPEN_ENDED, 1719792000, 0.9}, {2, 10, 100, 0, OPEN_ENDED, 1719792000, 0.9}});
+
+    nlohmann::json args{{"records",
+                         {{{"assertion_id", ids[0]},
+                           {"source", source},
+                           {"recorded_at", 1719792000},
+                           {"method", "restated_from_legacy_field"}},
+                          {{"assertion_id", ids[1]},
+                           {"source", source},
+                           {"recorded_at", 1719792000},
+                           {"method", "restated_from_legacy_field"}}}}};
+
+    auto result = handle_tool_call(kernel, "record_provenance_batch", args);
+    assert(!result.is_error);
+    assert(kernel.provenance_for(ids[0])->source == source);
+    assert(kernel.provenance_for(ids[1])->method == "restated_from_legacy_field");
+
+    // An unknown target comes back as a tool error, not a throw, and writes nothing -- including the
+    // valid record listed alongside it.
+    auto bad = handle_tool_call(
+        kernel, "record_provenance_batch",
+        nlohmann::json{
+            {"records",
+             {{{"assertion_id", ids[0]}, {"source", source}, {"recorded_at", 1720450412}, {"method", "later"}},
+              {{"assertion_id", 999}, {"source", source}, {"recorded_at", 1720450412}, {"method", "later"}}}}});
+    assert(bad.is_error);
+    assert(kernel.provenance_for(ids[0])->method == "restated_from_legacy_field");
+
+    cleanup(root);
+}
+
 void batch_tool_schemas_state_their_bound() {
     // The issue these tools answer asks for the batch bound to be discoverable from the tool itself,
     // not just enforced at call time -- so both the description and the schema must carry it, for
@@ -273,13 +311,17 @@ void batch_tool_schemas_state_their_bound() {
     std::set<std::string> checked;
 
     for (const auto &spec : tool_specs()) {
-        if (spec.name != "commit_batch" && spec.name != "commit_batch_by_name") {
+        if (spec.name != "commit_batch" && spec.name != "commit_batch_by_name" &&
+            spec.name != "record_provenance_batch") {
             continue;
         }
 
         assert(spec.description.find(std::to_string(KnowledgeKernel::MAX_BATCH_SIZE)) != std::string::npos);
 
-        const auto &entries = spec.input_schema.at("properties").at("entries");
+        // record_provenance_batch names its list "records" rather than "entries"; every other
+        // property of the bound is identical.
+        const char *list_property = spec.name == "record_provenance_batch" ? "records" : "entries";
+        const auto &entries = spec.input_schema.at("properties").at(list_property);
         assert(entries.at("type") == "array");
         assert(entries.at("maxItems") == KnowledgeKernel::MAX_BATCH_SIZE);
         assert(entries.at("items").at("type") == "object");
@@ -287,7 +329,7 @@ void batch_tool_schemas_state_their_bound() {
         checked.insert(spec.name);
     }
 
-    assert((checked == std::set<std::string>{"commit_batch", "commit_batch_by_name"}));
+    assert((checked == std::set<std::string>{"commit_batch", "commit_batch_by_name", "record_provenance_batch"}));
 }
 
 void intern_entity_tool_round_trips_a_string_argument() {
@@ -511,6 +553,7 @@ int main() {
     commit_batch_tool_commits_every_entry_and_returns_ids_in_input_order();
     commit_batch_tool_reports_a_malformed_entry_as_a_tool_error();
     commit_batch_by_name_tool_interns_names_and_commits_every_entry();
+    record_provenance_batch_tool_records_every_entry_and_rejects_an_unknown_target();
     batch_tool_schemas_state_their_bound();
     intern_entity_tool_round_trips_a_string_argument();
     intern_value_tool_round_trips_a_tagged_value_argument();

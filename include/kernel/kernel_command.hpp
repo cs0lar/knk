@@ -7,6 +7,7 @@
 
 #include "kernel/assertion.hpp"
 #include "kernel/ids.hpp"
+#include "kernel/provenance_log.hpp"
 #include "kernel/time.hpp"
 #include "kernel/value.hpp"
 
@@ -99,6 +100,10 @@ struct RecordProvenanceCommand {
     EntityId source;
     Timestamp recorded_at;
     std::string method;
+};
+
+struct RecordProvenanceBatchCommand {
+    std::vector<ProvenanceRecord> records;
 };
 
 struct CommitHypothesisCommand {
@@ -250,12 +255,12 @@ struct ResolveEntityCommand {
 using KernelCommand = std::variant<
     CommitCommand, CommitByNameCommand, CommitBatchCommand, CommitBatchByNameCommand, CommitRetractionCommand,
     CommitSupersedingCommand, WriteSnapshotCommand, InternEntityCommand, InternValueCommand, InternPredicateCommand,
-    InternDocumentCommand, RecordProvenanceCommand, CommitHypothesisCommand, MergeEntitiesCommand,
-    ArchiveSegmentsBeforeCommand, GetCommand, AssertionsForSubjectCommand, CurrentCommand, CurrentByNameCommand,
-    CurrentByObjectCommand, CurrentByPredicateCommand, ValidAtCommand, KnownAtCommand, ValidAtKnownAtCommand,
-    ValidTimeTimelineCommand, ObservedTimeTimelineCommand, CommitHistoryCommand, ChangesSinceCommand, ExplainCommand,
-    FindConflictsCommand, FindEntityCommand, FindValueCommand, FindPredicateCommand, EntityNameCommand,
-    EntityValueCommand, PredicateNameCommand, DocumentContentCommand, ProvenanceForCommand, HypothesesForCommand,
-    NeighborsCommand, CoOccurringPredicatesCommand, ResolveEntityCommand>;
+    InternDocumentCommand, RecordProvenanceCommand, RecordProvenanceBatchCommand, CommitHypothesisCommand,
+    MergeEntitiesCommand, ArchiveSegmentsBeforeCommand, GetCommand, AssertionsForSubjectCommand, CurrentCommand,
+    CurrentByNameCommand, CurrentByObjectCommand, CurrentByPredicateCommand, ValidAtCommand, KnownAtCommand,
+    ValidAtKnownAtCommand, ValidTimeTimelineCommand, ObservedTimeTimelineCommand, CommitHistoryCommand,
+    ChangesSinceCommand, ExplainCommand, FindConflictsCommand, FindEntityCommand, FindValueCommand,
+    FindPredicateCommand, EntityNameCommand, EntityValueCommand, PredicateNameCommand, DocumentContentCommand,
+    ProvenanceForCommand, HypothesesForCommand, NeighborsCommand, CoOccurringPredicatesCommand, ResolveEntityCommand>;
 
 } // namespace knk

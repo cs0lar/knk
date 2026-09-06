@@ -117,6 +117,10 @@ void StorageEngine::append_provenance_entry(AssertionId assertion_id, EntityId s
     provenance_log_.append(ProvenanceRecord{assertion_id, source, recorded_at, method});
 }
 
+void StorageEngine::append_provenance_entries(std::span<const ProvenanceRecord> records) {
+    provenance_log_.append_batch(records);
+}
+
 std::vector<ProvenanceRecord> StorageEngine::load_provenance() const { return provenance_log_.read_all(); }
 
 void StorageEngine::append_entity_merge_entry(EntityId absorbed, EntityId surviving, Timestamp merged_at) {

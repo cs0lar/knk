@@ -99,6 +99,8 @@ class StorageEngine {
     void append_provenance_entry(AssertionId assertion_id, EntityId source, Timestamp recorded_at,
                                  const std::string &method);
 
+    void append_provenance_entries(std::span<const ProvenanceRecord> records);
+
     std::vector<ProvenanceRecord> load_provenance() const;
 
     const StorageConfig &config() const;

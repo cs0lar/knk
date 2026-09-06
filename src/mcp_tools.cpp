@@ -142,6 +142,23 @@ std::vector<PendingNamedAssertion> require_pending_named_assertions(const nlohma
     return result;
 }
 
+std::vector<ProvenanceRecord> require_provenance_records(const nlohmann::json &args, const char *key) {
+    const auto &records = args.at(key);
+    if (!records.is_array()) {
+        throw std::runtime_error("records must be an array");
+    }
+
+    std::vector<ProvenanceRecord> result;
+    result.reserve(records.size());
+
+    for (const auto &record : records) {
+        result.push_back(ProvenanceRecord{require_id(record, "assertion_id"), require_id(record, "source"),
+                                          require_timestamp(record, "recorded_at"), require_string(record, "method")});
+    }
+
+    return result;
+}
+
 std::vector<std::byte> require_bytes(const nlohmann::json &args, const char *key) {
     return base64_decode(args.at(key).get<std::string>());
 }
@@ -330,6 +347,28 @@ const std::vector<ToolDefinition> &tool_definitions() {
                                 require_id(args, "assertion_id"), require_id(args, "source"),
                                 require_timestamp(args, "recorded_at"), require_string(args, "method")});
                         }});
+
+        defs.push_back(
+            {{"record_provenance_batch",
+              "Records provenance for many assertions in one call, under a single durability boundary "
+              "(one fsync for the whole list, not per record) -- the companion to commit_batch, whose "
+              "returned ids come back in input order for exactly this. At most " +
+                  std::to_string(KnowledgeKernel::MAX_BATCH_SIZE) +
+                  " records. Every target assertion is validated first, so one unknown id rejects the "
+                  "whole call without writing anything.",
+              object_schema(
+                  {{"records",
+                    array_property(
+                        "Provenance records to write, in order.", KnowledgeKernel::MAX_BATCH_SIZE,
+                        object_schema({{"assertion_id", integer_property("Target AssertionId.")},
+                                       {"source", integer_property("Source EntityId.")},
+                                       {"recorded_at", integer_property("Timestamp the provenance was recorded.")},
+                                       {"method", string_property("Free-text method description.")}},
+                                      {"assertion_id", "source", "recorded_at", "method"}))}},
+                  {"records"})},
+             [](KnowledgeKernel &kernel, const nlohmann::json &args) -> KernelResult {
+                 return kernel.execute(RecordProvenanceBatchCommand{require_provenance_records(args, "records")});
+             }});
 
         defs.push_back({{"commit_hypothesis", "Commits a labeled, machine-suggested (Hypothesis-status) assertion.",
                          object_schema({{"subject", integer_property("Subject EntityId.")},

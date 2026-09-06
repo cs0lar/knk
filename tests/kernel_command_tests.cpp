@@ -306,6 +306,24 @@ void record_provenance_command_round_trips() {
     cleanup(root);
 }
 
+void record_provenance_batch_command_round_trips() {
+    auto root = test_root("record_provenance_batch_command_round_trips");
+    KnowledgeKernel kernel(StorageConfig{root});
+
+    auto source = kernel.intern_entity("pipeline");
+    auto ids = kernel.commit_batch({{ALICE, WORKS_AT, ACME, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.90},
+                                    {BETA, WORKS_AT, ACME, JAN_1_2024, OPEN_ENDED, JUL_2_2024, 0.80}});
+
+    auto r = kernel.execute(RecordProvenanceBatchCommand{{ProvenanceRecord{ids[0], source, JUL_2_2024, "manual"},
+                                                          ProvenanceRecord{ids[1], source, JUL_2_2024, "manual"}}});
+    assert(std::holds_alternative<std::monostate>(r));
+
+    assert(kernel.provenance_for(ids[0])->source == source);
+    assert(kernel.provenance_for(ids[1])->method == "manual");
+
+    cleanup(root);
+}
+
 void commit_hypothesis_command_round_trips() {
     auto root = test_root("commit_hypothesis_command_round_trips");
     KnowledgeKernel direct(StorageConfig{root / "direct"});
@@ -772,6 +790,7 @@ int main() {
     intern_predicate_command_round_trips();
     intern_document_command_round_trips();
     record_provenance_command_round_trips();
+    record_provenance_batch_command_round_trips();
     commit_hypothesis_command_round_trips();
     merge_entities_command_round_trips();
     archive_segments_before_command_round_trips();

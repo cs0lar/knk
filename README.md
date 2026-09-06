@@ -31,7 +31,8 @@ never loses the history of how its knowledge changed.
 - **Batch commits** — `commit_batch` appends many assertions under a single durability boundary
   (one fsync per log for the whole batch, not per assertion), each entry keeping its own valid
   time, returning the new ids in input order; `commit_batch_by_name` is the same from names and
-  literals instead of ids.
+  literals instead of ids, and `record_provenance_batch` attaches provenance to a whole batch under
+  one boundary too.
 - **Entity/predicate catalog** — idempotent name and typed-literal interning
   (`intern_entity`/`intern_value`/`intern_predicate`), plus a payload store for large content
   (documents) addressed by id.

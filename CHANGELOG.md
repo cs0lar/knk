@@ -75,6 +75,18 @@ the PR that makes it — see `CONTRIBUTING.md`.
   is rejected before any interning, leaving no catalog entries behind either. Available as a
   `CommitBatchByNameCommand` and as the `commit_batch_by_name` MCP tool.
 
+- `record_provenance_batch` records provenance for many assertions under a single durability
+  boundary — one fsync on `provenance.log` for the whole list, not one per record. This was the last
+  place per-assertion fsync cost survived on the batch path: attaching provenance one record at a
+  time cost 8.5x the `commit_batch` it described (82 ms vs ~7-10 ms for 10,000 assertions); batched
+  it is ~53x faster (see `docs/benchmarks.md`). `commit_batch` returns its ids in input order for
+  exactly this, so a caller can zip them with sources without a lookup per assertion. Every target is
+  validated before anything is appended, so one unknown id rejects the whole call without writing a
+  record. Deliberately a separate call rather than per-entry provenance inside `commit_batch`, which
+  could leave provenance referencing assertions a torn batch never committed. Bounded by
+  `MAX_BATCH_SIZE`; available as a `RecordProvenanceBatchCommand` and the `record_provenance_batch`
+  MCP tool.
+
 - `changes_since` gained optional `limit` and `newest_first` parameters, and `assertions_for_subject`/
   `commit_history` gained an optional `limit` — all default to prior (unlimited, oldest-first)
   behavior. Lets a caller answer "what's the single latest change" via

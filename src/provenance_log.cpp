@@ -3,6 +3,7 @@
 #include <cstring>
 #include <fstream>
 #include <ios>
+#include <span>
 #include <stdexcept>
 #include <vector>
 
@@ -98,6 +99,14 @@ bool read_and_validate_header(std::ifstream &in) {
 ProvenanceLog::ProvenanceLog(std::filesystem::path path) : path_(std::move(path)) {}
 
 void ProvenanceLog::append(const ProvenanceRecord &record) {
+    append_batch(std::span<const ProvenanceRecord>(&record, 1));
+}
+
+void ProvenanceLog::append_batch(std::span<const ProvenanceRecord> records) {
+    if (records.empty()) {
+        return;
+    }
+
     std::filesystem::create_directories(path_.parent_path());
 
     bool file_is_new = !std::filesystem::exists(path_) || std::filesystem::file_size(path_) == 0;
@@ -111,7 +120,9 @@ void ProvenanceLog::append(const ProvenanceRecord &record) {
         write_header(out);
     }
 
-    write_record(out, record);
+    for (const auto &record : records) {
+        write_record(out, record);
+    }
 
     out.close();
     fsync_file(path_);
