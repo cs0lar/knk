@@ -1389,6 +1389,36 @@ would retroactively change the meaning of assertions people already made under a
 which is the one thing the append-only guarantee exists to prevent. There is no predicate merge and
 this section does not introduce one.
 
+**Batch reads.** `entity_name_batch`, `entity_value_batch`, `predicate_name_batch`, and
+`provenance_for_batch` (added 2026-09-12, for #55) are the read-side counterparts. Reads like
+`current_by_predicate` hand back records whose fields are ids, so a caller rendering them through the MCP
+server paid one round trip per id. Measured at the time with a tight stdio client against the release
+`mcp_server`, 2,001 `entity_name` calls took 27.7 ms against 0.7 ms for one `entity_name_batch` (~38x);
+#55 measured ~108 µs per round trip inside its own caller's stack, so the gap there is wider.
+
+*What is the invariant?* Each slot answers exactly what the single resolver answers for that id, in input
+order, one slot per id. Each batch is literally the single resolver called once per id, so the two cannot
+drift: `null` for an id never interned, for `entity_name` on a non-text literal, and for an assertion with
+no recorded provenance; duplicates answered per occurrence; merge redirects not followed, as the singles
+don't.
+
+*Why?* Unknown ids are `null` slots rather than a rejected call — the opposite of
+`record_provenance_batch`, deliberately. That write validates its targets because an unknown one would
+persist a dangling record; a read has nothing to protect, and the single resolvers answer an unknown id
+with `nullopt` rather than throwing, so rejecting would make a batch mean something different from N
+singles.
+
+*Failure modes.* Only the bound: more than `MAX_BATCH_SIZE` ids throws before anything is read. Reads
+touch no durable state.
+
+*How is it tested?* `tests/knowledge_kernel_tests.cpp` checks every slot against the single call across
+text, literal, never-interned, zero, absorbed, and duplicate ids, plus the bound (including exactly at
+it) and empty lists; `tests/kernel_command_tests.cpp`, `tests/json_codec_tests.cpp` (null slots kept in
+place), and `tests/mcp_tools_tests.cpp` cover the command, wire encoding, and tools.
+
+*Not* filtering or search: these resolve ids a caller already holds. Matching inside names would be a
+text index, the wrong layer for this kernel.
+
 -- -
 
 ## Query Semantics
@@ -1910,9 +1940,10 @@ Implementation:
  surface (`InternDocumentCommand::content` / `DocumentContentCommand`'s return) — JSON has no native
  binary type.
 * `include/kernel/mcp_tools.hpp` / `src/mcp_tools.cpp` — the pure, I/O-free half of the server: one
- MCP tool per `KernelCommand` variant (43 total, after `commit_by_name` and `current_by_name` — see
- Phase 5's "Current implementation status" — added the 39th and 40th, and `commit_batch`/
- `commit_batch_by_name`/`record_provenance_batch` the 41st through 43rd),
+ MCP tool per `KernelCommand` variant (47 total, after `commit_by_name` and `current_by_name` — see
+ Phase 5's "Current implementation status" — added the 39th and 40th, `commit_batch`/
+ `commit_batch_by_name`/`record_provenance_batch` the 41st through 43rd, and the four batch reads
+ the 44th through 47th),
  named after the mirrored
  `KnowledgeKernel` method
  (`"commit"`, `"current_by_object"`, ...), each with a JSON Schema `inputSchema` built from its

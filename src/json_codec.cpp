@@ -267,6 +267,26 @@ nlohmann::json kernel_result_to_json(const KernelResult &result) {
                     array.push_back(id);
                 }
                 return array;
+            } else if constexpr (std::is_same_v<T, std::vector<std::optional<std::string>>>) {
+                // One slot per id, in input order: a slot the single resolver would answer null for is
+                // null here too, so a caller can zip ids with answers without matching them up.
+                nlohmann::json array = nlohmann::json::array();
+                for (const auto &slot : value) {
+                    array.push_back(slot.has_value() ? nlohmann::json(*slot) : nlohmann::json(nullptr));
+                }
+                return array;
+            } else if constexpr (std::is_same_v<T, std::vector<std::optional<Value>>>) {
+                nlohmann::json array = nlohmann::json::array();
+                for (const auto &slot : value) {
+                    array.push_back(slot.has_value() ? value_to_json(*slot) : nlohmann::json(nullptr));
+                }
+                return array;
+            } else if constexpr (std::is_same_v<T, std::vector<std::optional<ProvenanceRecord>>>) {
+                nlohmann::json array = nlohmann::json::array();
+                for (const auto &slot : value) {
+                    array.push_back(slot.has_value() ? provenance_record_to_json(*slot) : nlohmann::json(nullptr));
+                }
+                return array;
             } else {
                 static_assert(!sizeof(T *), "unhandled KernelResult alternative");
             }

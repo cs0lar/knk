@@ -900,6 +900,72 @@ std::optional<ProvenanceRecord> KnowledgeKernel::provenance_for(AssertionId asse
     return it->second;
 }
 
+// Each batch read below is the matching single resolver called once per id, in input order, so every
+// slot answers exactly what the single call would -- see the header comment on why an unknown id is a
+// nullopt slot here rather than a rejected call.
+
+std::vector<std::optional<std::string>> KnowledgeKernel::entity_name_batch(const std::vector<EntityId> &ids) const {
+    if (ids.size() > MAX_BATCH_SIZE) {
+        throw std::runtime_error("batch exceeds maximum size");
+    }
+
+    std::vector<std::optional<std::string>> names;
+    names.reserve(ids.size());
+
+    for (EntityId id : ids) {
+        names.push_back(entity_name(id));
+    }
+
+    return names;
+}
+
+std::vector<std::optional<Value>> KnowledgeKernel::entity_value_batch(const std::vector<EntityId> &ids) const {
+    if (ids.size() > MAX_BATCH_SIZE) {
+        throw std::runtime_error("batch exceeds maximum size");
+    }
+
+    std::vector<std::optional<Value>> values;
+    values.reserve(ids.size());
+
+    for (EntityId id : ids) {
+        values.push_back(entity_value(id));
+    }
+
+    return values;
+}
+
+std::vector<std::optional<std::string>>
+KnowledgeKernel::predicate_name_batch(const std::vector<PredicateId> &ids) const {
+    if (ids.size() > MAX_BATCH_SIZE) {
+        throw std::runtime_error("batch exceeds maximum size");
+    }
+
+    std::vector<std::optional<std::string>> names;
+    names.reserve(ids.size());
+
+    for (PredicateId id : ids) {
+        names.push_back(predicate_name(id));
+    }
+
+    return names;
+}
+
+std::vector<std::optional<ProvenanceRecord>>
+KnowledgeKernel::provenance_for_batch(const std::vector<AssertionId> &ids) const {
+    if (ids.size() > MAX_BATCH_SIZE) {
+        throw std::runtime_error("batch exceeds maximum size");
+    }
+
+    std::vector<std::optional<ProvenanceRecord>> records;
+    records.reserve(ids.size());
+
+    for (AssertionId id : ids) {
+        records.push_back(provenance_for(id));
+    }
+
+    return records;
+}
+
 void KnowledgeKernel::merge_entities(EntityId keep, EntityId absorb, Timestamp merged_at) {
     // Durable-before-visible: append to the log first, then apply to the in-memory Catalog, exactly
     // like commit's append-then-apply ordering.

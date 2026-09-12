@@ -46,7 +46,7 @@ std::string base64_encode(const std::vector<std::byte> &bytes);
 std::vector<std::byte> base64_decode(const std::string &encoded);
 
 // Serializes whichever alternative kernel.execute(command) actually returned. The caller does not
-// need to know in advance which of KernelResult's 11 alternatives is active -- std::visit dispatches
+// need to know in advance which of KernelResult's alternatives is active -- std::visit dispatches
 // on the live one, same as KnowledgeKernel::execute itself dispatches on the live KernelCommand
 // alternative.
 nlohmann::json kernel_result_to_json(const KernelResult &result);

@@ -87,6 +87,17 @@ the PR that makes it — see `CONTRIBUTING.md`.
   `MAX_BATCH_SIZE`; available as a `RecordProvenanceBatchCommand` and the `record_provenance_batch`
   MCP tool.
 
+- Batch reads (#55): `entity_name_batch`, `entity_value_batch`, `predicate_name_batch`, and
+  `provenance_for_batch` resolve many ids in one call, the read-side counterparts of the write
+  batches. Reads like `current_by_predicate` return records whose fields are ids, so a caller
+  rendering them used to pay one MCP round trip per id; these make that one call. Answers come back
+  in input order, one slot per id, each slot exactly what the single resolver answers for that id —
+  including `null` for an id that was never interned, for `entity_name` on a non-text literal, and
+  for an assertion with no recorded provenance. Unknown ids are therefore `null` slots rather than a
+  rejected call, matching the single resolvers, which never throw for one. Bounded by
+  `MAX_BATCH_SIZE`, checked before anything is read. Available as `*BatchCommand`s and as MCP tools;
+  the single-id resolvers are unchanged.
+
 - `changes_since` gained optional `limit` and `newest_first` parameters, and `assertions_for_subject`/
   `commit_history` gained an optional `limit` — all default to prior (unlimited, oldest-first)
   behavior. Lets a caller answer "what's the single latest change" via

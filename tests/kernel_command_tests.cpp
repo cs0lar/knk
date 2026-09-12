@@ -698,6 +698,72 @@ void document_content_command_round_trips() {
     cleanup(root);
 }
 
+void entity_name_batch_command_round_trips() {
+    auto root = test_root("entity_name_batch_command_round_trips");
+    KnowledgeKernel kernel(StorageConfig{root});
+    auto s = seed_query_kernel(kernel);
+
+    std::vector<EntityId> ids{s.alice, s.acme, 999999};
+    auto d = kernel.entity_name_batch(ids);
+    auto v = std::get<std::vector<std::optional<std::string>>>(kernel.execute(EntityNameBatchCommand{ids}));
+    assert(d == v);
+    assert(v.size() == 3);
+    assert(v[0] == std::optional<std::string>("Alice"));
+    assert(!v[2].has_value());
+
+    cleanup(root);
+}
+
+void entity_value_batch_command_round_trips() {
+    auto root = test_root("entity_value_batch_command_round_trips");
+    KnowledgeKernel kernel(StorageConfig{root});
+    auto s = seed_query_kernel(kernel);
+
+    std::vector<EntityId> ids{s.alice, 999999};
+    auto d = kernel.entity_value_batch(ids);
+    auto v = std::get<std::vector<std::optional<Value>>>(kernel.execute(EntityValueBatchCommand{ids}));
+    assert(d == v);
+    assert(v[0] == std::optional<Value>(Value::of_text("Alice")));
+    assert(!v[1].has_value());
+
+    cleanup(root);
+}
+
+void predicate_name_batch_command_round_trips() {
+    auto root = test_root("predicate_name_batch_command_round_trips");
+    KnowledgeKernel kernel(StorageConfig{root});
+    auto s = seed_query_kernel(kernel);
+
+    // predicate_name_batch shares entity_name_batch's result alternative, exactly as the single
+    // predicate_name shares entity_name's -- see kernel_result.hpp.
+    std::vector<PredicateId> ids{s.works_at, s.lives_in, 999999};
+    auto d = kernel.predicate_name_batch(ids);
+    auto v = std::get<std::vector<std::optional<std::string>>>(kernel.execute(PredicateNameBatchCommand{ids}));
+    assert(d == v);
+    assert(v[1] == std::optional<std::string>("lives_in"));
+    assert(!v[2].has_value());
+
+    cleanup(root);
+}
+
+void provenance_for_batch_command_round_trips() {
+    auto root = test_root("provenance_for_batch_command_round_trips");
+    KnowledgeKernel kernel(StorageConfig{root});
+    auto s = seed_query_kernel(kernel);
+
+    // seed_query_kernel records provenance for a1 only.
+    std::vector<AssertionId> ids{s.a1, s.a2};
+    auto d = kernel.provenance_for_batch(ids);
+    auto v = std::get<std::vector<std::optional<ProvenanceRecord>>>(kernel.execute(ProvenanceForBatchCommand{ids}));
+    assert(d.size() == v.size() && v.size() == 2);
+    assert(d[0].has_value() && v[0].has_value());
+    assert(d[0]->source == v[0]->source);
+    assert(d[0]->method == v[0]->method);
+    assert(!d[1].has_value() && !v[1].has_value());
+
+    cleanup(root);
+}
+
 void provenance_for_command_round_trips() {
     auto root = test_root("provenance_for_command_round_trips");
     KnowledgeKernel kernel(StorageConfig{root});
@@ -817,6 +883,10 @@ int main() {
     predicate_name_command_round_trips();
     document_content_command_round_trips();
     provenance_for_command_round_trips();
+    entity_name_batch_command_round_trips();
+    entity_value_batch_command_round_trips();
+    predicate_name_batch_command_round_trips();
+    provenance_for_batch_command_round_trips();
     hypotheses_for_command_round_trips();
     neighbors_command_round_trips();
     co_occurring_predicates_command_round_trips();

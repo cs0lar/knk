@@ -110,6 +110,14 @@ KernelResult KnowledgeKernel::execute(const KernelCommand &command) {
                 return document_content(cmd.id);
             } else if constexpr (std::is_same_v<T, ProvenanceForCommand>) {
                 return provenance_for(cmd.assertion_id);
+            } else if constexpr (std::is_same_v<T, EntityNameBatchCommand>) {
+                return entity_name_batch(cmd.ids);
+            } else if constexpr (std::is_same_v<T, EntityValueBatchCommand>) {
+                return entity_value_batch(cmd.ids);
+            } else if constexpr (std::is_same_v<T, PredicateNameBatchCommand>) {
+                return predicate_name_batch(cmd.ids);
+            } else if constexpr (std::is_same_v<T, ProvenanceForBatchCommand>) {
+                return provenance_for_batch(cmd.assertion_ids);
             } else if constexpr (std::is_same_v<T, HypothesesForCommand>) {
                 return hypotheses_for(cmd.subject);
             } else if constexpr (std::is_same_v<T, NeighborsCommand>) {

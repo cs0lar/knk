@@ -30,6 +30,10 @@ namespace knk {
 // (vector<PredicateId>), and commit_batch (vector<AssertionId>) for the same reason the scalar ids
 // above collapse: EntityId/PredicateId/AssertionId are the same uint64_t alias, so those return
 // types are identical and share one alternative.
+//
+// The batch reads each return a vector of their single resolver's optional, and collapse the same way
+// the singles do: entity_name_batch and predicate_name_batch share vector<optional<string>>, exactly as
+// entity_name and predicate_name share optional<string>.
 using KernelResult = std::variant<std::monostate,                               // write_snapshot, record_provenance
                                   AssertionId,                                  // commit family; intern_* (ids)
                                   std::optional<Assertion>,                     // get
@@ -40,6 +44,9 @@ using KernelResult = std::variant<std::monostate,                               
                                   std::optional<Value>,                         // entity_value
                                   std::optional<std::vector<std::byte>>,        // document_content
                                   std::optional<ProvenanceRecord>,              // provenance_for
-                                  std::vector<EntityId>>; // neighbors, co_occurring_predicates, commit_batch
+                                  std::vector<EntityId>, // neighbors, co_occurring_predicates, commit_batch
+                                  std::vector<std::optional<std::string>>, // entity_name_batch/predicate_name_batch
+                                  std::vector<std::optional<Value>>,       // entity_value_batch
+                                  std::vector<std::optional<ProvenanceRecord>>>; // provenance_for_batch
 
 } // namespace knk

@@ -46,7 +46,7 @@ one-liner, which works for testing but isn't how a real MCP client talks to it.
 
 ## Tools
 
-One tool per `KnowledgeKernel` method, 43 total — the exact set `KernelCommand` reifies (see
+One tool per `KnowledgeKernel` method, 47 total — the exact set `KernelCommand` reifies (see
 `include/kernel/kernel_command.hpp`). Argument and return types follow the method signatures directly:
 `EntityId`/`PredicateId`/`AssertionId` are JSON integers, `Timestamp` is a JSON integer (Unix seconds),
 `confidence` is a JSON number, raw bytes (`intern_document`'s `content`, `document_content`'s return
@@ -102,6 +102,10 @@ against a running server for the full JSON Schema of each.
 | `predicate_name` | Resolves a previously interned predicate's name. |
 | `document_content` | Fetches previously interned document bytes. |
 | `provenance_for` | Resolves recorded provenance for an assertion. |
+| `entity_name_batch` | Resolves many entities' names in one call (`ids`). Answers in input order, one slot per id, each exactly what `entity_name` answers — `null` included. At most 10,000 ids. |
+| `entity_value_batch` | Resolves many entities' literal values in one call (`ids`), with the same one-slot-per-id contract as `entity_name_batch`. |
+| `predicate_name_batch` | Resolves many predicates' names in one call (`ids`), with the same one-slot-per-id contract. |
+| `provenance_for_batch` | Resolves recorded provenance for many assertions in one call (`assertion_ids`), with the same one-slot-per-id contract — `null` where nothing was recorded. |
 | `hypotheses_for` | Returns open (Hypothesis-status) predictions for a subject. |
 | `neighbors` | Bounded breadth-first traversal of current-edge neighbors, both directions. |
 | `co_occurring_predicates` | Currently active predicates for a subject. |

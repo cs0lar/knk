@@ -33,6 +33,9 @@ never loses the history of how its knowledge changed.
   time, returning the new ids in input order; `commit_batch_by_name` is the same from names and
   literals instead of ids, and `record_provenance_batch` attaches provenance to a whole batch under
   one boundary too.
+- **Batch reads** — `entity_name_batch`, `entity_value_batch`, `predicate_name_batch`, and
+  `provenance_for_batch` resolve many ids in one call, answering in input order with a `null` slot
+  wherever the single resolver would answer `null`.
 - **Entity/predicate catalog** — idempotent name and typed-literal interning
   (`intern_entity`/`intern_value`/`intern_predicate`), plus a payload store for large content
   (documents) addressed by id.
