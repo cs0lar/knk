@@ -159,6 +159,25 @@ std::vector<ProvenanceRecord> require_provenance_records(const nlohmann::json &a
     return result;
 }
 
+// The id list of a batch read. Like the write batches' list parsers, a malformed element anywhere in
+// the list throws before kernel.execute is reached, so handle_tool_call reports it as is_error rather
+// than answering a partial list.
+std::vector<uint64_t> require_ids(const nlohmann::json &args, const char *key) {
+    const auto &ids = args.at(key);
+    if (!ids.is_array()) {
+        throw std::runtime_error(std::string(key) + " must be an array");
+    }
+
+    std::vector<uint64_t> result;
+    result.reserve(ids.size());
+
+    for (const auto &id : ids) {
+        result.push_back(id.get<uint64_t>());
+    }
+
+    return result;
+}
+
 std::vector<std::byte> require_bytes(const nlohmann::json &args, const char *key) {
     return base64_decode(args.at(key).get<std::string>());
 }
@@ -601,6 +620,54 @@ const std::vector<ToolDefinition> &tool_definitions() {
                          object_schema({{"assertion_id", integer_property("AssertionId.")}}, {"assertion_id"})},
                         [](KnowledgeKernel &kernel, const nlohmann::json &args) -> KernelResult {
                             return kernel.execute(ProvenanceForCommand{require_id(args, "assertion_id")});
+                        }});
+
+        // Batch reads (#55): one tool per single-id resolver above, same answer per slot. The shared
+        // wording keeps the four descriptions from drifting apart on the contract a caller zips against.
+        const std::string batch_read_contract =
+            " Answers in input order, one slot per id, each slot exactly what the single call answers for "
+            "that id -- null included, e.g. for an id that was never interned. At most " +
+            std::to_string(KnowledgeKernel::MAX_BATCH_SIZE) +
+            " ids; a larger list is rejected before anything is read.";
+
+        defs.push_back(
+            {{"entity_name_batch",
+              "Resolves many previously interned entities' names in one call." + batch_read_contract,
+              object_schema({{"ids", array_property("EntityIds to resolve, in order.", KnowledgeKernel::MAX_BATCH_SIZE,
+                                                    integer_property("EntityId."))}},
+                            {"ids"})},
+             [](KnowledgeKernel &kernel, const nlohmann::json &args) -> KernelResult {
+                 return kernel.execute(EntityNameBatchCommand{require_ids(args, "ids")});
+             }});
+
+        defs.push_back(
+            {{"entity_value_batch",
+              "Resolves many previously interned entities' literal values in one call." + batch_read_contract,
+              object_schema({{"ids", array_property("EntityIds to resolve, in order.", KnowledgeKernel::MAX_BATCH_SIZE,
+                                                    integer_property("EntityId."))}},
+                            {"ids"})},
+             [](KnowledgeKernel &kernel, const nlohmann::json &args) -> KernelResult {
+                 return kernel.execute(EntityValueBatchCommand{require_ids(args, "ids")});
+             }});
+
+        defs.push_back({{"predicate_name_batch",
+                         "Resolves many previously interned predicates' names in one call." + batch_read_contract,
+                         object_schema({{"ids", array_property("PredicateIds to resolve, in order.",
+                                                               KnowledgeKernel::MAX_BATCH_SIZE,
+                                                               integer_property("PredicateId."))}},
+                                       {"ids"})},
+                        [](KnowledgeKernel &kernel, const nlohmann::json &args) -> KernelResult {
+                            return kernel.execute(PredicateNameBatchCommand{require_ids(args, "ids")});
+                        }});
+
+        defs.push_back({{"provenance_for_batch",
+                         "Resolves recorded provenance for many assertions in one call." + batch_read_contract,
+                         object_schema({{"assertion_ids", array_property("AssertionIds to resolve, in order.",
+                                                                         KnowledgeKernel::MAX_BATCH_SIZE,
+                                                                         integer_property("AssertionId."))}},
+                                       {"assertion_ids"})},
+                        [](KnowledgeKernel &kernel, const nlohmann::json &args) -> KernelResult {
+                            return kernel.execute(ProvenanceForBatchCommand{require_ids(args, "assertion_ids")});
                         }});
 
         defs.push_back({{"hypotheses_for", "Returns open (Hypothesis-status) predictions for a subject.",

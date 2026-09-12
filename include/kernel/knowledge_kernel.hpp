@@ -269,6 +269,33 @@ class KnowledgeKernel {
 
     std::optional<ProvenanceRecord> provenance_for(AssertionId assertion_id) const;
 
+    // Batch reads (#55): the read-side counterparts of the write batches, one per single-id resolver.
+    // Reads like current_by_predicate hand back records whose subject/object/predicate are ids, so a
+    // caller rendering them resolves ids one at a time -- one boundary round trip per id when calling
+    // through the MCP server. These turn that into one call.
+    //
+    // Answers come back in input order, one slot per id, and each slot is exactly what the single call
+    // answers for that id -- each batch is literally the single resolver called once per id, so the two
+    // cannot drift. That includes nullopt wherever the single call answers nullopt: an id that was never
+    // interned (or never had provenance recorded), and entity_name for an entity whose Value is not
+    // Text. Duplicate ids are answered once per occurrence, and merge redirects are not followed, both
+    // exactly as the single calls behave.
+    //
+    // Deliberately nullopt per slot rather than rejecting the call on an unknown id, which is what
+    // record_provenance_batch does: that write validates its targets because an unknown one would
+    // persist a dangling record, but a read has nothing to protect, and the single resolvers already
+    // answer an unknown id with nullopt rather than throwing. Rejecting here would make a batch mean
+    // something different from N singles.
+    //
+    // Bounded by MAX_BATCH_SIZE, checked before anything is read; an empty list answers an empty list.
+    std::vector<std::optional<std::string>> entity_name_batch(const std::vector<EntityId> &ids) const;
+
+    std::vector<std::optional<Value>> entity_value_batch(const std::vector<EntityId> &ids) const;
+
+    std::vector<std::optional<std::string>> predicate_name_batch(const std::vector<PredicateId> &ids) const;
+
+    std::vector<std::optional<ProvenanceRecord>> provenance_for_batch(const std::vector<AssertionId> &ids) const;
+
     // Merges absorb into keep: a one-way, append-only redirect durably recorded in EntityMergeLog,
     // then applied to the in-memory Catalog. Assertions are never rewritten by a merge -- assertions_
     // keeps whatever EntityId was originally committed, and resolve_entity (plus every query-path

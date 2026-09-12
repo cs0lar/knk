@@ -1461,6 +1461,107 @@ void predicate_name_resolves_a_previously_interned_predicate() {
     cleanup(root);
 }
 
+void batch_reads_answer_exactly_what_the_single_resolvers_answer() {
+    auto root = test_root("batch_reads_answer_exactly_what_the_single_resolvers_answer");
+    KnowledgeKernel kernel(StorageConfig{root});
+
+    constexpr EntityId NEVER_INTERNED = 12345;
+    constexpr EntityId ABSORBED = 999;
+
+    EntityId alice = kernel.intern_entity("Alice");
+    EntityId number = kernel.intern_value(Value::of_int64(42));
+    PredicateId works_at = kernel.intern_predicate("works_at");
+    EntityId source = kernel.intern_entity("ingestion_pipeline");
+
+    AssertionId sourced = kernel.commit(alice, works_at, number, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.95);
+    AssertionId unsourced = kernel.commit(alice, works_at, source, JAN_1_2023, OPEN_ENDED, JUL_2_2024, 0.90);
+    kernel.record_provenance(sourced, source, JUL_2_2024, "manual_entry");
+
+    // An absorbed id is in the list so the batch is checked against whatever the single resolver does
+    // with one -- the contract is slot-for-slot equality with N singles, not a separate merge rule.
+    kernel.merge_entities(alice, ABSORBED, JUL_3_2024);
+
+    // Every kind of slot the single calls distinguish: a text name, a non-text literal (no name but a
+    // value), an id that was never interned, zero, an absorbed id, and a duplicate.
+    std::vector<EntityId> entity_ids{alice, number, NEVER_INTERNED, 0, ABSORBED, alice};
+
+    auto names = kernel.entity_name_batch(entity_ids);
+    auto values = kernel.entity_value_batch(entity_ids);
+    assert(names.size() == entity_ids.size());
+    assert(values.size() == entity_ids.size());
+
+    for (size_t i = 0; i < entity_ids.size(); ++i) {
+        assert(names[i] == kernel.entity_name(entity_ids[i]));
+        assert(values[i] == kernel.entity_value(entity_ids[i]));
+    }
+
+    assert(names[0] == std::optional<std::string>("Alice"));
+    assert(!names[1].has_value());                                  // a literal has no name...
+    assert(values[1] == std::optional<Value>(Value::of_int64(42))); // ...but does have a value
+    assert(!names[2].has_value() && !values[2].has_value());
+    assert(names[5] == names[0]); // duplicates answered once per occurrence
+
+    std::vector<PredicateId> predicate_ids{works_at, 777, works_at};
+    auto predicate_names = kernel.predicate_name_batch(predicate_ids);
+    assert(predicate_names.size() == predicate_ids.size());
+    for (size_t i = 0; i < predicate_ids.size(); ++i) {
+        assert(predicate_names[i] == kernel.predicate_name(predicate_ids[i]));
+    }
+    assert(predicate_names[0] == std::optional<std::string>("works_at"));
+    assert(!predicate_names[1].has_value());
+
+    // Recorded, committed-but-unsourced, never committed, and zero.
+    std::vector<AssertionId> assertion_ids{sourced, unsourced, 5000, 0};
+    auto provenance = kernel.provenance_for_batch(assertion_ids);
+    assert(provenance.size() == assertion_ids.size());
+    for (size_t i = 0; i < assertion_ids.size(); ++i) {
+        auto single = kernel.provenance_for(assertion_ids[i]);
+        assert(provenance[i].has_value() == single.has_value());
+        if (single.has_value()) {
+            assert(provenance[i]->assertion_id == single->assertion_id);
+            assert(provenance[i]->source == single->source);
+            assert(provenance[i]->recorded_at == single->recorded_at);
+            assert(provenance[i]->method == single->method);
+        }
+    }
+    assert(provenance[0]->method == "manual_entry");
+    assert(!provenance[1].has_value());
+
+    cleanup(root);
+}
+
+void batch_reads_reject_an_oversized_batch_and_answer_an_empty_one() {
+    auto root = test_root("batch_reads_reject_an_oversized_batch_and_answer_an_empty_one");
+    KnowledgeKernel kernel(StorageConfig{root});
+
+    std::vector<uint64_t> too_many(KnowledgeKernel::MAX_BATCH_SIZE + 1, 1);
+
+    auto throws = [](auto call) {
+        try {
+            call();
+        } catch (const std::runtime_error &) {
+            return true;
+        }
+        return false;
+    };
+
+    assert(throws([&] { kernel.entity_name_batch(too_many); }));
+    assert(throws([&] { kernel.entity_value_batch(too_many); }));
+    assert(throws([&] { kernel.predicate_name_batch(too_many); }));
+    assert(throws([&] { kernel.provenance_for_batch(too_many); }));
+
+    // Exactly at the bound is accepted, so the check is "more than", not "at least".
+    std::vector<uint64_t> at_bound(KnowledgeKernel::MAX_BATCH_SIZE, 1);
+    assert(kernel.entity_name_batch(at_bound).size() == KnowledgeKernel::MAX_BATCH_SIZE);
+
+    assert(kernel.entity_name_batch({}).empty());
+    assert(kernel.entity_value_batch({}).empty());
+    assert(kernel.predicate_name_batch({}).empty());
+    assert(kernel.provenance_for_batch({}).empty());
+
+    cleanup(root);
+}
+
 void catalog_is_preserved_across_kernel_restarts() {
     auto root = test_root("catalog_is_preserved_across_kernel_restarts");
 
@@ -2600,6 +2701,8 @@ int main() {
     find_entity_returns_nullopt_for_an_unknown_name();
     entity_name_resolves_a_previously_interned_name();
     predicate_name_resolves_a_previously_interned_predicate();
+    batch_reads_answer_exactly_what_the_single_resolvers_answer();
+    batch_reads_reject_an_oversized_batch_and_answer_an_empty_one();
     catalog_is_preserved_across_kernel_restarts();
     corrupt_entity_catalog_is_fatal_on_startup();
     corrupt_predicate_catalog_is_fatal_on_startup();

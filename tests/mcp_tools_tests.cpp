@@ -1,8 +1,10 @@
 #include <cassert>
 #include <filesystem>
 #include <iostream>
+#include <map>
 #include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "kernel/knowledge_kernel.hpp"
@@ -65,6 +67,10 @@ void tool_specs_cover_every_kernel_command_with_a_well_formed_schema() {
                                          "predicate_name",
                                          "document_content",
                                          "provenance_for",
+                                         "entity_name_batch",
+                                         "entity_value_batch",
+                                         "predicate_name_batch",
+                                         "provenance_for_batch",
                                          "hypotheses_for",
                                          "neighbors",
                                          "co_occurring_predicates",
@@ -304,32 +310,90 @@ void record_provenance_batch_tool_records_every_entry_and_rejects_an_unknown_tar
     cleanup(root);
 }
 
+void batch_read_tools_answer_in_input_order_with_null_slots() {
+    auto root = test_root("batch_read_tools_answer_in_input_order_with_null_slots");
+    KnowledgeKernel kernel(StorageConfig{root});
+
+    EntityId alice = kernel.intern_entity("Alice");
+    EntityId number = kernel.intern_value(Value::of_int64(42));
+    PredicateId works_at = kernel.intern_predicate("works_at");
+    AssertionId id = kernel.commit(alice, works_at, number, 0, OPEN_ENDED, 1719792000, 0.9);
+    kernel.record_provenance(id, alice, 1719792000, "manual_entry");
+
+    auto call = [&](const std::string &tool, const nlohmann::json &args) {
+        auto result = handle_tool_call(kernel, tool, args);
+        assert(!result.is_error);
+        return nlohmann::json::parse(result.content_text);
+    };
+
+    // A literal has no name, and 999 was never interned: both come back as null in their own slot,
+    // not dropped, so the answer lines up with the ids it was asked for.
+    auto names = call("entity_name_batch", nlohmann::json{{"ids", {alice, number, 999}}});
+    assert(names.size() == 3);
+    assert(names[0] == "Alice");
+    assert(names[1].is_null());
+    assert(names[2].is_null());
+
+    auto values = call("entity_value_batch", nlohmann::json{{"ids", {number, 999}}});
+    assert(values.size() == 2);
+    assert(values[0].at("kind") == "int64");
+    assert(values[0].at("value") == 42);
+    assert(values[1].is_null());
+
+    auto predicate_names = call("predicate_name_batch", nlohmann::json{{"ids", {works_at, 999}}});
+    assert(predicate_names.size() == 2);
+    assert(predicate_names[0] == "works_at");
+    assert(predicate_names[1].is_null());
+
+    auto provenance = call("provenance_for_batch", nlohmann::json{{"assertion_ids", {id, 999}}});
+    assert(provenance.size() == 2);
+    assert(provenance[0].at("method") == "manual_entry");
+    assert(provenance[1].is_null());
+
+    // A non-array list, or a non-integer element in one, is a tool error rather than a partial answer.
+    assert(handle_tool_call(kernel, "entity_name_batch", nlohmann::json{{"ids", 7}}).is_error);
+    assert(handle_tool_call(kernel, "provenance_for_batch", nlohmann::json{{"assertion_ids", {id, "x"}}}).is_error);
+
+    cleanup(root);
+}
+
 void batch_tool_schemas_state_their_bound() {
     // The issue these tools answer asks for the batch bound to be discoverable from the tool itself,
     // not just enforced at call time -- so both the description and the schema must carry it, for
     // every batch tool.
     std::set<std::string> checked;
 
+    // Each batch tool's list parameter, and the type of one element: the write batches take objects,
+    // the batch reads take bare ids. Every other property of the bound is identical across all of them.
+    const std::map<std::string, std::pair<std::string, std::string>> batch_tools{
+        {"commit_batch", {"entries", "object"}},
+        {"commit_batch_by_name", {"entries", "object"}},
+        {"record_provenance_batch", {"records", "object"}},
+        {"entity_name_batch", {"ids", "integer"}},
+        {"entity_value_batch", {"ids", "integer"}},
+        {"predicate_name_batch", {"ids", "integer"}},
+        {"provenance_for_batch", {"assertion_ids", "integer"}},
+    };
+
     for (const auto &spec : tool_specs()) {
-        if (spec.name != "commit_batch" && spec.name != "commit_batch_by_name" &&
-            spec.name != "record_provenance_batch") {
+        auto batch = batch_tools.find(spec.name);
+        if (batch == batch_tools.end()) {
             continue;
         }
 
+        const auto &[list_property, item_type] = batch->second;
+
         assert(spec.description.find(std::to_string(KnowledgeKernel::MAX_BATCH_SIZE)) != std::string::npos);
 
-        // record_provenance_batch names its list "records" rather than "entries"; every other
-        // property of the bound is identical.
-        const char *list_property = spec.name == "record_provenance_batch" ? "records" : "entries";
-        const auto &entries = spec.input_schema.at("properties").at(list_property);
-        assert(entries.at("type") == "array");
-        assert(entries.at("maxItems") == KnowledgeKernel::MAX_BATCH_SIZE);
-        assert(entries.at("items").at("type") == "object");
+        const auto &list = spec.input_schema.at("properties").at(list_property);
+        assert(list.at("type") == "array");
+        assert(list.at("maxItems") == KnowledgeKernel::MAX_BATCH_SIZE);
+        assert(list.at("items").at("type") == item_type);
 
         checked.insert(spec.name);
     }
 
-    assert((checked == std::set<std::string>{"commit_batch", "commit_batch_by_name", "record_provenance_batch"}));
+    assert(checked.size() == batch_tools.size());
 }
 
 void intern_entity_tool_round_trips_a_string_argument() {
@@ -554,6 +618,7 @@ int main() {
     commit_batch_tool_reports_a_malformed_entry_as_a_tool_error();
     commit_batch_by_name_tool_interns_names_and_commits_every_entry();
     record_provenance_batch_tool_records_every_entry_and_rejects_an_unknown_target();
+    batch_read_tools_answer_in_input_order_with_null_slots();
     batch_tool_schemas_state_their_bound();
     intern_entity_tool_round_trips_a_string_argument();
     intern_value_tool_round_trips_a_tagged_value_argument();

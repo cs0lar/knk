@@ -130,6 +130,28 @@ void kernel_result_to_json_covers_every_alternative() {
     assert(ids_result.is_array());
     assert(ids_result.size() == 3);
     assert(ids_result[1] == 2);
+
+    // Batch reads: one slot per id in input order, with a null slot kept in place rather than dropped,
+    // so a caller can zip ids with answers.
+    auto names_result =
+        kernel_result_to_json(KernelResult{std::vector<std::optional<std::string>>{"Alice", std::nullopt, "Acme"}});
+    assert(names_result.is_array());
+    assert(names_result.size() == 3);
+    assert(names_result[0] == "Alice");
+    assert(names_result[1].is_null());
+    assert(names_result[2] == "Acme");
+
+    auto values_result =
+        kernel_result_to_json(KernelResult{std::vector<std::optional<Value>>{std::nullopt, Value::of_int64(42)}});
+    assert(values_result.size() == 2);
+    assert(values_result[0].is_null());
+    assert(values_result[1].at("kind") == "int64");
+
+    auto provenance_batch_result =
+        kernel_result_to_json(KernelResult{std::vector<std::optional<ProvenanceRecord>>{record, std::nullopt}});
+    assert(provenance_batch_result.size() == 2);
+    assert(provenance_batch_result[0].at("method") == "manual");
+    assert(provenance_batch_result[1].is_null());
 }
 
 } // namespace
