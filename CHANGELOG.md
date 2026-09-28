@@ -87,6 +87,18 @@ the PR that makes it — see `CONTRIBUTING.md`.
   `MAX_BATCH_SIZE`; available as a `RecordProvenanceBatchCommand` and the `record_provenance_batch`
   MCP tool.
 
+- **Phase 10 — query IR and executor parity:** `KnowledgeKernel::query(const Query&)` answers a shaped
+  read — optional subject/predicate/object, a valid-time point, an inclusive observed-time window,
+  `open_ended_only`, an explicit status set, deterministic ordering, and `limit`/`offset` paging —
+  executed by a new `QueryEngine` that holds the only place query semantics compose. Every existing
+  query method is expressible as a `Query` returning identical rows, asserted by parity tests rather
+  than assumed. Deliberately a reified, typed IR rather than SQL text: no parser, no dialect, and a
+  JSON Schema an MCP client can discover. Results are bounded (`limit == 0` means the 10,000-row
+  ceiling, larger limits are capped, and `QueryResult::truncated` reports that more matched) and the IR
+  is versioned, so an unknown `ir_version` is rejected rather than reinterpreted. Available as
+  `QueryCommand` and the `query` MCP tool. The existing query methods are unchanged and remain the
+  documented way to ask the simple questions.
+
 - Batch reads (#55): `entity_name_batch`, `entity_value_batch`, `predicate_name_batch`, and
   `provenance_for_batch` resolve many ids in one call, the read-side counterparts of the write
   batches. Reads like `current_by_predicate` return records whose fields are ids, so a caller

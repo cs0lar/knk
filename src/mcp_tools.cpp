@@ -178,6 +178,89 @@ std::vector<uint64_t> require_ids(const nlohmann::json &args, const char *key) {
     return result;
 }
 
+nlohmann::ordered_json enum_property(const std::string &description, std::vector<std::string> values) {
+    return nlohmann::ordered_json{{"type", "string"}, {"description", description}, {"enum", std::move(values)}};
+}
+
+std::optional<uint64_t> optional_id(const nlohmann::json &args, const char *key) {
+    if (!args.contains(key) || args.at(key).is_null()) {
+        return std::nullopt;
+    }
+    return args.at(key).get<uint64_t>();
+}
+
+std::optional<Timestamp> optional_timestamp(const nlohmann::json &args, const char *key) {
+    if (!args.contains(key) || args.at(key).is_null()) {
+        return std::nullopt;
+    }
+    return args.at(key).get<Timestamp>();
+}
+
+// An omitted or null "statuses" means every status, which is Query's own default -- not "Active only".
+std::vector<AssertionStatus> optional_statuses(const nlohmann::json &args, const char *key) {
+    std::vector<AssertionStatus> statuses;
+
+    if (!args.contains(key) || args.at(key).is_null()) {
+        return statuses;
+    }
+
+    const auto &values = args.at(key);
+    if (!values.is_array()) {
+        throw std::runtime_error("statuses must be an array");
+    }
+
+    for (const auto &value : values) {
+        statuses.push_back(status_from_json(value)); // throws on an unknown name rather than ignoring it
+    }
+
+    return statuses;
+}
+
+QueryOrder optional_order(const nlohmann::json &args, const char *key) {
+    if (!args.contains(key) || args.at(key).is_null()) {
+        return QueryOrder::AssertionId;
+    }
+
+    auto name = args.at(key).get<std::string>();
+    if (name == "assertion_id") {
+        return QueryOrder::AssertionId;
+    }
+    if (name == "valid_from") {
+        return QueryOrder::ValidFrom;
+    }
+    if (name == "observed_at") {
+        return QueryOrder::ObservedAt;
+    }
+
+    throw std::runtime_error("unknown order: " + name);
+}
+
+// Builds the IR from tool arguments. Every field is optional: an empty query means "everything, up to
+// the result ceiling", which is well defined and bounded. force_scan is deliberately absent -- it is a
+// differential-testing knob, not part of the callable surface.
+Query require_query(const nlohmann::json &args) {
+    Query query;
+
+    if (args.contains("ir_version") && !args.at("ir_version").is_null()) {
+        query.ir_version = args.at("ir_version").get<uint32_t>();
+    }
+
+    query.subject = optional_id(args, "subject");
+    query.predicate = optional_id(args, "predicate");
+    query.object = optional_id(args, "object");
+    query.valid_at = optional_timestamp(args, "valid_at");
+    query.observed_from = optional_timestamp(args, "observed_from");
+    query.observed_to = optional_timestamp(args, "observed_to");
+    query.open_ended_only = optional_bool(args, "open_ended_only", false);
+    query.statuses = optional_statuses(args, "statuses");
+    query.order = optional_order(args, "order");
+    query.newest_first = optional_bool(args, "newest_first", false);
+    query.limit = optional_size(args, "limit", 0);
+    query.offset = optional_size(args, "offset", 0);
+
+    return query;
+}
+
 std::vector<std::byte> require_bytes(const nlohmann::json &args, const char *key) {
     return base64_decode(args.at(key).get<std::string>());
 }
@@ -669,6 +752,46 @@ const std::vector<ToolDefinition> &tool_definitions() {
                         [](KnowledgeKernel &kernel, const nlohmann::json &args) -> KernelResult {
                             return kernel.execute(ProvenanceForBatchCommand{require_ids(args, "assertion_ids")});
                         }});
+
+        defs.push_back(
+            {{"query",
+              "Runs a shaped read against the query IR (Phase 10): any combination of subject, "
+              "predicate, object, a valid-time point, an observed-time window, open-endedness and an "
+              "explicit status set, with deterministic ordering and paging. Every single-purpose read "
+              "above is expressible here and returns identical rows. All arguments are optional; an "
+              "empty query means every assertion, up to the ceiling of " +
+                  std::to_string(MAX_QUERY_RESULT) +
+                  " rows that limit is capped to. Returns {assertions, truncated}, where truncated "
+                  "says more rows matched than were returned. The IR is versioned (ir_version, "
+                  "currently " +
+                  std::to_string(QUERY_IR_VERSION) +
+                  ") and still evolving through the query-engine phases: an unknown version is "
+                  "rejected rather than reinterpreted.",
+              object_schema(
+                  {{"subject", integer_property("Subject EntityId; omitted means any. Resolved through merge "
+                                                "redirects.")},
+                   {"predicate", integer_property("Predicate PredicateId; omitted means any.")},
+                   {"object", integer_property("Object EntityId; omitted means any. Resolved through merge "
+                                               "redirects.")},
+                   {"valid_at", integer_property("Valid-time point: valid_from <= t < valid_to, with valid_to 0 "
+                                                 "meaning open-ended.")},
+                   {"observed_from", integer_property("Lower inclusive bound on observed_at.")},
+                   {"observed_to", integer_property("Upper inclusive bound on observed_at.")},
+                   {"open_ended_only", boolean_property("Only assertions whose valid_to is 0 (open-ended).")},
+                   {"statuses", array_property("Statuses to include; omitted means every status.", 5,
+                                               enum_property("Assertion status.", {"Active", "Superseded", "Retracted",
+                                                                                   "Retraction", "Hypothesis"}))},
+                   {"order", enum_property("Ordering key; ties always break on AssertionId.",
+                                           {"assertion_id", "valid_from", "observed_at"})},
+                   {"newest_first", boolean_property("Reverse the ordering, tie-break included.")},
+                   {"limit", integer_property("Maximum rows; 0 or omitted means the ceiling, and a larger value "
+                                              "is capped to it.")},
+                   {"offset", integer_property("Rows to skip after ordering.")},
+                   {"ir_version", integer_property("Query IR version; omitted means the current one.")}},
+                  {})},
+             [](KnowledgeKernel &kernel, const nlohmann::json &args) -> KernelResult {
+                 return kernel.execute(QueryCommand{require_query(args)});
+             }});
 
         defs.push_back({{"hypotheses_for", "Returns open (Hypothesis-status) predictions for a subject.",
                          object_schema({{"subject", integer_property("Subject EntityId.")}}, {"subject"})},

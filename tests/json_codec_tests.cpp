@@ -152,6 +152,23 @@ void kernel_result_to_json_covers_every_alternative() {
     assert(provenance_batch_result.size() == 2);
     assert(provenance_batch_result[0].at("method") == "manual");
     assert(provenance_batch_result[1].is_null());
+
+    // A query result carries its rows and the truncated flag together, so a caller can tell a complete
+    // answer from a first page without re-counting.
+    QueryResult query_result;
+    query_result.assertions.push_back(sample_assertion());
+    query_result.truncated = true;
+    auto query_json = kernel_result_to_json(KernelResult{query_result});
+    assert(query_json.at("assertions").is_array());
+    assert(query_json.at("assertions").size() == 1);
+    assert(query_json.at("assertions")[0].at("id") == 7);
+    assert(query_json.at("truncated") == true);
+
+    QueryResult empty_result;
+    auto empty_json = kernel_result_to_json(KernelResult{empty_result});
+    assert(empty_json.at("assertions").is_array());
+    assert(empty_json.at("assertions").empty());
+    assert(empty_json.at("truncated") == false);
 }
 
 } // namespace

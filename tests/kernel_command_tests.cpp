@@ -698,6 +698,28 @@ void document_content_command_round_trips() {
     cleanup(root);
 }
 
+void query_command_round_trips() {
+    auto root = test_root("query_command_round_trips");
+    KnowledgeKernel kernel(StorageConfig{root});
+    auto s = seed_query_kernel(kernel);
+
+    Query query;
+    query.subject = s.alice;
+    query.predicate = s.works_at;
+    query.statuses = {AssertionStatus::Active};
+    query.open_ended_only = true;
+
+    auto d = kernel.query(query);
+    auto v = std::get<QueryResult>(kernel.execute(QueryCommand{query}));
+
+    assert(ids(d.assertions) == ids(v.assertions));
+    assert(d.truncated == v.truncated);
+    // seed_query_kernel leaves a2 as the active open-ended works_at assertion.
+    assert(v.assertions.size() == 1 && v.assertions[0].id == s.a2);
+
+    cleanup(root);
+}
+
 void entity_name_batch_command_round_trips() {
     auto root = test_root("entity_name_batch_command_round_trips");
     KnowledgeKernel kernel(StorageConfig{root});
@@ -883,6 +905,7 @@ int main() {
     predicate_name_command_round_trips();
     document_content_command_round_trips();
     provenance_for_command_round_trips();
+    query_command_round_trips();
     entity_name_batch_command_round_trips();
     entity_value_batch_command_round_trips();
     predicate_name_batch_command_round_trips();

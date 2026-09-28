@@ -8,6 +8,7 @@
 #include "kernel/assertion.hpp"
 #include "kernel/ids.hpp"
 #include "kernel/provenance_log.hpp"
+#include "kernel/query.hpp"
 #include "kernel/time.hpp"
 #include "kernel/value.hpp"
 
@@ -268,6 +269,13 @@ struct ResolveEntityCommand {
     EntityId id;
 };
 
+// The reified query IR (Phase 10). Unlike every other command here, its payload is itself a struct
+// rather than a flat argument list -- Query is already the serializable description of the call, so
+// wrapping it keeps execute()'s 1:1 command-to-method mapping intact.
+struct QueryCommand {
+    Query query;
+};
+
 using KernelCommand =
     std::variant<CommitCommand, CommitByNameCommand, CommitBatchCommand, CommitBatchByNameCommand,
                  CommitRetractionCommand, CommitSupersedingCommand, WriteSnapshotCommand, InternEntityCommand,
@@ -280,6 +288,6 @@ using KernelCommand =
                  FindValueCommand, FindPredicateCommand, EntityNameCommand, EntityValueCommand, PredicateNameCommand,
                  DocumentContentCommand, ProvenanceForCommand, EntityNameBatchCommand, EntityValueBatchCommand,
                  PredicateNameBatchCommand, ProvenanceForBatchCommand, HypothesesForCommand, NeighborsCommand,
-                 CoOccurringPredicatesCommand, ResolveEntityCommand>;
+                 CoOccurringPredicatesCommand, ResolveEntityCommand, QueryCommand>;
 
 } // namespace knk

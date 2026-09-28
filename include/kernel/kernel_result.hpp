@@ -10,6 +10,7 @@
 #include "kernel/assertion.hpp"
 #include "kernel/ids.hpp"
 #include "kernel/provenance_log.hpp"
+#include "kernel/query.hpp"
 #include "kernel/value.hpp"
 
 namespace knk {
@@ -34,6 +35,8 @@ namespace knk {
 // The batch reads each return a vector of their single resolver's optional, and collapse the same way
 // the singles do: entity_name_batch and predicate_name_batch share vector<optional<string>>, exactly as
 // entity_name and predicate_name share optional<string>.
+// QueryResult (Phase 10) is its own alternative rather than reusing vector<Assertion>: it carries a
+// truncated flag alongside the rows, which a bare vector cannot express.
 using KernelResult = std::variant<std::monostate,                               // write_snapshot, record_provenance
                                   AssertionId,                                  // commit family; intern_* (ids)
                                   std::optional<Assertion>,                     // get
@@ -47,6 +50,7 @@ using KernelResult = std::variant<std::monostate,                               
                                   std::vector<EntityId>, // neighbors, co_occurring_predicates, commit_batch
                                   std::vector<std::optional<std::string>>, // entity_name_batch/predicate_name_batch
                                   std::vector<std::optional<Value>>,       // entity_value_batch
-                                  std::vector<std::optional<ProvenanceRecord>>>; // provenance_for_batch
+                                  std::vector<std::optional<ProvenanceRecord>>, // provenance_for_batch
+                                  QueryResult>;                                 // query
 
 } // namespace knk

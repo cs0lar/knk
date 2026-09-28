@@ -1098,6 +1098,39 @@ The foundation, deliberately boring: no new storage, no new semantics, no perfor
  `changes_since`) re-expressed as an IR query and asserted equal to the method's own result.
 * **Exit:** parity green; existing methods untouched and still the documented way to ask simple things.
 
+Current implementation status (shipped 2026-09-28):
+
+* `include/kernel/query.hpp` holds the IR: optional subject/predicate/object selectors, a `valid_at`
+ point, an inclusive `observed_from`/`observed_to` window, `open_ended_only`, an explicit status set
+ (empty = every status), `order` + `newest_first`, `limit`/`offset`, and `ir_version`.
+* `QueryEngine` (`include/kernel/query_engine.hpp`, `src/query_engine.cpp`) plans and executes it,
+ holding const references to `assertions_`, `IndexManager` and `Catalog`. `KnowledgeKernel::query` is a
+ one-line forward to it, so there is exactly one place the bitemporal/status rules compose.
+* **Index use is deliberately conservative here.** The subject index is complete for a subject at any
+ status, so it is used whenever a query names one; the object and predicate indexes are *current-only*
+ (see `is_current_assertion`), so they are used only for a query whose status set is exactly `{Active}`
+ with `open_ended_only`. Everything else scans. Real selection is Phase 11/16 work; this phase only had
+ to avoid being wrong.
+* `Query::force_scan` is a diagnostic field, absent from the MCP schema, that skips index selection.
+ Every parity test runs its query both ways and compares, which is what pins index use to changing cost
+ and never results — and it is the hook Phase 11's randomized differential tests build on.
+* **IR versioning was pulled forward from Phase 18 into this phase.** The `query` tool is callable the
+ moment it ships, so the first stored query would otherwise predate any versioning retrofit. An unknown
+ `ir_version` is rejected with `std::runtime_error` rather than reinterpreted.
+* `MAX_QUERY_RESULT` (10,000) is a hard ceiling: `limit == 0` means "the ceiling", a larger limit is
+ capped to it, and `QueryResult::truncated` reports that more rows matched. There is no unbounded read.
+* **A parity subtlety worth recording:** `current`/`valid_at`/`known_at`/`hypotheses_for`/`current_by_*`
+ iterate unordered containers, so their row order is genuinely unspecified and may vary between runs.
+ The IR always orders deterministically (requested key, then `AssertionId`). Parity for those methods is
+ therefore asserted as sets; `assertions_for_subject` and `changes_since`, whose orders *are* specified,
+ are asserted as exact sequences.
+* Reified as `QueryCommand`, serialized as `{assertions, truncated}` (its own `KernelResult`
+ alternative, since a bare vector cannot carry the flag), and exposed as the `query` MCP tool — the
+ 48th, and the first whose arguments are all optional.
+* Tested in `tests/query_engine_tests.cpp`: parity for all nine existing read methods, merge
+ resolution, filter combinations no single method expresses, ordering determinism, paging/truncation,
+ the limit cap, version rejection, empty kernels, and a restart.
+
 #### Phase 11 — Filters, projection, and index selection
 
 * Predicates over object `Value`s (typed comparisons), confidence, timestamps, and status, composed
@@ -1186,7 +1219,8 @@ A million-row answer must not travel as JSON-RPC text.
 * Cursors/pagination for JSON-sized results, resource budgets (rows scanned, wall-clock, group count)
  surfacing as structured errors, and catalog/schema discovery tools so a caller can build a query
  without guessing predicate names.
-* IR versioning, so a stored query keeps meaning what it meant.
+* IR versioning, so a stored query keeps meaning what it meant — **landed early, in Phase 10**: the
+ `query` tool is callable as soon as it exists, so versioning could not wait for this phase.
 * **Tests:** budgets enforced; cursors stable against a concurrent writer, which Phase 13's snapshot
  readers make well-defined.
 
