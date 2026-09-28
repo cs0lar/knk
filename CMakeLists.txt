@@ -187,6 +187,10 @@ add_executable(query_engine_tests
     tests/query_engine_tests.cpp
 )
 
+add_executable(query_differential_tests
+    tests/query_differential_tests.cpp
+)
+
 target_link_libraries(knowledge_kernel_tests
     PRIVATE kernel
 )
@@ -272,6 +276,10 @@ target_link_libraries(storage_lock_tests
 )
 
 target_link_libraries(query_engine_tests
+    PRIVATE kernel
+)
+
+target_link_libraries(query_differential_tests
     PRIVATE kernel
 )
 
@@ -383,4 +391,9 @@ add_test(
 add_test(
     NAME query_engine_tests
     COMMAND query_engine_tests
+)
+
+add_test(
+    NAME query_differential_tests
+    COMMAND query_differential_tests
 )

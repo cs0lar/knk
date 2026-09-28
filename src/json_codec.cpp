@@ -22,22 +22,6 @@ std::array<int8_t, 256> make_base64_decode_table() {
     return table;
 }
 
-const char *status_name(AssertionStatus status) {
-    switch (status) {
-    case AssertionStatus::Active:
-        return "Active";
-    case AssertionStatus::Superseded:
-        return "Superseded";
-    case AssertionStatus::Retracted:
-        return "Retracted";
-    case AssertionStatus::Retraction:
-        return "Retraction";
-    case AssertionStatus::Hypothesis:
-        return "Hypothesis";
-    }
-    throw std::runtime_error("unhandled AssertionStatus");
-}
-
 } // namespace
 
 nlohmann::json status_to_json(AssertionStatus status) { return status_name(status); }
@@ -45,23 +29,13 @@ nlohmann::json status_to_json(AssertionStatus status) { return status_name(statu
 AssertionStatus status_from_json(const nlohmann::json &json) {
     std::string name = json.get<std::string>();
 
-    if (name == "Active") {
-        return AssertionStatus::Active;
-    }
-    if (name == "Superseded") {
-        return AssertionStatus::Superseded;
-    }
-    if (name == "Retracted") {
-        return AssertionStatus::Retracted;
-    }
-    if (name == "Retraction") {
-        return AssertionStatus::Retraction;
-    }
-    if (name == "Hypothesis") {
-        return AssertionStatus::Hypothesis;
+    // The names themselves live in status.hpp, shared with the query IR's Status filter.
+    auto status = status_from_name(name);
+    if (!status.has_value()) {
+        throw std::runtime_error("unknown AssertionStatus: " + name);
     }
 
-    throw std::runtime_error("unknown AssertionStatus: " + name);
+    return *status;
 }
 
 nlohmann::json assertion_to_json(const Assertion &assertion) {
@@ -274,7 +248,26 @@ nlohmann::json kernel_result_to_json(const KernelResult &result) {
                 }
                 // truncated travels alongside the rows so a caller can tell "that was all of them" from
                 // "here are the first N" without re-counting.
-                return nlohmann::json{{"assertions", assertions}, {"truncated", value.truncated}};
+                nlohmann::json result{{"assertions", assertions}, {"truncated", value.truncated}};
+
+                // Only present when the query asked for resolution, and then parallel to the rows: a
+                // caller zips the two, and an absent name is null in its slot rather than missing.
+                if (!value.names.empty()) {
+                    nlohmann::json names = nlohmann::json::array();
+                    for (const auto &resolved : value.names) {
+                        names.push_back(nlohmann::json{
+                            {"subject_name", resolved.subject_name.has_value() ? nlohmann::json(*resolved.subject_name)
+                                                                               : nlohmann::json(nullptr)},
+                            {"predicate_name", resolved.predicate_name.has_value()
+                                                   ? nlohmann::json(*resolved.predicate_name)
+                                                   : nlohmann::json(nullptr)},
+                            {"object_value", resolved.object_value.has_value() ? value_to_json(*resolved.object_value)
+                                                                               : nlohmann::json(nullptr)}});
+                    }
+                    result["names"] = names;
+                }
+
+                return result;
             } else if constexpr (std::is_same_v<T, std::vector<std::optional<std::string>>>) {
                 // One slot per id, in input order: a slot the single resolver would answer null for is
                 // null here too, so a caller can zip ids with answers without matching them up.

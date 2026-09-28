@@ -3,6 +3,7 @@
 #include <string>
 
 #include "kernel/knowledge_kernel.hpp"
+#include "kernel/query.hpp"
 #include "kernel/storage_config.hpp"
 #include "kernel/time.hpp"
 
@@ -88,6 +89,95 @@ void neighbors_throughput(const KnowledgeKernel &kernel, size_t rounds) {
     report("neighbors(subject, max_hops=2)", query_count / elapsed, "queries/sec");
 }
 
+// --- IR query paths (Phase 11) ---------------------------------------------------
+//
+// The same current-shaped question the methods above answer, asked through the query IR, plus the
+// paths that only the IR has: a filter tree, an observed-time window, and name resolution. Reported as
+// ms/query where a path is inherently a scan, since throughput numbers there say more about the corpus
+// size than the engine.
+
+Query current_shaped(EntityId subject) {
+    Query query;
+    query.subject = subject;
+    query.statuses = {AssertionStatus::Active};
+    query.open_ended_only = true;
+    return query;
+}
+
+void ir_current_equivalent_throughput(const KnowledgeKernel &kernel, size_t rounds) {
+    Timer timer;
+    for (size_t round = 0; round < rounds; ++round) {
+        for (size_t i = 0; i < SUBJECT_COUNT; ++i) {
+            kernel.query(current_shaped(static_cast<EntityId>(i + 1)));
+        }
+    }
+    double elapsed = timer.elapsed_seconds();
+    report("query{subject,Active,open_ended}", static_cast<double>(rounds * SUBJECT_COUNT) / elapsed, "queries/sec");
+}
+
+// The same queries with index selection disabled, which is what the differential tests compare against
+// for correctness -- here it is the cost side of that same comparison.
+void ir_forced_scan_latency(const KnowledgeKernel &kernel, size_t queries) {
+    Timer timer;
+    for (size_t i = 0; i < queries; ++i) {
+        Query query = current_shaped(static_cast<EntityId>(i % SUBJECT_COUNT + 1));
+        query.force_scan = true;
+        kernel.query(query);
+    }
+    double elapsed = timer.elapsed_seconds();
+    report("query{...} force_scan", elapsed / static_cast<double>(queries) * 1000.0, "ms/query");
+}
+
+void ir_observed_window_throughput(const KnowledgeKernel &kernel, size_t rounds) {
+    Timer timer;
+    for (size_t round = 0; round < rounds; ++round) {
+        for (size_t i = 0; i < SUBJECT_COUNT; ++i) {
+            Query query;
+            query.subject = static_cast<EntityId>(i + 1);
+            query.observed_to = 0; // every row was observed at 0, so this selects via the observed index
+            kernel.query(query);
+        }
+    }
+    double elapsed = timer.elapsed_seconds();
+    report("query{subject,observed_to}", static_cast<double>(rounds * SUBJECT_COUNT) / elapsed, "queries/sec");
+}
+
+void ir_resolve_names_throughput(const KnowledgeKernel &kernel, size_t rounds) {
+    Timer timer;
+    for (size_t round = 0; round < rounds; ++round) {
+        for (size_t i = 0; i < SUBJECT_COUNT; ++i) {
+            Query query = current_shaped(static_cast<EntityId>(i + 1));
+            query.resolve_names = true;
+            kernel.query(query);
+        }
+    }
+    double elapsed = timer.elapsed_seconds();
+    report("query{...} resolve_names", static_cast<double>(rounds * SUBJECT_COUNT) / elapsed, "queries/sec");
+}
+
+// Two filter shapes with the same scan cost but opposite result sizes, which separates the cost of
+// evaluating a filter from the cost of materializing what it matched.
+void ir_filter_latency(const KnowledgeKernel &kernel, size_t queries) {
+    Timer selective_timer;
+    for (size_t i = 0; i < queries; ++i) {
+        Query query;
+        query.filter = Filter::compare(FilterField::Confidence, CompareOp::Lt, Value::of_double(0.5));
+        kernel.query(query);
+    }
+    double selective = selective_timer.elapsed_seconds();
+    report("query{filter: confidence < 0.5} (matches none)", selective / static_cast<double>(queries) * 1000.0,
+           "ms/query");
+
+    Timer broad_timer;
+    for (size_t i = 0; i < queries; ++i) {
+        Query query;
+        query.filter = Filter::compare(FilterField::Confidence, CompareOp::Gte, Value::of_double(0.5));
+        kernel.query(query);
+    }
+    double broad = broad_timer.elapsed_seconds();
+    report("query{filter: confidence >= 0.5} (matches all)", broad / static_cast<double>(queries) * 1000.0, "ms/query");
+}
+
 } // namespace
 
 int main() {
@@ -100,6 +190,13 @@ int main() {
     valid_at_throughput(kernel, rounds);
     known_at_throughput(kernel, rounds);
     neighbors_throughput(kernel, rounds);
+
+    section("query IR over the same " + std::to_string(SUBJECT_COUNT) + " subjects");
+    ir_current_equivalent_throughput(kernel, rounds);
+    ir_observed_window_throughput(kernel, rounds);
+    ir_resolve_names_throughput(kernel, rounds);
+    ir_forced_scan_latency(kernel, 200);
+    ir_filter_latency(kernel, 200);
 
     std::filesystem::remove_all(root);
     return 0;

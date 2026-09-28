@@ -1143,6 +1143,48 @@ Current implementation status (shipped 2026-09-28):
  Add a forced-scan mode so every query can be run both ways and compared.
 * **Exit:** `query_benchmark` section with a recorded baseline.
 
+Current implementation status (shipped 2026-09-28):
+
+* **Filters.** `Query::filter` is a tree of comparisons and `and`/`or`/`not`, bounded at
+ `MAX_FILTER_DEPTH` (8). Fields: the three ids, `object_value` (the object's *interned Value*, not its
+ id), `confidence`, the three timestamps, and `status`; ops `eq|ne|lt|lte|gt|gte`, with ordering defined
+ for every `ValueKind` (lexicographic for text, `false < true` for bool).
+* **The error split is the design decision here.** A structurally broken filter — operand kind wrong for
+ its field, unknown status name, empty `and`/`or`, `not` without exactly one child, nesting past the
+ bound — throws, because a filter that can never match anything is a caller mistake worth naming. A
+ kind *mismatch against a row* does not: objects are a mix of named entities and typed literals, so
+ "object value > 100" meeting a text object is ordinary data, and matches nothing.
+* **Projection landed as name resolution only.** `Query::resolve_names` returns a `names` array parallel
+ to the returned rows (subject name, predicate name, object `Value`), resolving **only the returned
+ page** — which is the half of "projection" that #55 actually motivated, since it removes the batch-
+ resolver round trip after a query. Field *subsetting* (returning fewer columns per row) is deliberately
+ **not** here: it needs a row representation other than `Assertion`, which is Phase 17's columnar
+ handoff, not this phase.
+* **Index selection**, still result-preserving by construction rather than by benchmark: an
+ `observed_to` bound on a subject query selects through the observed-time index (a provable prefix of
+ that subject's rows); when a current-shaped query names both an object and a predicate, the smaller of
+ the two current-index buckets is scanned. Filters are *not* pushed down — selectors are the pushdown
+ surface, and extracting equality conjuncts out of a filter tree is Phase 16's job.
+* **Two Phase 10 defects fixed while here.** (1) `candidate_ids` returned an empty vector both for "no
+ index applied" and "this index legitimately holds nothing", so an empty bucket triggered a full
+ rescan — correct answers, wasted work; it now returns `optional`. (2) `QueryEngine` held const
+ references to `assertions_`/`IndexManager`/`Catalog`, which made `KnowledgeKernel` unsafe to move: the
+ copy's references would point into the moved-from object. NRVO hid it (`benchmarks/query_benchmark.cpp`
+ returns a kernel by value), so it was latent rather than active. The engine is now stateless and takes
+ that state as parameters.
+* `status_name`/`status_from_name` were promoted from `json_codec.cpp` to `status.hpp`, since the JSON
+ codec and the IR's `status` filter both need the same spelling and two switches over one enum drift.
+* **Differential testing** (`tests/query_differential_tests.cpp`): 2,000 seeded random queries, each
+ answered three ways — index-selected, `force_scan`, and by a brute-force evaluator written
+ independently in the test — with all three required to agree on rows *and* on `truncated`. Verified to
+ have teeth by mutation: flipping `Lte` to `Lt` in the engine fails the suite. The generator also
+ asserts that a meaningful fraction of its queries match something, so the suite cannot pass vacuously.
+* **Baseline** in `docs/benchmarks.md`: the IR answers a current-shaped question ~2x faster than
+ `current()` itself (one subject-index lookup versus walking the predicate set); index selection is
+ worth ~30x against a forced scan on a 10,000-assertion corpus, and that gap grows with corpus size;
+ `resolve_names` costs ~27%; and a broad filter is dominated ~12x by materializing and sorting matches,
+ not by evaluating the filter — the two named Phase 15 targets.
+
 #### Phase 12 — Aggregation and grouping
 
 Where "analytics" starts being true rather than aspirational.

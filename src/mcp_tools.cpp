@@ -48,6 +48,13 @@ nlohmann::ordered_json value_property(const std::string &description) {
         {"required", nlohmann::ordered_json::array({"kind", "value"})}};
 }
 
+nlohmann::ordered_json object_property(const std::string &description) {
+    // Deliberately shape-less beyond "an object": the filter tree is recursive, and a $ref-based
+    // recursive JSON Schema is handled inconsistently across MCP clients, so the shape is specified in
+    // the description instead and enforced by the parser.
+    return nlohmann::ordered_json{{"type", "object"}, {"description", description}};
+}
+
 nlohmann::ordered_json array_property(const std::string &description, size_t max_items, nlohmann::ordered_json items) {
     nlohmann::ordered_json schema;
     schema["type"] = "array";
@@ -235,6 +242,116 @@ QueryOrder optional_order(const nlohmann::json &args, const char *key) {
     throw std::runtime_error("unknown order: " + name);
 }
 
+FilterField filter_field_from_name(const std::string &name) {
+    if (name == "subject") {
+        return FilterField::Subject;
+    }
+    if (name == "predicate") {
+        return FilterField::Predicate;
+    }
+    if (name == "object") {
+        return FilterField::Object;
+    }
+    if (name == "object_value") {
+        return FilterField::ObjectValue;
+    }
+    if (name == "confidence") {
+        return FilterField::Confidence;
+    }
+    if (name == "valid_from") {
+        return FilterField::ValidFrom;
+    }
+    if (name == "valid_to") {
+        return FilterField::ValidTo;
+    }
+    if (name == "observed_at") {
+        return FilterField::ObservedAt;
+    }
+    if (name == "status") {
+        return FilterField::Status;
+    }
+
+    throw std::runtime_error("unknown filter field: " + name);
+}
+
+CompareOp compare_op_from_name(const std::string &name) {
+    if (name == "eq") {
+        return CompareOp::Eq;
+    }
+    if (name == "ne") {
+        return CompareOp::Ne;
+    }
+    if (name == "lt") {
+        return CompareOp::Lt;
+    }
+    if (name == "lte") {
+        return CompareOp::Lte;
+    }
+    if (name == "gt") {
+        return CompareOp::Gt;
+    }
+    if (name == "gte") {
+        return CompareOp::Gte;
+    }
+
+    throw std::runtime_error("unknown filter op: " + name);
+}
+
+// Recursive, and depth-bounded here as well as in the engine: the engine's check protects evaluation,
+// this one protects the parser itself from a maliciously deep argument.
+Filter parse_filter(const nlohmann::json &node, size_t depth) {
+    if (depth > MAX_FILTER_DEPTH) {
+        throw std::runtime_error("filter nested deeper than MAX_FILTER_DEPTH");
+    }
+
+    if (!node.is_object()) {
+        throw std::runtime_error("filter must be an object");
+    }
+
+    std::string kind = node.at("kind").get<std::string>();
+
+    if (kind == "comparison") {
+        return Filter::compare(filter_field_from_name(node.at("field").get<std::string>()),
+                               compare_op_from_name(node.at("op").get<std::string>()),
+                               value_from_json(node.at("value")));
+    }
+
+    if (kind == "and" || kind == "or" || kind == "not") {
+        const auto &children_json = node.at("children");
+        if (!children_json.is_array()) {
+            throw std::runtime_error("filter children must be an array");
+        }
+
+        std::vector<Filter> children;
+        children.reserve(children_json.size());
+        for (const auto &child : children_json) {
+            children.push_back(parse_filter(child, depth + 1));
+        }
+
+        if (kind == "and") {
+            return Filter::all_of(std::move(children));
+        }
+        if (kind == "or") {
+            return Filter::any_of(std::move(children));
+        }
+
+        if (children.size() != 1) {
+            throw std::runtime_error("not filter needs exactly one child");
+        }
+        return Filter::negate(std::move(children.front()));
+    }
+
+    throw std::runtime_error("unknown filter kind: " + kind);
+}
+
+std::optional<Filter> optional_filter(const nlohmann::json &args, const char *key) {
+    if (!args.contains(key) || args.at(key).is_null()) {
+        return std::nullopt;
+    }
+
+    return parse_filter(args.at(key), 1);
+}
+
 // Builds the IR from tool arguments. Every field is optional: an empty query means "everything, up to
 // the result ceiling", which is well defined and bounded. force_scan is deliberately absent -- it is a
 // differential-testing knob, not part of the callable surface.
@@ -253,6 +370,8 @@ Query require_query(const nlohmann::json &args) {
     query.observed_to = optional_timestamp(args, "observed_to");
     query.open_ended_only = optional_bool(args, "open_ended_only", false);
     query.statuses = optional_statuses(args, "statuses");
+    query.filter = optional_filter(args, "filter");
+    query.resolve_names = optional_bool(args, "resolve_names", false);
     query.order = optional_order(args, "order");
     query.newest_first = optional_bool(args, "newest_first", false);
     query.limit = optional_size(args, "limit", 0);
@@ -781,6 +900,20 @@ const std::vector<ToolDefinition> &tool_definitions() {
                    {"statuses", array_property("Statuses to include; omitted means every status.", 5,
                                                enum_property("Assertion status.", {"Active", "Superseded", "Retracted",
                                                                                    "Retraction", "Hypothesis"}))},
+                   {"filter",
+                    object_property(
+                        "Filter tree, nesting up to " + std::to_string(MAX_FILTER_DEPTH) +
+                        " deep. Either a comparison -- {kind: \"comparison\", field, op, value} with field one of "
+                        "subject|predicate|object|object_value|confidence|valid_from|valid_to|observed_at|status, "
+                        "op one of eq|ne|lt|lte|gt|gte, and value a tagged {kind, value} -- or a combination: "
+                        "{kind: \"and\"|\"or\"|\"not\", children: [<filter>, ...]}, where each child has this "
+                        "same shape and \"not\" takes exactly one. Operand kinds must match the field (int64 for "
+                        "ids, double for confidence, timestamp for the time fields, text naming a status for "
+                        "status); object_value takes any kind and simply does not match rows whose object value is "
+                        "of another kind.")},
+                   {"resolve_names",
+                    boolean_property("Also return catalog names/values for each returned row, as a parallel "
+                                     "\"names\" array -- saves a second round trip through the batch resolvers.")},
                    {"order", enum_property("Ordering key; ties always break on AssertionId.",
                                            {"assertion_id", "valid_from", "observed_at"})},
                    {"newest_first", boolean_property("Reverse the ordering, tie-break included.")},

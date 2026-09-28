@@ -399,6 +399,77 @@ void query_tool_runs_a_shaped_read_and_reports_truncation() {
     cleanup(root);
 }
 
+void query_tool_accepts_filters_and_name_resolution() {
+    auto root = test_root("query_tool_accepts_filters_and_name_resolution");
+    KnowledgeKernel kernel(StorageConfig{root});
+
+    EntityId alice = kernel.intern_entity("Alice");
+    PredicateId works_at = kernel.intern_predicate("works_at");
+    EntityId acme = kernel.intern_entity("Acme");
+    EntityId forty_two = kernel.intern_value(Value::of_int64(42));
+
+    AssertionId high = kernel.commit(alice, works_at, acme, 0, OPEN_ENDED, 1719792000, 0.95);
+    kernel.commit(alice, works_at, forty_two, 0, OPEN_ENDED, 1719878400, 0.20);
+
+    // A boolean tree over the wire: confidence >= 0.9 AND status == Active.
+    nlohmann::json filter{{"kind", "and"},
+                          {"children",
+                           {{{"kind", "comparison"},
+                             {"field", "confidence"},
+                             {"op", "gte"},
+                             {"value", {{"kind", "double"}, {"value", 0.9}}}},
+                            {{"kind", "comparison"},
+                             {"field", "status"},
+                             {"op", "eq"},
+                             {"value", {{"kind", "text"}, {"value", "Active"}}}}}}};
+
+    auto result = handle_tool_call(kernel, "query", nlohmann::json{{"filter", filter}});
+    assert(!result.is_error);
+
+    auto answer = nlohmann::json::parse(result.content_text);
+    assert(answer.at("assertions").size() == 1);
+    assert(answer.at("assertions")[0].at("id") == high);
+    assert(!answer.contains("names")); // absent unless asked for
+
+    // Name resolution rides alongside the rows, one slot per returned row.
+    auto resolved =
+        nlohmann::json::parse(handle_tool_call(kernel, "query", nlohmann::json{{"resolve_names", true}}).content_text);
+    assert(resolved.at("names").size() == resolved.at("assertions").size());
+    assert(resolved.at("names")[0].at("subject_name") == "Alice");
+    assert(resolved.at("names")[0].at("predicate_name") == "works_at");
+    assert(resolved.at("names")[0].at("object_value").at("kind") == "text");
+    assert(resolved.at("names")[1].at("object_value").at("kind") == "int64");
+    assert(resolved.at("names")[1].at("object_value").at("value") == 42);
+
+    // A comparison against the object's value, not its id.
+    nlohmann::json by_value{
+        {"kind", "comparison"}, {"field", "object_value"}, {"op", "gt"}, {"value", {{"kind", "int64"}, {"value", 10}}}};
+    auto numeric =
+        nlohmann::json::parse(handle_tool_call(kernel, "query", nlohmann::json{{"filter", by_value}}).content_text);
+    assert(numeric.at("assertions").size() == 1);
+    assert(numeric.at("assertions")[0].at("object") == forty_two);
+
+    // Malformed trees are tool errors, not throws: unknown field, unknown op, unknown kind, a
+    // non-object filter, and an operand whose kind does not match its field.
+    auto bad = [&kernel](const nlohmann::json &filter) {
+        return handle_tool_call(kernel, "query", nlohmann::json{{"filter", filter}}).is_error;
+    };
+
+    assert(bad(nlohmann::json{
+        {"kind", "comparison"}, {"field", "nonsense"}, {"op", "eq"}, {"value", {{"kind", "int64"}, {"value", 1}}}}));
+    assert(bad(nlohmann::json{{"kind", "comparison"},
+                              {"field", "confidence"},
+                              {"op", "sideways"},
+                              {"value", {{"kind", "double"}, {"value", 1.0}}}}));
+    assert(bad(nlohmann::json{{"kind", "nonsense"}, {"children", nlohmann::json::array()}}));
+    assert(bad(nlohmann::json(7)));
+    assert(bad(nlohmann::json{
+        {"kind", "comparison"}, {"field", "confidence"}, {"op", "eq"}, {"value", {{"kind", "int64"}, {"value", 1}}}}));
+    assert(bad(nlohmann::json{{"kind", "and"}, {"children", nlohmann::json::array()}}));
+
+    cleanup(root);
+}
+
 void batch_tool_schemas_state_their_bound() {
     // The issue these tools answer asks for the batch bound to be discoverable from the tool itself,
     // not just enforced at call time -- so both the description and the schema must carry it, for
@@ -662,6 +733,7 @@ int main() {
     record_provenance_batch_tool_records_every_entry_and_rejects_an_unknown_target();
     batch_read_tools_answer_in_input_order_with_null_slots();
     query_tool_runs_a_shaped_read_and_reports_truncation();
+    query_tool_accepts_filters_and_name_resolution();
     batch_tool_schemas_state_their_bound();
     intern_entity_tool_round_trips_a_string_argument();
     intern_value_tool_round_trips_a_tagged_value_argument();
