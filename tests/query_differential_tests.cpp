@@ -15,14 +15,17 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cmath>
 #include <cstdint>
 #include <filesystem>
 #include <iostream>
+#include <map>
 #include <optional>
 #include <random>
 #include <string>
 #include <vector>
 
+#include "kernel/aggregate.hpp"
 #include "kernel/knowledge_kernel.hpp"
 #include "kernel/query.hpp"
 #include "kernel/storage_config.hpp"
@@ -224,8 +227,10 @@ bool reference_filter(const Filter &filter, const Assertion &a, const KnowledgeK
     return reference_op(filter.op, reference_compare(*value, filter.operand));
 }
 
-std::vector<AssertionId> reference_answer(const Query &query, const Corpus &corpus, const KnowledgeKernel &kernel,
-                                          bool &truncated) {
+// The row-selection half of the reference, shared by the row and aggregate references below: an
+// aggregate must fold exactly the rows a query would have returned.
+std::vector<Assertion> reference_matching_rows(const Query &query, const Corpus &corpus,
+                                               const KnowledgeKernel &kernel) {
     std::optional<EntityId> subject;
     if (query.subject.has_value()) {
         subject = kernel.resolve_entity(*query.subject);
@@ -273,6 +278,13 @@ std::vector<AssertionId> reference_answer(const Query &query, const Corpus &corp
 
         matched.push_back(a);
     }
+
+    return matched;
+}
+
+std::vector<AssertionId> reference_answer(const Query &query, const Corpus &corpus, const KnowledgeKernel &kernel,
+                                          bool &truncated) {
+    std::vector<Assertion> matched = reference_matching_rows(query, corpus, kernel);
 
     std::stable_sort(matched.begin(), matched.end(), [&query](const Assertion &x, const Assertion &y) {
         auto key = [&query](const Assertion &a) -> Timestamp {
@@ -418,6 +430,95 @@ struct Generator {
         }
     }
 
+    AggregateFunction random_function() {
+        switch (roll(6)) {
+        case 0:
+            return AggregateFunction::Count;
+        case 1:
+            return AggregateFunction::CountDistinct;
+        case 2:
+            return AggregateFunction::Sum;
+        case 3:
+            return AggregateFunction::Min;
+        case 4:
+            return AggregateFunction::Max;
+        default:
+            return AggregateFunction::Avg;
+        }
+    }
+
+    AggregateTarget random_target() {
+        switch (roll(8)) {
+        case 0:
+            return AggregateTarget::ObjectValue;
+        case 1:
+            return AggregateTarget::Confidence;
+        case 2:
+            return AggregateTarget::ValidFrom;
+        case 3:
+            return AggregateTarget::ValidTo;
+        case 4:
+            return AggregateTarget::ObservedAt;
+        case 5:
+            return AggregateTarget::Subject;
+        case 6:
+            return AggregateTarget::Predicate;
+        default:
+            return AggregateTarget::Object;
+        }
+    }
+
+    GroupBy random_group_by() {
+        GroupBy group;
+        switch (roll(6)) {
+        case 0:
+            group.field = GroupField::Subject;
+            break;
+        case 1:
+            group.field = GroupField::Predicate;
+            break;
+        case 2:
+            group.field = GroupField::Object;
+            break;
+        case 3:
+            group.field = GroupField::Status;
+            break;
+        case 4:
+            group.field = GroupField::ValidFromBucket;
+            group.bucket_width = static_cast<Timestamp>(1 + roll(3)) * 1000;
+            break;
+        default:
+            group.field = GroupField::ObservedAtBucket;
+            group.bucket_width = static_cast<Timestamp>(1 + roll(3)) * 1000;
+            break;
+        }
+        return group;
+    }
+
+    AggregateQuery random_aggregate() {
+        AggregateQuery aggregate;
+
+        aggregate.selection = random_query();
+        // Row-shaping fields are rejected by an aggregate, so clear what random_query set.
+        aggregate.selection.limit = 0;
+        aggregate.selection.offset = 0;
+        aggregate.selection.order = QueryOrder::AssertionId;
+        aggregate.selection.newest_first = false;
+        aggregate.selection.resolve_names = false;
+
+        size_t group_count = roll(3); // 0, 1 or 2 group-by fields
+        for (size_t i = 0; i < group_count; ++i) {
+            aggregate.group_by.push_back(random_group_by());
+        }
+
+        size_t aggregation_count = 1 + roll(3);
+        for (size_t i = 0; i < aggregation_count; ++i) {
+            aggregate.aggregations.push_back({random_function(), random_target()});
+        }
+
+        return aggregate;
+    }
+
     Query random_query() {
         Query query;
 
@@ -484,6 +585,192 @@ struct Generator {
         return query;
     }
 };
+
+// --- the aggregate reference -----------------------------------------------------
+
+Timestamp reference_bucket(Timestamp value, Timestamp width) {
+    Timestamp quotient = value / width;
+    if (value % width != 0 && value < 0) {
+        --quotient;
+    }
+    return quotient * width;
+}
+
+Value reference_group_key(const Assertion &a, const GroupBy &group_by) {
+    switch (group_by.field) {
+    case GroupField::Subject:
+        return Value::of_int64(static_cast<int64_t>(a.subject));
+    case GroupField::Predicate:
+        return Value::of_int64(static_cast<int64_t>(a.predicate));
+    case GroupField::Object:
+        return Value::of_int64(static_cast<int64_t>(a.object));
+    case GroupField::Status:
+        return Value::of_text(status_name(a.status));
+    case GroupField::ValidFromBucket:
+        return Value::of_timestamp(reference_bucket(a.valid_from, group_by.bucket_width));
+    case GroupField::ObservedAtBucket:
+        return Value::of_timestamp(reference_bucket(a.observed_at, group_by.bucket_width));
+    }
+    return Value::of_int64(0);
+}
+
+std::optional<Value> reference_target(const Assertion &a, AggregateTarget target, const KnowledgeKernel &kernel) {
+    switch (target) {
+    case AggregateTarget::ObjectValue:
+        return kernel.entity_value(a.object);
+    case AggregateTarget::Confidence:
+        return Value::of_double(a.confidence);
+    case AggregateTarget::ValidFrom:
+        return Value::of_timestamp(a.valid_from);
+    case AggregateTarget::ValidTo:
+        return Value::of_timestamp(a.valid_to);
+    case AggregateTarget::ObservedAt:
+        return Value::of_timestamp(a.observed_at);
+    case AggregateTarget::Subject:
+        return Value::of_int64(static_cast<int64_t>(a.subject));
+    case AggregateTarget::Predicate:
+        return Value::of_int64(static_cast<int64_t>(a.predicate));
+    case AggregateTarget::Object:
+        return Value::of_int64(static_cast<int64_t>(a.object));
+    }
+    return std::nullopt;
+}
+
+std::optional<double> reference_number(const Assertion &a, AggregateTarget target, const KnowledgeKernel &kernel) {
+    auto value = reference_target(a, target, kernel);
+    if (!value.has_value()) {
+        return std::nullopt;
+    }
+    if (value->kind == ValueKind::Int64) {
+        return static_cast<double>(value->int64_value);
+    }
+    if (value->kind == ValueKind::Double) {
+        return value->double_value;
+    }
+    if (value->kind == ValueKind::Timestamp) {
+        return static_cast<double>(value->timestamp_value);
+    }
+    return std::nullopt;
+}
+
+bool reference_value_less(const Value &left, const Value &right) {
+    if (left.kind != right.kind) {
+        return static_cast<uint8_t>(left.kind) < static_cast<uint8_t>(right.kind);
+    }
+    return reference_compare(left, right) < 0;
+}
+
+struct ReferenceKeyLess {
+    bool operator()(const std::vector<Value> &left, const std::vector<Value> &right) const {
+        return std::lexicographical_compare(left.begin(), left.end(), right.begin(), right.end(), reference_value_less);
+    }
+};
+
+AggregateResult reference_aggregate(const AggregateQuery &query, const Corpus &corpus, const KnowledgeKernel &kernel) {
+    struct State {
+        int64_t rows = 0;
+        std::vector<int64_t> contributing;
+        std::vector<double> sums;
+        std::vector<double> minima;
+        std::vector<double> maxima;
+        std::vector<std::vector<Value>> seen; // distinct values, kept as a list for independence
+    };
+
+    std::map<std::vector<Value>, State, ReferenceKeyLess> groups;
+
+    for (const auto &a : reference_matching_rows(query.selection, corpus, kernel)) {
+        std::vector<Value> key;
+        for (const auto &group_by : query.group_by) {
+            key.push_back(reference_group_key(a, group_by));
+        }
+
+        auto &state = groups[key];
+        if (state.contributing.empty()) {
+            state.contributing.assign(query.aggregations.size(), 0);
+            state.sums.assign(query.aggregations.size(), 0.0);
+            state.minima.assign(query.aggregations.size(), 0.0);
+            state.maxima.assign(query.aggregations.size(), 0.0);
+            state.seen.assign(query.aggregations.size(), {});
+        }
+        ++state.rows;
+
+        for (size_t i = 0; i < query.aggregations.size(); ++i) {
+            const auto &aggregation = query.aggregations[i];
+
+            if (aggregation.function == AggregateFunction::Count) {
+                ++state.contributing[i];
+                continue;
+            }
+
+            if (aggregation.function == AggregateFunction::CountDistinct) {
+                auto value = reference_target(a, aggregation.target, kernel);
+                if (value.has_value() &&
+                    std::find(state.seen[i].begin(), state.seen[i].end(), *value) == state.seen[i].end()) {
+                    state.seen[i].push_back(*value);
+                }
+                continue;
+            }
+
+            auto number = reference_number(a, aggregation.target, kernel);
+            if (!number.has_value()) {
+                continue;
+            }
+            if (state.contributing[i] == 0) {
+                state.minima[i] = *number;
+                state.maxima[i] = *number;
+            } else {
+                state.minima[i] = std::min(state.minima[i], *number);
+                state.maxima[i] = std::max(state.maxima[i], *number);
+            }
+            state.sums[i] += *number;
+            ++state.contributing[i];
+        }
+    }
+
+    AggregateResult result;
+    for (const auto &[key, state] : groups) {
+        AggregateGroup group;
+        group.key = key;
+        group.row_count = state.rows;
+
+        for (size_t i = 0; i < query.aggregations.size(); ++i) {
+            AggregateCell cell;
+            switch (query.aggregations[i].function) {
+            case AggregateFunction::Count:
+                cell.count = state.contributing[i];
+                break;
+            case AggregateFunction::CountDistinct:
+                cell.count = static_cast<int64_t>(state.seen[i].size());
+                break;
+            case AggregateFunction::Sum:
+                if (state.contributing[i] > 0) {
+                    cell.number = state.sums[i];
+                }
+                break;
+            case AggregateFunction::Min:
+                if (state.contributing[i] > 0) {
+                    cell.number = state.minima[i];
+                }
+                break;
+            case AggregateFunction::Max:
+                if (state.contributing[i] > 0) {
+                    cell.number = state.maxima[i];
+                }
+                break;
+            case AggregateFunction::Avg:
+                if (state.contributing[i] > 0) {
+                    cell.number = state.sums[i] / static_cast<double>(state.contributing[i]);
+                }
+                break;
+            }
+            group.values.push_back(cell);
+        }
+
+        result.groups.push_back(std::move(group));
+    }
+
+    return result;
+}
 
 std::vector<AssertionId> ids_of(const std::vector<Assertion> &assertions) {
     std::vector<AssertionId> ids;
@@ -559,10 +846,76 @@ void randomized_queries_agree_across_index_scan_and_reference() {
     std::filesystem::remove_all(root);
 }
 
+void randomized_aggregates_agree_across_index_scan_and_reference() {
+    auto root = std::filesystem::temp_directory_path() / "query_differential_aggregate_tests";
+    std::filesystem::remove_all(root);
+
+    KnowledgeKernel kernel(StorageConfig{root});
+    Corpus corpus = populate(kernel);
+
+    Generator generator{std::mt19937(SEED + 1), corpus};
+
+    size_t non_empty = 0;
+
+    for (size_t i = 0; i < QUERY_COUNT; ++i) {
+        AggregateQuery query = generator.random_aggregate();
+
+        AggregateQuery scan = query;
+        scan.selection.force_scan = true;
+
+        auto indexed = kernel.aggregate(query);
+        auto scanned = kernel.aggregate(scan);
+        auto expected = reference_aggregate(query, corpus, kernel);
+
+        auto same = [](const AggregateResult &left, const AggregateResult &right) {
+            if (left.groups.size() != right.groups.size()) {
+                return false;
+            }
+            for (size_t g = 0; g < left.groups.size(); ++g) {
+                if (left.groups[g].key != right.groups[g].key ||
+                    left.groups[g].row_count != right.groups[g].row_count ||
+                    left.groups[g].values.size() != right.groups[g].values.size()) {
+                    return false;
+                }
+                for (size_t c = 0; c < left.groups[g].values.size(); ++c) {
+                    const auto &a = left.groups[g].values[c];
+                    const auto &b = right.groups[g].values[c];
+                    if (a.count != b.count || a.number.has_value() != b.number.has_value()) {
+                        return false;
+                    }
+                    // Sums accumulate in the same order on both sides, so equality is exact; the
+                    // tolerance is only insurance against a future reordering.
+                    if (a.number.has_value() && std::abs(*a.number - *b.number) > 1e-9) {
+                        return false;
+                    }
+                }
+            }
+            return true;
+        };
+
+        if (!same(indexed, scanned) || !same(indexed, expected)) {
+            std::cerr << "aggregate mismatch at query " << i << " (seed " << SEED + 1 << ")\n"
+                      << "  indexed   " << indexed.groups.size() << " groups\n"
+                      << "  scanned   " << scanned.groups.size() << " groups\n"
+                      << "  reference " << expected.groups.size() << " groups\n";
+            assert(false && "randomized aggregate disagreed across evaluation paths");
+        }
+
+        if (!indexed.groups.empty()) {
+            ++non_empty;
+        }
+    }
+
+    assert(non_empty > QUERY_COUNT / 10);
+
+    std::filesystem::remove_all(root);
+}
+
 } // namespace
 
 int main() {
     randomized_queries_agree_across_index_scan_and_reference();
+    randomized_aggregates_agree_across_index_scan_and_reference();
 
     std::cout << "All query_differential tests passed.\n";
     return 0;

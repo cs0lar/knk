@@ -87,6 +87,19 @@ the PR that makes it — see `CONTRIBUTING.md`.
   `MAX_BATCH_SIZE`; available as a `RecordProvenanceBatchCommand` and the `record_provenance_batch`
   MCP tool.
 
+- **Phase 12 — aggregation and grouping:** `aggregate` answers `count`, `count_distinct`, `sum`,
+  `min`, `max` and `avg` over matching assertions, optionally grouped by subject, predicate, object,
+  status, or a fixed-width valid-time or observed-time bucket. Targets include the object's *interned
+  value*, so "average salary by department" is now a single call rather than a fetch-and-compute. The
+  selection half is an ordinary `Query` — same filters, selectors and bitemporal/status rules — so an
+  aggregate and a row query can never disagree about which rows are current. Rows with nothing numeric
+  to read are skipped rather than counted as zero, with each group reporting `row_count` alongside each
+  cell's own count so "10 rows, average over 3" stays visible; a sum over nothing is `null`, not `0`.
+  Aggregation streams: rows are folded into their group and dropped, so memory is bounded by groups
+  rather than matching rows, and counting every row measures ~11x cheaper than the row query over the
+  same rows. Exceeding the 10,000-group cap is an error rather than a silently truncated answer.
+  Available as `AggregateCommand` and the `aggregate` MCP tool.
+
 - **Phase 11 — filters, projection and index selection:** a `Query` now carries a `filter` tree —
   comparisons (`eq|ne|lt|lte|gt|gte`) over the ids, `confidence`, the timestamps, `status`, and
   `object_value` (the object's *interned value*, so "salary >= 100000" is expressible), composed with

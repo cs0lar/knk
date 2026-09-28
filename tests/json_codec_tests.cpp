@@ -169,6 +169,31 @@ void kernel_result_to_json_covers_every_alternative() {
     assert(empty_json.at("assertions").is_array());
     assert(empty_json.at("assertions").empty());
     assert(empty_json.at("truncated") == false);
+
+    // An aggregate: counts serialize as integers, numeric cells as numbers, and a cell with nothing to
+    // report as null rather than 0 -- the distinction the engine is careful to preserve.
+    AggregateResult aggregate_result;
+    AggregateGroup group;
+    group.key = {Value::of_text("Active")};
+    group.row_count = 7;
+    AggregateCell count_cell;
+    count_cell.count = 7;
+    AggregateCell number_cell;
+    number_cell.number = 120000.5;
+    AggregateCell absent_cell;
+    group.values = {count_cell, number_cell, absent_cell};
+    aggregate_result.groups.push_back(std::move(group));
+
+    auto aggregate_json = kernel_result_to_json(KernelResult{aggregate_result});
+    assert(aggregate_json.at("groups").size() == 1);
+    assert(aggregate_json.at("groups")[0].at("key")[0].at("value") == "Active");
+    assert(aggregate_json.at("groups")[0].at("row_count") == 7);
+    assert(aggregate_json.at("groups")[0].at("values")[0] == 7);
+    assert(aggregate_json.at("groups")[0].at("values")[1] == 120000.5);
+    assert(aggregate_json.at("groups")[0].at("values")[2].is_null());
+
+    AggregateResult empty_aggregate;
+    assert(kernel_result_to_json(KernelResult{empty_aggregate}).at("groups").empty());
 }
 
 } // namespace

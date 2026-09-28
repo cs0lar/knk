@@ -75,7 +75,8 @@ void tool_specs_cover_every_kernel_command_with_a_well_formed_schema() {
                                          "neighbors",
                                          "co_occurring_predicates",
                                          "resolve_entity",
-                                         "query"};
+                                         "query",
+                                         "aggregate"};
 
     const auto &specs = tool_specs();
     assert(specs.size() == expected_names.size());
@@ -470,6 +471,68 @@ void query_tool_accepts_filters_and_name_resolution() {
     cleanup(root);
 }
 
+void aggregate_tool_groups_rows_and_reports_absent_numbers_as_null() {
+    auto root = test_root("aggregate_tool_groups_rows_and_reports_absent_numbers_as_null");
+    KnowledgeKernel kernel(StorageConfig{root});
+
+    EntityId alice = kernel.intern_entity("Alice");
+    EntityId bob = kernel.intern_entity("Bob");
+    PredicateId salary = kernel.intern_predicate("salary");
+    PredicateId dept = kernel.intern_predicate("dept");
+    EntityId eng = kernel.intern_entity("eng");
+
+    kernel.commit(alice, salary, kernel.intern_value(Value::of_int64(120000)), 0, OPEN_ENDED, 100, 0.9);
+    kernel.commit(bob, salary, kernel.intern_value(Value::of_int64(90000)), 0, OPEN_ENDED, 200, 0.6);
+    kernel.commit(alice, dept, eng, 0, OPEN_ENDED, 100, 1.0);
+
+    // Average salary, grouped by predicate: the salary group averages two numbers, the dept group has
+    // a text object and so has nothing to average.
+    nlohmann::json args{{"aggregations",
+                         {{{"function", "avg"}, {"target", "object_value"}},
+                          {{"function", "count"}},
+                          {{"function", "count_distinct"}, {"target", "subject"}}}},
+                        {"group_by", {{{"field", "predicate"}}}}};
+
+    auto result = handle_tool_call(kernel, "aggregate", args);
+    assert(!result.is_error);
+
+    auto answer = nlohmann::json::parse(result.content_text);
+    assert(answer.at("groups").size() == 2);
+
+    const auto &salary_group = answer.at("groups")[0];
+    assert(salary_group.at("key")[0].at("value") == salary);
+    assert(salary_group.at("row_count") == 2);
+    assert(salary_group.at("values")[0] == 105000.0); // (120000 + 90000) / 2
+    assert(salary_group.at("values")[1] == 2);
+    assert(salary_group.at("values")[2] == 2); // two distinct subjects
+
+    const auto &dept_group = answer.at("groups")[1];
+    assert(dept_group.at("key")[0].at("value") == dept);
+    assert(dept_group.at("row_count") == 1);
+    assert(dept_group.at("values")[0].is_null()); // nothing numeric to average
+    assert(dept_group.at("values")[1] == 1);      // but the row is still counted
+
+    // A global aggregate has an empty key.
+    auto global = nlohmann::json::parse(
+        handle_tool_call(kernel, "aggregate", nlohmann::json{{"aggregations", {{{"function", "count"}}}}})
+            .content_text);
+    assert(global.at("groups").size() == 1);
+    assert(global.at("groups")[0].at("key").empty());
+    assert(global.at("groups")[0].at("values")[0] == 3);
+
+    // Caller mistakes come back as tool errors rather than throwing.
+    auto bad = [&kernel](const nlohmann::json &args) { return handle_tool_call(kernel, "aggregate", args).is_error; };
+
+    assert(bad(nlohmann::json::object())); // aggregations is required
+    assert(bad(nlohmann::json{{"aggregations", {{{"function", "nonsense"}}}}}));
+    assert(bad(nlohmann::json{{"aggregations", {{{"function", "sum"}, {"target", "nonsense"}}}}}));
+    assert(bad(nlohmann::json{{"aggregations", {{{"function", "count"}}}},
+                              {"group_by", {{{"field", "observed_at_bucket"}}}}}));         // no bucket_width
+    assert(bad(nlohmann::json{{"aggregations", {{{"function", "count"}}}}, {"limit", 5}})); // row-shaping
+
+    cleanup(root);
+}
+
 void batch_tool_schemas_state_their_bound() {
     // The issue these tools answer asks for the batch bound to be discoverable from the tool itself,
     // not just enforced at call time -- so both the description and the schema must carry it, for
@@ -734,6 +797,7 @@ int main() {
     batch_read_tools_answer_in_input_order_with_null_slots();
     query_tool_runs_a_shaped_read_and_reports_truncation();
     query_tool_accepts_filters_and_name_resolution();
+    aggregate_tool_groups_rows_and_reports_absent_numbers_as_null();
     batch_tool_schemas_state_their_bound();
     intern_entity_tool_round_trips_a_string_argument();
     intern_value_tool_round_trips_a_tagged_value_argument();

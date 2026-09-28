@@ -16,6 +16,7 @@
 
 #include <vector>
 
+#include "kernel/aggregate.hpp"
 #include "kernel/assertion.hpp"
 #include "kernel/catalog.hpp"
 #include "kernel/index_manager.hpp"
@@ -36,6 +37,18 @@ class QueryEngine {
     // at all) is false rather than an error -- assertion objects are heterogeneous by design.
     QueryResult execute(const Query &query, const std::vector<Assertion> &assertions, const IndexManager &index_manager,
                         const Catalog &catalog) const;
+
+    // Aggregates the rows an AggregateQuery::selection matches, in a single streaming pass: rows are
+    // folded into their group as they are visited and never materialized as a result set, so memory is
+    // bounded by the number of groups rather than by the number of matching rows. (count_distinct is
+    // the one exception -- it must remember the values it has seen.)
+    //
+    // Throws std::runtime_error for the same class of caller mistakes execute() rejects, plus: no
+    // aggregations, more than MAX_GROUP_BY_FIELDS group-by fields, a bucket field without a positive
+    // width, a selection carrying row-shaping fields that mean nothing here, and -- at evaluation time
+    // -- an aggregate producing more groups than its cap allows.
+    AggregateResult aggregate(const AggregateQuery &query, const std::vector<Assertion> &assertions,
+                              const IndexManager &index_manager, const Catalog &catalog) const;
 };
 
 } // namespace knk

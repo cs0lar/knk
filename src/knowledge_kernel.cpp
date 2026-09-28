@@ -973,6 +973,10 @@ QueryResult KnowledgeKernel::query(const Query &query) const {
     return query_engine_.execute(query, assertions_, index_manager_, catalog_);
 }
 
+AggregateResult KnowledgeKernel::aggregate(const AggregateQuery &query) const {
+    return query_engine_.aggregate(query, assertions_, index_manager_, catalog_);
+}
+
 void KnowledgeKernel::merge_entities(EntityId keep, EntityId absorb, Timestamp merged_at) {
     // Durable-before-visible: append to the log first, then apply to the in-memory Catalog, exactly
     // like commit's append-then-apply ordering.

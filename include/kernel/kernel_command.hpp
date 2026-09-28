@@ -5,6 +5,7 @@
 #include <variant>
 #include <vector>
 
+#include "kernel/aggregate.hpp"
 #include "kernel/assertion.hpp"
 #include "kernel/ids.hpp"
 #include "kernel/provenance_log.hpp"
@@ -276,6 +277,11 @@ struct QueryCommand {
     Query query;
 };
 
+// The aggregate IR (Phase 12), wrapped for the same reason QueryCommand wraps Query.
+struct AggregateCommand {
+    AggregateQuery query;
+};
+
 using KernelCommand =
     std::variant<CommitCommand, CommitByNameCommand, CommitBatchCommand, CommitBatchByNameCommand,
                  CommitRetractionCommand, CommitSupersedingCommand, WriteSnapshotCommand, InternEntityCommand,
@@ -288,6 +294,6 @@ using KernelCommand =
                  FindValueCommand, FindPredicateCommand, EntityNameCommand, EntityValueCommand, PredicateNameCommand,
                  DocumentContentCommand, ProvenanceForCommand, EntityNameBatchCommand, EntityValueBatchCommand,
                  PredicateNameBatchCommand, ProvenanceForBatchCommand, HypothesesForCommand, NeighborsCommand,
-                 CoOccurringPredicatesCommand, ResolveEntityCommand, QueryCommand>;
+                 CoOccurringPredicatesCommand, ResolveEntityCommand, QueryCommand, AggregateCommand>;
 
 } // namespace knk
