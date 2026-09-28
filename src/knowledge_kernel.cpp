@@ -15,8 +15,7 @@
 
 namespace knk {
 
-KnowledgeKernel::KnowledgeKernel(StorageConfig config)
-    : storage_(config), index_manager_(), query_engine_(assertions_, index_manager_, catalog_) {
+KnowledgeKernel::KnowledgeKernel(StorageConfig config) : storage_(config), index_manager_() {
     // Catalog replay is deliberately not part of the snapshot/checkpoint/tail-vs-full-replay
     // branching below: assertions.log never stores names or values, so there is nothing to
     // rebuild this mapping from if entities.log/predicates.log is missing or corrupt. Unlike that
@@ -968,8 +967,11 @@ KnowledgeKernel::provenance_for_batch(const std::vector<AssertionId> &ids) const
 }
 
 // A thin forward to QueryEngine, deliberately: the kernel owns no query logic of its own, so there is
-// exactly one place where the bitemporal/status rules compose.
-QueryResult KnowledgeKernel::query(const Query &query) const { return query_engine_.execute(query); }
+// exactly one place where the bitemporal/status rules compose. The state is passed rather than held,
+// so the engine keeps no references into this object.
+QueryResult KnowledgeKernel::query(const Query &query) const {
+    return query_engine_.execute(query, assertions_, index_manager_, catalog_);
+}
 
 void KnowledgeKernel::merge_entities(EntityId keep, EntityId absorb, Timestamp merged_at) {
     // Durable-before-visible: append to the log first, then apply to the in-memory Catalog, exactly

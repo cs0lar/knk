@@ -353,8 +353,8 @@ class KnowledgeKernel {
 
     std::vector<Assertion> assertions_;
 
-    // Declared last: it holds const references to assertions_, index_manager_ and catalog_, so it must
-    // be constructed after them.
+    // Stateless: the assertions, indexes and catalog a query runs against are passed to execute()
+    // rather than held, which is what keeps KnowledgeKernel safe to move (see query_engine.hpp).
     QueryEngine query_engine_;
 };
 } // namespace knk

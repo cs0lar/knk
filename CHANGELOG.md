@@ -87,6 +87,21 @@ the PR that makes it — see `CONTRIBUTING.md`.
   `MAX_BATCH_SIZE`; available as a `RecordProvenanceBatchCommand` and the `record_provenance_batch`
   MCP tool.
 
+- **Phase 11 — filters, projection and index selection:** a `Query` now carries a `filter` tree —
+  comparisons (`eq|ne|lt|lte|gt|gte`) over the ids, `confidence`, the timestamps, `status`, and
+  `object_value` (the object's *interned value*, so "salary >= 100000" is expressible), composed with
+  `and`/`or`/`not` up to 8 deep. Structurally broken filters are rejected with an error, while a
+  comparison meeting a row whose object value is of another kind simply does not match, since objects
+  are a mix of named entities and typed literals by design. `resolve_names` returns catalog names and
+  object values alongside the returned page, so rendering query results no longer needs a second round
+  trip through the batch resolvers. Index selection now uses the observed-time index for a subject
+  query with an `observed_to` bound and picks the smaller bucket when a current-shaped query names both
+  an object and a predicate — cost only: a new randomized differential suite answers 2,000 seeded
+  queries three ways (index-selected, forced-scan, and an independently written brute-force evaluator)
+  and requires all three to agree. Also fixes two Phase 10 defects: an empty index bucket no longer
+  triggers a full rescan, and `QueryEngine` no longer holds references into `KnowledgeKernel`, which
+  had made the kernel unsafe to move.
+
 - **Phase 10 — query IR and executor parity:** `KnowledgeKernel::query(const Query&)` answers a shaped
   read — optional subject/predicate/object, a valid-time point, an inclusive observed-time window,
   `open_ended_only`, an explicit status set, deterministic ordering, and `limit`/`offset` paging —

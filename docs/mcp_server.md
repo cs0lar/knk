@@ -110,7 +110,7 @@ against a running server for the full JSON Schema of each.
 | `neighbors` | Bounded breadth-first traversal of current-edge neighbors, both directions. |
 | `co_occurring_predicates` | Currently active predicates for a subject. |
 | `resolve_entity` | Resolves an id through recorded merge redirects to its canonical id. |
-| `query` | Runs a shaped read against the query IR: subject/predicate/object, a valid-time point, an observed-time window, open-endedness, an explicit status set, ordering and paging — any combination, all arguments optional. Returns `{assertions, truncated}`. Capped at 10,000 rows; `ir_version` is rejected if unknown. |
+| `query` | Runs a shaped read against the query IR: subject/predicate/object, a valid-time point, an observed-time window, open-endedness, an explicit status set, a `filter` tree (ordered comparisons, comparisons against the object's value, and and/or/not up to 8 deep), ordering and paging — any combination, all arguments optional. `resolve_names` adds a parallel `names` array so rendering needs no second round trip. Returns `{assertions, truncated}` plus `names` when asked. Capped at 10,000 rows; an unknown `ir_version` or a malformed filter is rejected. |
 
 ## Example session
 

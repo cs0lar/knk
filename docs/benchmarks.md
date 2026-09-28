@@ -30,7 +30,8 @@ cmake --build build-release --target commit_benchmark query_benchmark replay_ben
   call instead of N, so the difference is purely the collapsed durability boundary. A fourth section
   attaches provenance to a committed batch both ways (`record_provenance` per assertion vs. one
   `record_provenance_batch`) against the same batch, isolating the provenance log's fsync count.
-* **`query_benchmark`** — read-path throughput (`current`, `valid_at`, `known_at`, `neighbors`) over a
+* **`query_benchmark`** — read-path throughput (`current`, `valid_at`, `known_at`, `neighbors`) plus the
+  query IR's own paths (index-selected, forced-scan, filtered, and name-resolving) over a
   kernel pre-populated with 5,000 subjects, each with a `WORKS_AT` and a `LIVES_IN` assertion (the
   latter chained subject-to-subject so `neighbors` has real edges to walk).
 * **`replay_benchmark`** — startup/reopen cost under three scenarios against the same populated log:
@@ -131,6 +132,42 @@ Reads are 4-6 orders of magnitude faster than commits, as expected: no durabilit
 path, just in-memory hash-map/index lookups. `neighbors` is the slowest of the four by a wide margin
 (still ~545k/sec) since it does a bidirectional BFS instead of a single index lookup — the one query
 method worth watching if graph-traversal usage grows in a future phase.
+
+### `query_benchmark` — the query IR (2026-09-28)
+
+Recorded when Phase 11 added filters, projection and index selection, on the same machine as the
+`commit_batch` numbers above (and so not comparable to the 2026-07-20 baseline). Same 5,000-subject,
+10,000-assertion corpus as the section above it.
+
+```
+== query IR over the same 5000 subjects ==
+query{subject,Active,open_ended}                  15124273.127 queries/sec
+query{subject,observed_to}                        15087598.597 queries/sec
+query{...} resolve_names                          10962205.385 queries/sec
+query{...} force_scan                                    0.005 ms/query
+query{filter: confidence < 0.5} (matches none)           0.073 ms/query
+query{filter: confidence >= 0.5} (matches all)           0.851 ms/query
+```
+
+Four things worth reading off these, all of them baselines for later phases to beat:
+
+* **The IR is about 2x faster than the method it reproduces** — 15.1M/sec against `current()`'s
+  7.2M/sec for the identical question. Not an optimization, just a shorter path: `current()` walks the
+  subject's predicate set and does a current-index lookup per predicate, while the IR takes one
+  subject-index lookup and filters. Worth knowing before anyone "optimizes" the IR by routing it back
+  through the methods.
+* **Index selection is worth ~30x here** (0.005 ms/query scanned versus ~0.000066 ms indexed), and the
+  gap grows linearly with corpus size, since the scan is O(total assertions) while the indexed path is
+  O(rows for that subject). The differential tests assert the two return the *same* rows; this is the
+  cost side of that comparison.
+* **Name resolution costs ~27%** on this shape (11.0M/sec against 15.1M/sec) for two catalog lookups
+  per returned row. That is the price of not making a second round trip through the batch resolvers,
+  and it is charged only on the returned page.
+* **Materializing and sorting dominates a broad filter**: the same scan costs 0.073 ms when nothing
+  matches and 0.851 ms when everything does — ~12x, entirely from building and sorting 10,000
+  `Assertion` copies. Per-row filter evaluation itself is ~7 ns, most of it constructing a `Value` to
+  compare against. Both are Phase 15 targets (columnar evaluation avoids the `Value`; a top-k heap
+  avoids sorting what the limit will discard).
 
 ### `replay_benchmark`
 

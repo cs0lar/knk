@@ -318,6 +318,200 @@ void query_combines_filters_no_single_method_can() {
     cleanup(root);
 }
 
+void query_filters_on_fields_and_object_values() {
+    auto root = test_root("query_filters_on_fields_and_object_values");
+    KnowledgeKernel kernel(StorageConfig{root});
+    auto f = seed(kernel);
+
+    // A literal-valued object, so ObjectValue meets both text and numeric rows.
+    EntityId forty_two = kernel.intern_value(Value::of_int64(42));
+    AssertionId numeric = kernel.commit(f.alice, f.works_at, forty_two, JAN_1_2024, OPEN_ENDED, OBS_6, 0.55);
+
+    Query confidence;
+    confidence.filter = Filter::compare(FilterField::Confidence, CompareOp::Gte, Value::of_double(0.90));
+    assert(sorted_ids(run_both_ways(kernel, confidence)) ==
+           (std::vector<AssertionId>{f.closed, f.current, f.superseding, f.retraction}));
+
+    Query status;
+    status.filter = Filter::compare(FilterField::Status, CompareOp::Eq, Value::of_text("Hypothesis"));
+    assert(ids_of(run_both_ways(kernel, status)) == (std::vector<AssertionId>{f.hypothesis}));
+
+    // The object's interned value, not its id: "Acme" names an entity, so a text comparison matches.
+    Query by_value;
+    by_value.filter = Filter::compare(FilterField::ObjectValue, CompareOp::Eq, Value::of_text("Acme"));
+    assert(sorted_ids(run_both_ways(kernel, by_value)) ==
+           (std::vector<AssertionId>{f.closed, f.lives, f.superseded, f.retracted, f.retraction}));
+
+    // An ordered comparison against a numeric operand matches only the numeric row. Every text-valued
+    // object is a kind mismatch, which is "no match" rather than an error -- objects are heterogeneous
+    // by design.
+    Query numeric_only;
+    numeric_only.filter = Filter::compare(FilterField::ObjectValue, CompareOp::Lt, Value::of_int64(1000));
+    assert(ids_of(run_both_ways(kernel, numeric_only)) == (std::vector<AssertionId>{numeric}));
+
+    // An object id with nothing interned against it also simply does not match.
+    AssertionId dangling = kernel.commit(f.bob, f.works_at, 987654, JAN_1_2024, OPEN_ENDED, OBS_6, 0.5);
+    assert(ids_of(run_both_ways(kernel, numeric_only)) == (std::vector<AssertionId>{numeric}));
+    assert(kernel.get(dangling).has_value()); // it exists, it just has no value to compare
+
+    // Timestamp fields, and valid_to == 0 as the open-ended test.
+    Query open_ended;
+    open_ended.filter = Filter::compare(FilterField::ValidTo, CompareOp::Eq, Value::of_timestamp(OPEN_ENDED));
+    auto open_ids = sorted_ids(run_both_ways(kernel, open_ended));
+    assert(std::find(open_ids.begin(), open_ids.end(), f.closed) == open_ids.end());
+    assert(std::find(open_ids.begin(), open_ids.end(), f.current) != open_ids.end());
+
+    cleanup(root);
+}
+
+void query_filter_boolean_composition() {
+    auto root = test_root("query_filter_boolean_composition");
+    KnowledgeKernel kernel(StorageConfig{root});
+    auto f = seed(kernel);
+
+    Query conjunction;
+    conjunction.filter =
+        Filter::all_of({Filter::compare(FilterField::Confidence, CompareOp::Gte, Value::of_double(0.90)),
+                        Filter::compare(FilterField::Status, CompareOp::Eq, Value::of_text("Active"))});
+    assert(sorted_ids(run_both_ways(kernel, conjunction)) ==
+           (std::vector<AssertionId>{f.closed, f.current, f.superseding}));
+
+    Query disjunction;
+    disjunction.filter =
+        Filter::any_of({Filter::compare(FilterField::Status, CompareOp::Eq, Value::of_text("Hypothesis")),
+                        Filter::compare(FilterField::Confidence, CompareOp::Gte, Value::of_double(1.0))});
+    assert(sorted_ids(run_both_ways(kernel, disjunction)) == (std::vector<AssertionId>{f.hypothesis, f.retraction}));
+
+    Query negation;
+    negation.filter = Filter::negate(Filter::compare(FilterField::Status, CompareOp::Eq, Value::of_text("Active")));
+    assert(sorted_ids(run_both_ways(kernel, negation)) ==
+           (std::vector<AssertionId>{f.superseded, f.hypothesis, f.retracted, f.retraction}));
+
+    // Filters compose with the selectors rather than replacing them.
+    Query combined;
+    combined.subject = f.bob;
+    combined.filter = Filter::negate(Filter::compare(FilterField::Status, CompareOp::Eq, Value::of_text("Active")));
+    assert(sorted_ids(run_both_ways(kernel, combined)) ==
+           (std::vector<AssertionId>{f.superseded, f.retracted, f.retraction}));
+
+    cleanup(root);
+}
+
+void query_filter_rejects_malformed_trees() {
+    auto root = test_root("query_filter_rejects_malformed_trees");
+    KnowledgeKernel kernel(StorageConfig{root});
+    seed(kernel);
+
+    auto rejects = [&kernel](Filter filter) {
+        Query query;
+        query.filter = std::move(filter);
+        try {
+            kernel.query(query);
+        } catch (const std::runtime_error &) {
+            return true;
+        }
+        return false;
+    };
+
+    // Structural mistakes throw, because a filter that can never match anything is a caller error, not
+    // an empty answer the caller then has to explain.
+    assert(rejects(Filter::compare(FilterField::Confidence, CompareOp::Gte, Value::of_int64(1))));
+    assert(rejects(Filter::compare(FilterField::ObservedAt, CompareOp::Eq, Value::of_double(1.0))));
+    assert(rejects(Filter::compare(FilterField::Subject, CompareOp::Eq, Value::of_text("Alice"))));
+    assert(rejects(Filter::compare(FilterField::Status, CompareOp::Eq, Value::of_text("Nonsense"))));
+    assert(rejects(Filter::all_of({})));
+    assert(rejects(Filter::any_of({})));
+
+    Filter two_children;
+    two_children.kind = FilterKind::Not;
+    two_children.children = {Filter::compare(FilterField::Confidence, CompareOp::Gte, Value::of_double(0.5)),
+                             Filter::compare(FilterField::Confidence, CompareOp::Lt, Value::of_double(0.5))};
+    assert(rejects(std::move(two_children)));
+
+    // Nesting past the depth bound is rejected rather than truncated.
+    Filter deep = Filter::compare(FilterField::Confidence, CompareOp::Gte, Value::of_double(0.5));
+    for (size_t i = 0; i < MAX_FILTER_DEPTH + 1; ++i) {
+        deep = Filter::negate(std::move(deep));
+    }
+    assert(rejects(std::move(deep)));
+
+    // Exactly at the bound is accepted, so the check is "deeper than", not "at least".
+    Filter at_bound = Filter::compare(FilterField::Confidence, CompareOp::Gte, Value::of_double(0.0));
+    for (size_t i = 0; i + 1 < MAX_FILTER_DEPTH; ++i) {
+        at_bound = Filter::negate(std::move(at_bound));
+    }
+    assert(!rejects(std::move(at_bound)));
+
+    cleanup(root);
+}
+
+void query_resolve_names_returns_catalog_lookups_for_the_page() {
+    auto root = test_root("query_resolve_names_returns_catalog_lookups_for_the_page");
+    KnowledgeKernel kernel(StorageConfig{root});
+    auto f = seed(kernel);
+
+    EntityId forty_two = kernel.intern_value(Value::of_int64(42));
+    kernel.commit(f.alice, f.works_at, forty_two, JAN_1_2024, OPEN_ENDED, OBS_6, 0.55);
+
+    Query unresolved;
+    assert(kernel.query(unresolved).names.empty()); // off by default, nothing extra paid
+
+    Query resolved;
+    resolved.subject = f.alice;
+    resolved.resolve_names = true;
+    resolved.limit = 2;
+
+    auto result = kernel.query(resolved);
+    assert(result.assertions.size() == 2);
+    // Parallel to the page, not to the whole match set: the point of resolving late.
+    assert(result.names.size() == result.assertions.size());
+    assert(result.truncated);
+
+    for (size_t i = 0; i < result.assertions.size(); ++i) {
+        assert(result.names[i].subject_name == std::optional<std::string>("Alice"));
+        assert(result.names[i].predicate_name.has_value());
+        assert(result.names[i].object_value.has_value());
+    }
+
+    // A literal object resolves to its typed value rather than a name.
+    Query literal;
+    literal.object = forty_two;
+    literal.resolve_names = true;
+    auto literal_result = kernel.query(literal);
+    assert(literal_result.names.size() == 1);
+    assert(literal_result.names[0].object_value == std::optional<Value>(Value::of_int64(42)));
+    assert(literal_result.names[0].subject_name == std::optional<std::string>("Alice"));
+
+    // An object that was never interned resolves to nothing, rather than failing the query.
+    kernel.commit(f.alice, f.works_at, 987654, JAN_1_2024, OPEN_ENDED, OBS_6, 0.5);
+    Query dangling;
+    dangling.object = 987654;
+    dangling.resolve_names = true;
+    auto dangling_result = kernel.query(dangling);
+    assert(dangling_result.names.size() == 1);
+    assert(!dangling_result.names[0].object_value.has_value());
+
+    cleanup(root);
+}
+
+void query_current_shaped_lookup_with_no_matching_rows_is_empty() {
+    auto root = test_root("query_current_shaped_lookup_with_no_matching_rows_is_empty");
+    KnowledgeKernel kernel(StorageConfig{root});
+    seed(kernel);
+
+    // An object the current-state index holds nothing for. Phase 10 treated an empty index bucket as
+    // "no index applied" and rescanned the whole log; the answer was the same, but the work was not.
+    // The answer staying empty is the part that is observable, so that is what this pins.
+    Query query;
+    query.object = 424242;
+    query.statuses = {AssertionStatus::Active};
+    query.open_ended_only = true;
+
+    assert(run_both_ways(kernel, query).empty());
+
+    cleanup(root);
+}
+
 void query_orders_deterministically() {
     auto root = test_root("query_orders_deterministically");
     KnowledgeKernel kernel(StorageConfig{root});
@@ -487,6 +681,11 @@ int main() {
     query_matches_changes_since_in_order();
     query_resolves_merged_entities_like_the_methods();
     query_combines_filters_no_single_method_can();
+    query_filters_on_fields_and_object_values();
+    query_filter_boolean_composition();
+    query_filter_rejects_malformed_trees();
+    query_resolve_names_returns_catalog_lookups_for_the_page();
+    query_current_shaped_lookup_with_no_matching_rows_is_empty();
     query_orders_deterministically();
     query_limit_offset_and_truncation();
     query_caps_limit_at_the_result_ceiling();

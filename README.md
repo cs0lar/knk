@@ -40,6 +40,9 @@ never loses the history of how its knowledge changed.
   a valid-time point, an observed-time window, open-endedness, an explicit status set, deterministic
   ordering and paging, in any combination. Every single-purpose read above is expressible as one, and
   results are bounded and report whether they were truncated.
+- **Filters and projection** — queries carry a filter tree (ordered comparisons, comparisons against
+  an object's interned value, and `and`/`or`/`not`), and can resolve catalog names for the returned
+  page in the same call, so rendering results needs no second round trip.
 - **Entity/predicate catalog** — idempotent name and typed-literal interning
   (`intern_entity`/`intern_value`/`intern_predicate`), plus a payload store for large content
   (documents) addressed by id.

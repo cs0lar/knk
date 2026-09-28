@@ -158,6 +158,58 @@ Notes that matter when comparing the two:
   `QueryResult::truncated` distinguishes "that was all" from "here is the first page".
 * **Versioned.** A `Query` carrying an unknown `ir_version` is rejected, never reinterpreted.
 
+### Filters (Phase 11)
+
+The selectors above are equality on one id. A `Query::filter` is everything else — ordered
+comparisons, comparisons against the object's *value* rather than its id, and boolean combinations:
+
+```text
+comparison   field op operand        e.g. confidence >= 0.9
+and / or     one or more children
+not          exactly one child
+```
+
+Fields and the operand kind each expects:
+
+| Field | Operand kind | Compares against |
+|---|---|---|
+| `subject`, `predicate`, `object` | `int64` | the stored id |
+| `object_value` | any | the object's interned `Value` |
+| `confidence` | `double` | `confidence` |
+| `valid_from`, `valid_to`, `observed_at` | `timestamp` | that field (`valid_to == 0` means open-ended) |
+| `status` | `text` | the status name, e.g. `"Active"` |
+
+Ordering is defined for every kind: numerically for `int64`/`double`/`timestamp`, lexicographically for
+`text`, and `false < true` for `bool`.
+
+The distinction that matters most here is **structural errors throw, heterogeneous data does not
+match**:
+
+* An operand of the wrong kind for its field, an unknown status name, an empty `and`/`or`, a `not`
+  without exactly one child, or nesting deeper than `MAX_FILTER_DEPTH` (8) is a caller mistake and is
+  rejected with an error. A filter that could never match anything is worth saying out loud.
+* An `object_value` comparison against a row whose object value is of a *different* kind — or whose
+  object has no interned value at all — is simply false for that row. Objects across the kernel are a
+  mix of named entities and typed literals, so "object value > 100" meeting a text object is ordinary,
+  not an error.
+
+Filters are evaluated per row and never change which index is selected: selectors are the pushdown
+surface, filters are not. That keeps "what it returns" and "how fast it runs" independently reviewable,
+which is what the randomized differential tests in `tests/query_differential_tests.cpp` check — every
+generated query is answered with index selection, with `force_scan`, and by an independent brute-force
+evaluator, and all three must agree.
+
+### Name resolution (Phase 11)
+
+`Query::resolve_names` adds a `names` array parallel to the returned rows, each entry carrying the
+subject's name (absent if the subject is not a text entity), the predicate's name, and the object's
+interned `Value` (absent if it was never interned). It exists so a caller rendering query results does
+not need a second round trip through `entity_name_batch`/`predicate_name_batch`/`entity_value_batch`.
+
+Only the returned **page** is resolved, never the whole match set: a 10,000-row match paged three at a
+time costs three lookups per field, not 10,000. It is off by default because it costs two catalog
+lookups per returned row (~27% on the shape measured in `docs/benchmarks.md`).
+
 ---
 
 ## Quick reference
