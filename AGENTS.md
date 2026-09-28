@@ -1027,6 +1027,190 @@ Current implementation status :
 * No optimization work (SIMD, mmap, lock-free readers, NUMA allocation, background compaction, Bloom
  filters, compression) has been implemented yet — this status block covers only the benchmark/baseline
  groundwork the Performance Rules require before any of that can start.
+* **Superseded as a standalone phase by Phases 10-19 below (2026-09-28).** Phase 9 was always "someday,
+ once a bottleneck shows up." The query engine is that bottleneck, so its items are now sequenced into
+ the phases that need them (mmap into Phase 14, vectorized/SIMD scanning into Phase 15, concurrent
+ readers into Phase 13), each still gated on a recorded baseline. Bloom filters, compression, NUMA
+ allocation, and background compaction remain unsequenced and unjustified.
+
+-- -
+
+### Phases 10-19 — Query Engine (planned 2026-09-28)
+
+**Why now.** Phases 1-8 closed the correctness model, and the two most recent features (#51-#54 batch
+writes, #55-#56 batch reads) were both the same complaint from a real caller: *the read surface makes
+you issue N calls because it only answers fixed-shape questions.* Today a caller cannot ask for
+"active `works_at` assertions whose object is one of these five, as of last quarter, grouped by
+object" at all — it must fetch records and do the work itself. Batch reads removed the per-id round
+trips; they did not give the kernel the ability to answer a shaped question. That is what this arc
+adds.
+
+**The through-line: the engine adds no new source of truth.** It is read-only. `assertions.log` stays
+authoritative, every structure the engine introduces is derived and rebuildable from it, and no phase
+here touches a commit path. If a phase below appears to need a new durable authority, that is a sign
+the phase is wrong, not that the invariant should bend.
+
+Six decisions hold across all ten phases:
+
+1. **A reified query IR, not SQL text.** Queries are closed, typed, JSON-serializable structs — the
+ same shape (and for the same reason) as `KernelCommand`: an MCP client can discover them from a JSON
+ Schema, and there is no parser, no dialect, and no grammar to maintain. "SQL" stays on the Do Not Do
+ Yet list; see that section's amendment. A caller that wants SQL can compile it to this IR outside the
+ kernel.
+2. **Parity with the existing methods is the correctness gate.** Every current query method must be
+ expressible as an IR query returning *identical* results, and that is asserted by differential tests,
+ not by reading the code. From Phase 11 on, a brute-force evaluator over `assertions_` is the
+ reference: randomized queries must agree with it. Optimizations are then free to be clever, because
+ the gate never changes.
+3. **Bounded by construction.** The engine is reachable over MCP, so an unbounded query is a
+ denial-of-service against the host process. Every query carries a limit with a hard cap, and the
+ later phases add scan/time/group budgets that fail loudly rather than degrade.
+4. **Bitemporal semantics are the engine's, not the caller's.** Status filtering, `valid_to`
+ exclusivity, and the `Superseded`/`Retracted`/`Retraction` exclusions behave exactly as
+ `docs/query_semantics.md` documents. The engine may not invent a fifth interpretation of "current".
+5. **Performance phases are benchmark-first**, per the Performance Rules: record a baseline in
+ `docs/benchmarks.md`, then optimize, then compare in the same run on the same machine.
+6. **Each phase is one PR**, small enough to read in one sitting, and each leaves the tree shippable.
+
+Layering (the engine slots in above `IndexManager`, which keeps returning ids only):
+
+```text
+KnowledgeKernel     public API; owns QueryEngine, hands it const access to assertions_ + IndexManager
+QueryEngine         plan + execute an IR query; the only place query semantics compose
+IndexManager        unchanged: in-memory/persistent indexes, ids only
+StorageEngine       unchanged, plus the derived column store from Phase 14
+AssertionLog        unchanged
+```
+
+#### Phase 10 — Query IR and executor parity
+
+The foundation, deliberately boring: no new storage, no new semantics, no performance claim.
+
+* `include/kernel/query.hpp` — a closed `Query` struct: subject/predicate/object selectors (any
+ combination, any omitted), a bitemporal as-of (`valid_at`, `known_at`, or both), an explicit status
+ set, ordering, `limit`/`offset`.
+* `QueryEngine` executing it over the existing indexes, `KnowledgeKernel::query(const Query&)`, a
+ `QueryCommand`, and one MCP `query` tool.
+* `limit` defaults and is capped by a `MAX_QUERY_RESULT` bound, stated in the tool description the way
+ `MAX_BATCH_SIZE` is.
+* **Tests:** every existing query method (`current`, `valid_at`, `known_at`, `valid_at_known_at`,
+ `current_by_object`, `current_by_predicate`, `hypotheses_for`, `assertions_for_subject`,
+ `changes_since`) re-expressed as an IR query and asserted equal to the method's own result.
+* **Exit:** parity green; existing methods untouched and still the documented way to ask simple things.
+
+#### Phase 11 — Filters, projection, and index selection
+
+* Predicates over object `Value`s (typed comparisons), confidence, timestamps, and status, composed
+ with AND/OR/NOT at a bounded depth.
+* Projection, including optional catalog name resolution, so a rendering caller stops needing the
+ Phase-16-of-#55 batch resolvers for query results at all.
+* Heuristic index selection: pick among subject/current/predicate/object/observed-time indexes, else
+ scan. Selection may change cost, never results.
+* **Tests:** a brute-force evaluator plus randomized query generation — the reference from decision 2.
+ Add a forced-scan mode so every query can be run both ways and compared.
+* **Exit:** `query_benchmark` section with a recorded baseline.
+
+#### Phase 12 — Aggregation and grouping
+
+Where "analytics" starts being true rather than aspirational.
+
+* `count`, `count distinct`, `sum`/`min`/`max`/`avg` over numeric object values or confidence; group by
+ subject, predicate, object, status, or a fixed-width valid/observed time bucket.
+* Single-pass and streaming: bounded memory, an explicit group-count cap that errors rather than
+ silently truncating.
+* An `aggregate` MCP tool (separate from `query` — a different result shape deserves its own schema).
+* **Tests:** differential against brute-force aggregation; as-of aggregates obey the same status rules
+ as the record queries.
+
+#### Phase 13 — Read-only concurrent opens ("many readers later")
+
+The hard blocker for *external* analytics: today `StorageEngine` takes an exclusive `flock()`, so a
+second process cannot even open the root read-only while the kernel runs.
+
+* A read-only open mode taking a **shared** lock, many readers alongside the single writer, exactly the
+ additive change the Concurrency Rules already anticipate.
+* A reader never writes: no index self-heal, no checkpoint rewrite, no snapshot write. A reader that
+ finds a corrupt index fails loudly instead, because repairing is a write.
+* Readers see a consistent committed prefix, not a torn mid-commit state.
+* **Tests:** reader opens succeed against a live writer and fail closed on corruption; a reader leaves
+ every file byte-identical; a reader sees commits up to a point and never a partial batch.
+* **Docs:** `docs/storage_format.md`'s "Storage root lock" section.
+
+#### Phase 14 — Columnar projection store
+
+The substrate for speed, and the first phase that adds files.
+
+* `columns/`: per-field arrays (subject, predicate, object, valid_from, valid_to, observed_at,
+ confidence, status) in assertion-id order, appended in lockstep with `assertions.log` (batch commits
+ included), memory-mapped for scans.
+* **Derived state, explicitly**: rebuildable from `assertions.log`, so corruption gets the Phase 3
+ index treatment — discard and rebuild, never fatal, never authoritative. It is checkpointed like the
+ indexes so a crash cannot leave columns silently behind the log.
+* **Tests:** a rebuild from the log equals the columns byte-for-byte; corruption self-heals; a batch
+ commit appends every column in lockstep; restart parity.
+* **Exit:** scan baselines recorded before the next phase optimizes them.
+
+#### Phase 15 — Vectorized execution
+
+* Batch-at-a-time operators over column spans: filter to a selection vector, then project or
+ aggregate, with no per-row virtual dispatch.
+* Straight auto-vectorizable loops first; explicit SIMD intrinsics only where a benchmark shows the
+ compiler did not do it. This is where Phase 9's "SIMD scanning" actually lands, with a number attached.
+* **Exit:** a documented speedup against Phase 14's baseline, correctness gate unchanged.
+
+#### Phase 16 — Statistics, cost-based planning, and `explain`
+
+* Per-predicate cardinality, distinct subject/object counts, and observed/valid time ranges, derived
+ from the columns and persisted as derived state.
+* Cost-based selection replacing Phase 11's heuristics, plus an `explain_query` MCP tool returning the
+ chosen plan — an analytics caller needs to see and predict what the engine will do.
+* **Tests:** plan choices asserted on shaped data; results identical under the chosen plan and a forced
+ scan (decision 2, again); `explain` output stable enough to assert on.
+
+#### Phase 17 — Columnar result handoff
+
+A million-row answer must not travel as JSON-RPC text.
+
+* Large results spill to a columnar file the caller maps directly; the MCP tool returns a descriptor
+ (path, schema, row count) instead of rows, with a stated lifecycle for cleanup.
+* **Format decision to make in the PR, with the reasoning recorded:** hand-written Arrow IPC against
+ the published spec (no dependency, maximum interoperability — DuckDB/Polars/pandas read it natively)
+ versus a knk-specific documented format. The recommendation is Arrow IPC *without* vendoring Arrow
+ C++, which would be a dependency far larger than everything in `third_party/` combined and against
+ the discipline the nlohmann note sets out.
+* **Tests:** written files round-trip through a hand-written reader in the test suite; every `Value`
+ kind maps to a documented column type; descriptor lifecycle including cleanup.
+
+#### Phase 18 — Query surface hardening
+
+* Cursors/pagination for JSON-sized results, resource budgets (rows scanned, wall-clock, group count)
+ surfacing as structured errors, and catalog/schema discovery tools so a caller can build a query
+ without guessing predicate names.
+* IR versioning, so a stored query keeps meaning what it meant.
+* **Tests:** budgets enforced; cursors stable against a concurrent writer, which Phase 13's snapshot
+ readers make well-defined.
+
+#### Phase 19 — As-of-commit reconstruction
+
+The one semantic gap an analytics caller will certainly hit, and it is currently *documented as a
+non-answer* in the Query Semantics section: `known_at` filters on status **now**, so once a correction
+lands it can no longer tell you what you believed last quarter. "What did our numbers look like at
+close" is therefore unanswerable today.
+
+It becomes answerable, and cheaply, once the columns exist: `supersedes_id`/`retracts_id` live on the
+*later* record, so status as of commit N is derivable by considering only records with `id <= N` — an
+assertion was Active as of N unless some record at or before N superseded or retracted it. One
+columnar pass, no new durable state.
+
+* An as-of-commit (or as-of-observed-time) mode on the IR, and the aggregates that ride on it.
+* **Tests:** reconstructed status at commit N equals what `current()` returned when the log held
+ exactly N records — checkable by replaying a log prefix into a scratch kernel and comparing.
+* **Docs:** the Query Semantics subtlety about `known_at` gets a pointer to this as the real answer.
+
+**Deliberately not in this arc:** joins beyond id→name projection, a general graph query language
+(Phase 7's bounded traversal remains the only exception), RDF/SPARQL, materialized views, a text/full
+-text index over entity names (#55 settled that this belongs in the caller, not the kernel), and any
+network-facing transport. Each stays on the Do Not Do Yet list.
 
 -- -
 
@@ -1515,7 +1699,40 @@ that would require replaying the log up to a given commit point, which is not so
 method does today. Not a bug — the existing tests (`known_at_excludes_future_observed_fact`,
 `valid_at_known_at_respects_both_times`) already lock in the current-status-filtered behavior — but
 worth knowing before reaching for these methods to answer "what did we believe back then," which
-they do not actually answer once a later correction has landed.
+they do not actually answer once a later correction has landed. **Phase 19 (see "Current Roadmap") is
+where that question gets a real answer**, by reconstructing status as of a commit from the
+`supersedes_id`/`retracts_id` links rather than from present-day status.
+
+-- -
+
+## Query Engine
+
+**Added 2026-09-28, planning Phases 10-19.** These rules bind any work on the query engine; the
+roadmap section carries the per-phase detail.
+
+*What is the invariant?* The engine is **read-only and adds no source of truth.** `assertions.log`
+stays authoritative; every structure the engine adds (columns, statistics, plans, spilled results) is
+derived, rebuildable from the log, and gets the Phase 3 index treatment on corruption — discard and
+rebuild, never fatal, never authoritative. An IR query returns exactly what the equivalent existing
+method returns, and bitemporal/status semantics stay as `docs/query_semantics.md` documents them.
+
+*Why this design?* A reified, typed, JSON-serializable IR rather than SQL text, for the same reason
+`KernelCommand` is reified: a boundary can serialize and a client can discover it, with no parser,
+dialect, or grammar to own. Planning and vectorization are free to change how a query runs precisely
+because *what* it returns is pinned by differential tests against the existing methods and against a
+brute-force evaluator.
+
+*What are the failure modes?* An unbounded query exhausting the host process — hence a mandatory,
+capped `limit` from Phase 10 and explicit scan/time/group budgets that error rather than truncate
+silently. A plan that changes results rather than cost; every optimization phase must be runnable
+against a forced-scan plan and compared. Derived state drifting behind the log, handled by the same
+checkpoint discipline the indexes use. A reader repairing state it only opened to read (Phase 13:
+readers never write).
+
+*How is it tested?* Differential testing is the gate, not code review: every existing query method
+re-expressed as IR and asserted equal (Phase 10), then randomized queries compared against a
+brute-force evaluator and against forced-scan plans (Phase 11 onward). Performance phases additionally
+record a before/after in `docs/benchmarks.md`.
 
 -- -
 
@@ -1799,6 +2016,14 @@ Before adding an optimization:
 
 Do not add SIMD, mmap, lock - free readers, NUMA allocation, Bloom filters, compression, or background compaction before the architecture supports them cleanly.
 
+**Amended 2026-09-28 for Phases 10-19.** Three of those items are now *sequenced* rather than
+forbidden, because the query engine is the demonstrated bottleneck that was always the precondition:
+mmap in Phase 14, vectorized/SIMD scanning in Phase 15, concurrent readers in Phase 13. Sequenced does
+not mean exempt — each still records a baseline in `docs/benchmarks.md` first and reports a before/after
+from the same run on the same machine, and each still has to keep the correctness gate green. NUMA
+allocation, Bloom filters, compression, and background compaction remain unsequenced: no measurement
+justifies them yet.
+
 -- -
 
 ## Concurrency Rules
@@ -1827,6 +2052,17 @@ When concurrency is introduced:
 * Commits must be durable before visible.
 * Index updates must be atomic relative to query visibility.
 * Replaying the log must be deterministic.
+
+**Amended 2026-09-28: "many readers later" is now scheduled, as Phase 13.** An external analytics
+process cannot currently open a live storage root at all, which is the concrete blocker that schedules
+it. The shape, additive to the exclusive lock already in place:
+
+* A read-only open takes a **shared** `flock()`; many readers coexist with the single writer.
+* A reader never writes — no index self-heal, no checkpoint or snapshot rewrite. A reader meeting a
+ corrupt index fails loudly, because repairing it would be a write. This is a genuine behavioral
+ difference from a read-write open, and has to be documented as one.
+* A reader sees a consistent committed prefix of the log, never a torn mid-commit or mid-batch state.
+* The writer stays single. Nothing here introduces multi-writer anything.
 
 -- -
 
@@ -1907,6 +2143,20 @@ Two of these items are narrowed, not lifted, by Phase 7 (see "Current Roadmap" a
  that has always been in scope; Phase 6's `KernelCommand` layer and Phase 7's `commit_hypothesis` are
  both just structured calls into the existing commit machinery, not extraction happening inside the
  kernel. Written down explicitly here because Phase 7 is where the ambiguity would otherwise bite.
+
+**SQL is narrowed, not lifted, by Phases 10-19 (2026-09-28).** What stays forbidden is a SQL *text*
+surface: a dialect, a parser, a grammar, and the compatibility burden that follows. The query engine's
+sanctioned surface is a reified, typed, JSON-serializable query IR — discoverable from a JSON Schema
+over MCP, in the same spirit as `KernelCommand`. A caller who wants SQL compiles it to the IR on its
+own side of the boundary. Also still out, and not quietly enabled by having an engine: joins beyond
+id→name projection, a general graph query language (Phase 7's bounded traversal remains the only
+exception), RDF/SPARQL, ontology reasoning, materialized views, and a text index over entity names —
+#55 settled that last one as belonging in the caller.
+
+**persistent B-trees** and **compression** also stay out. Phase 14's columnar store is neither: it is a
+flat, append-only, memory-mapped projection in assertion-id order, not a mutable balanced tree, and it
+stores values uncompressed. Should compression ever look worthwhile for those columns, it arrives as
+its own measured decision, not as a detail of a query-engine phase.
 
 **HTTP API / network transport** stays fully out of scope: no listening socket, no request routing,
 no auth/TLS surface has been added. This item is about a *network* boundary specifically, not about
@@ -2005,7 +2255,18 @@ Which assertion superseded this one ?
 Which source produced this claim ?
 What does the kernel currently predict about Alice ?
 What existing evidence supports or contradicts a given hypothesis ?
+How many assertions were observed each month, by predicate ?
+Which predicates change most often, and for which subjects ?
+How many subjects currently have a given predicate, grouped by object ?
+What was the average confidence of what we believed on 2024 - 01 - 01 ?
+What did our numbers look like as of last quarter's close ?
 ```
+
+The last five are new (2026-09-28), added for the query engine arc in Phases 10-19: they are *shaped*
+questions — filtered, grouped, aggregated, and in the last case reconstructed as of a past commit —
+rather than the fixed-shape lookups every question above them is. None of them is answerable by the
+kernel today; a caller must fetch records and compute the answer itself. Phase 12 answers the
+aggregate ones, Phase 19 the as-of one.
 
 Until Phase 6, "Why does the kernel believe this assertion?", "Which assertions conflict?", and
 "Which source produced this claim?" were aspirational — nothing in the kernel could answer them
