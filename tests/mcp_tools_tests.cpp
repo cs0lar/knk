@@ -74,7 +74,8 @@ void tool_specs_cover_every_kernel_command_with_a_well_formed_schema() {
                                          "hypotheses_for",
                                          "neighbors",
                                          "co_occurring_predicates",
-                                         "resolve_entity"};
+                                         "resolve_entity",
+                                         "query"};
 
     const auto &specs = tool_specs();
     assert(specs.size() == expected_names.size());
@@ -357,6 +358,47 @@ void batch_read_tools_answer_in_input_order_with_null_slots() {
     cleanup(root);
 }
 
+void query_tool_runs_a_shaped_read_and_reports_truncation() {
+    auto root = test_root("query_tool_runs_a_shaped_read_and_reports_truncation");
+    KnowledgeKernel kernel(StorageConfig{root});
+
+    EntityId alice = kernel.intern_entity("Alice");
+    PredicateId works_at = kernel.intern_predicate("works_at");
+    EntityId acme = kernel.intern_entity("Acme");
+    EntityId beta = kernel.intern_entity("Beta");
+
+    AssertionId closed = kernel.commit(alice, works_at, acme, 0, 1672531200, 1719792000, 0.9);
+    AssertionId open = kernel.commit(alice, works_at, beta, 1672531200, OPEN_ENDED, 1719878400, 0.95);
+
+    // The current-shaped query over the wire: Active plus open-ended excludes the closed interval.
+    auto result = handle_tool_call(
+        kernel, "query", nlohmann::json{{"subject", alice}, {"open_ended_only", true}, {"statuses", {"Active"}}});
+    assert(!result.is_error);
+
+    auto answer = nlohmann::json::parse(result.content_text);
+    assert(answer.at("truncated") == false);
+    assert(answer.at("assertions").size() == 1);
+    assert(answer.at("assertions")[0].at("id") == open);
+
+    // An unfiltered query returns both rows, and limit surfaces truncation.
+    auto all = nlohmann::json::parse(handle_tool_call(kernel, "query", nlohmann::json::object()).content_text);
+    assert(all.at("assertions").size() == 2);
+
+    auto capped = nlohmann::json::parse(handle_tool_call(kernel, "query", nlohmann::json{{"limit", 1}}).content_text);
+    assert(capped.at("assertions").size() == 1);
+    assert(capped.at("truncated") == true);
+    assert(capped.at("assertions")[0].at("id") == closed); // default order is id-ascending
+
+    // Malformed arguments are tool errors, not throws: an unknown status name, an unknown order, a
+    // non-array statuses, and an ir_version this build does not know.
+    assert(handle_tool_call(kernel, "query", nlohmann::json{{"statuses", {"Nonsense"}}}).is_error);
+    assert(handle_tool_call(kernel, "query", nlohmann::json{{"order", "sideways"}}).is_error);
+    assert(handle_tool_call(kernel, "query", nlohmann::json{{"statuses", 7}}).is_error);
+    assert(handle_tool_call(kernel, "query", nlohmann::json{{"ir_version", 99}}).is_error);
+
+    cleanup(root);
+}
+
 void batch_tool_schemas_state_their_bound() {
     // The issue these tools answer asks for the batch bound to be discoverable from the tool itself,
     // not just enforced at call time -- so both the description and the schema must carry it, for
@@ -619,6 +661,7 @@ int main() {
     commit_batch_by_name_tool_interns_names_and_commits_every_entry();
     record_provenance_batch_tool_records_every_entry_and_rejects_an_unknown_target();
     batch_read_tools_answer_in_input_order_with_null_slots();
+    query_tool_runs_a_shaped_read_and_reports_truncation();
     batch_tool_schemas_state_their_bound();
     intern_entity_tool_round_trips_a_string_argument();
     intern_value_tool_round_trips_a_tagged_value_argument();

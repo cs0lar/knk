@@ -267,6 +267,14 @@ nlohmann::json kernel_result_to_json(const KernelResult &result) {
                     array.push_back(id);
                 }
                 return array;
+            } else if constexpr (std::is_same_v<T, QueryResult>) {
+                nlohmann::json assertions = nlohmann::json::array();
+                for (const auto &assertion : value.assertions) {
+                    assertions.push_back(assertion_to_json(assertion));
+                }
+                // truncated travels alongside the rows so a caller can tell "that was all of them" from
+                // "here are the first N" without re-counting.
+                return nlohmann::json{{"assertions", assertions}, {"truncated", value.truncated}};
             } else if constexpr (std::is_same_v<T, std::vector<std::optional<std::string>>>) {
                 // One slot per id, in input order: a slot the single resolver would answer null for is
                 // null here too, so a caller can zip ids with answers without matching them up.

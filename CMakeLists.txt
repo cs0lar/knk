@@ -26,6 +26,7 @@ add_library(kernel
     src/entity_merge_log.cpp
     src/json_codec.cpp
     src/mcp_tools.cpp
+    src/query_engine.cpp
     src/storage_lock.cpp
 )
 
@@ -182,6 +183,10 @@ add_executable(storage_lock_tests
     tests/storage_lock_tests.cpp
 )
 
+add_executable(query_engine_tests
+    tests/query_engine_tests.cpp
+)
+
 target_link_libraries(knowledge_kernel_tests
     PRIVATE kernel
 )
@@ -263,6 +268,10 @@ target_link_libraries(mcp_tools_tests
 )
 
 target_link_libraries(storage_lock_tests
+    PRIVATE kernel
+)
+
+target_link_libraries(query_engine_tests
     PRIVATE kernel
 )
 
@@ -369,4 +378,9 @@ add_test(
 add_test(
     NAME storage_lock_tests
     COMMAND storage_lock_tests
+)
+
+add_test(
+    NAME query_engine_tests
+    COMMAND query_engine_tests
 )

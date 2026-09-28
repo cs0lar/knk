@@ -36,6 +36,10 @@ never loses the history of how its knowledge changed.
 - **Batch reads** — `entity_name_batch`, `entity_value_batch`, `predicate_name_batch`, and
   `provenance_for_batch` resolve many ids in one call, answering in input order with a `null` slot
   wherever the single resolver would answer `null`.
+- **Shaped queries** — `query` takes a reified, typed query IR (not SQL): subject/predicate/object,
+  a valid-time point, an observed-time window, open-endedness, an explicit status set, deterministic
+  ordering and paging, in any combination. Every single-purpose read above is expressible as one, and
+  results are bounded and report whether they were truncated.
 - **Entity/predicate catalog** — idempotent name and typed-literal interning
   (`intern_entity`/`intern_value`/`intern_predicate`), plus a payload store for large content
   (documents) addressed by id.

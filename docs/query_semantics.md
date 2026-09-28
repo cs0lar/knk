@@ -120,6 +120,44 @@ Walks the supersession/retraction chain from `id` back to the root (`supersedes_
 
 Unordered pairs of **Active** assertions for the same subject/predicate with different objects whose valid intervals overlap. Superseded/retracted rows are never reported as conflicts.
 
+## The query IR (Phase 10)
+
+`KnowledgeKernel::query(const Query&)` answers a *shaped* read: several filters at once, an explicit
+status set, deterministic ordering, and paging. It is not a second interpretation of the rules above —
+every method on this page is expressible as a `Query` returning identical rows, which
+`tests/query_engine_tests.cpp` asserts rather than assumes.
+
+| Method | Equivalent `Query` |
+|---|---|
+| `current(S)` | `subject=S, statuses={Active}, open_ended_only=true` |
+| `current_by_object(O)` | `object=O, statuses={Active}, open_ended_only=true` |
+| `current_by_predicate(P)` | `predicate=P, statuses={Active}, open_ended_only=true` |
+| `valid_at(S, t)` | `subject=S, statuses={Active}, valid_at=t` |
+| `known_at(S, t)` | `subject=S, statuses={Active}, observed_to=t` |
+| `valid_at_known_at(S, v, o)` | `subject=S, statuses={Active}, valid_at=v, observed_to=o` |
+| `hypotheses_for(S)` | `subject=S, statuses={Hypothesis}` |
+| `assertions_for_subject(S, n)` | `subject=S, limit=n` |
+| `changes_since(t, n, newest)` | `observed_from=t, order=ObservedAt, newest_first=newest, limit=n` |
+
+Notes that matter when comparing the two:
+
+* **Ordering.** The IR always has one deterministic order: the requested key (`assertion_id`,
+  `valid_from`, or `observed_at`), then `AssertionId` as tie-break, reversed wholesale by
+  `newest_first`. The methods above mostly do *not*: `current`, `valid_at`, `known_at`,
+  `hypotheses_for` and `current_by_*` iterate unordered containers, so their row order is unspecified
+  and can differ between runs. Equivalence with those is set equivalence, not sequence equivalence.
+  `assertions_for_subject` (subject-index append order, i.e. id-ascending) and `changes_since`
+  (`observed_at` then id) do specify an order, and the IR matches it exactly.
+* **Status is explicit.** An empty status set means *every* status, matching the audit-shaped reads. A
+  query that wants only live facts must say `{Active}`; nothing is excluded implicitly.
+* **`open_ended_only` is what makes "current" current.** `statuses={Active}` plus `open_ended_only` is
+  precisely `is_current_assertion`, which is what the current-state index stores.
+* **Merge redirects** are followed for `subject` and `object` (not `predicate`, which is never merged),
+  resolving the query's argument and comparing it against the stored id — exactly what the methods do.
+* **Bounded.** `limit == 0` means `MAX_QUERY_RESULT` (10,000), a larger limit is capped to it, and
+  `QueryResult::truncated` distinguishes "that was all" from "here is the first page".
+* **Versioned.** A `Query` carrying an unknown `ir_version` is rejected, never reinterpreted.
+
 ---
 
 ## Quick reference

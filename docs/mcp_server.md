@@ -46,7 +46,7 @@ one-liner, which works for testing but isn't how a real MCP client talks to it.
 
 ## Tools
 
-One tool per `KnowledgeKernel` method, 47 total — the exact set `KernelCommand` reifies (see
+One tool per `KnowledgeKernel` method, 48 total — the exact set `KernelCommand` reifies (see
 `include/kernel/kernel_command.hpp`). Argument and return types follow the method signatures directly:
 `EntityId`/`PredicateId`/`AssertionId` are JSON integers, `Timestamp` is a JSON integer (Unix seconds),
 `confidence` is a JSON number, raw bytes (`intern_document`'s `content`, `document_content`'s return
@@ -110,6 +110,7 @@ against a running server for the full JSON Schema of each.
 | `neighbors` | Bounded breadth-first traversal of current-edge neighbors, both directions. |
 | `co_occurring_predicates` | Currently active predicates for a subject. |
 | `resolve_entity` | Resolves an id through recorded merge redirects to its canonical id. |
+| `query` | Runs a shaped read against the query IR: subject/predicate/object, a valid-time point, an observed-time window, open-endedness, an explicit status set, ordering and paging — any combination, all arguments optional. Returns `{assertions, truncated}`. Capped at 10,000 rows; `ir_version` is rejected if unknown. |
 
 ## Example session
 

@@ -16,6 +16,8 @@
 #include "kernel/kernel_command.hpp"
 #include "kernel/kernel_result.hpp"
 #include "kernel/provenance_log.hpp"
+#include "kernel/query.hpp"
+#include "kernel/query_engine.hpp"
 #include "kernel/status.hpp"
 #include "kernel/storage_engine.hpp"
 #include "kernel/time.hpp"
@@ -296,6 +298,18 @@ class KnowledgeKernel {
 
     std::vector<std::optional<ProvenanceRecord>> provenance_for_batch(const std::vector<AssertionId> &ids) const;
 
+    // Executes a reified Query (Phase 10; see include/kernel/query.hpp and AGENTS.md's "Query Engine"
+    // section). Every query method above is expressible as a Query returning identical rows -- asserted
+    // by the parity tests in tests/query_engine_tests.cpp -- so this adds reach, not a second
+    // interpretation of the bitemporal rules. The methods above remain the documented way to ask the
+    // simple questions; this is for the shaped ones they cannot express (several filters at once,
+    // explicit status sets, deterministic ordering, paging).
+    //
+    // Read-only: no durable state is written, and nothing here participates in a commit path. Throws
+    // std::runtime_error for an unknown Query::ir_version; every other malformed-looking query is just a
+    // filter that matches nothing.
+    QueryResult query(const Query &query) const;
+
     // Merges absorb into keep: a one-way, append-only redirect durably recorded in EntityMergeLog,
     // then applied to the in-memory Catalog. Assertions are never rewritten by a merge -- assertions_
     // keeps whatever EntityId was originally committed, and resolve_entity (plus every query-path
@@ -338,5 +352,9 @@ class KnowledgeKernel {
     std::unordered_map<AssertionId, ProvenanceRecord> provenance_;
 
     std::vector<Assertion> assertions_;
+
+    // Declared last: it holds const references to assertions_, index_manager_ and catalog_, so it must
+    // be constructed after them.
+    QueryEngine query_engine_;
 };
 } // namespace knk
