@@ -1,7 +1,9 @@
 #include <algorithm>
+#include <map>
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <unordered_set>
 
 #include "kernel/query_engine.hpp"
 
@@ -339,6 +341,142 @@ const Assertion *find_by_id(const std::vector<Assertion> &assertions, AssertionI
     return &assertions[id - 1];
 }
 
+// --- aggregation (Phase 12) ------------------------------------------------------
+
+// A total order over Values: kind first, then whichever field that kind makes meaningful. Used only
+// for group keys, where having *a* deterministic order is the whole point -- it is not claimed to be
+// meaningful across kinds.
+bool value_less(const Value &left, const Value &right) {
+    if (left.kind != right.kind) {
+        return static_cast<uint8_t>(left.kind) < static_cast<uint8_t>(right.kind);
+    }
+
+    return compare_same_kind(left, right) < 0;
+}
+
+struct KeyLess {
+    bool operator()(const std::vector<Value> &left, const std::vector<Value> &right) const {
+        return std::lexicographical_compare(left.begin(), left.end(), right.begin(), right.end(), value_less);
+    }
+};
+
+// Floor division, so a bucket boundary means the same thing before and after the epoch: -1 with width
+// 10 belongs to bucket -10, not 0. width is validated positive before this is called.
+Timestamp floor_bucket(Timestamp value, Timestamp width) {
+    Timestamp quotient = value / width;
+    if (value % width != 0 && value < 0) {
+        --quotient;
+    }
+
+    return quotient * width;
+}
+
+Value group_key_value(const Assertion &assertion, const GroupBy &group_by) {
+    switch (group_by.field) {
+    case GroupField::Subject:
+        return Value::of_int64(static_cast<int64_t>(assertion.subject));
+    case GroupField::Predicate:
+        return Value::of_int64(static_cast<int64_t>(assertion.predicate));
+    case GroupField::Object:
+        return Value::of_int64(static_cast<int64_t>(assertion.object));
+    case GroupField::Status:
+        return Value::of_text(status_name(assertion.status));
+    case GroupField::ValidFromBucket:
+        return Value::of_timestamp(floor_bucket(assertion.valid_from, group_by.bucket_width));
+    case GroupField::ObservedAtBucket:
+        return Value::of_timestamp(floor_bucket(assertion.observed_at, group_by.bucket_width));
+    }
+
+    return Value::of_int64(0);
+}
+
+std::optional<Value> target_value(const Assertion &assertion, AggregateTarget target, const Catalog &catalog) {
+    switch (target) {
+    case AggregateTarget::ObjectValue:
+        return catalog.entity_value(assertion.object);
+    case AggregateTarget::Confidence:
+        return Value::of_double(assertion.confidence);
+    case AggregateTarget::ValidFrom:
+        return Value::of_timestamp(assertion.valid_from);
+    case AggregateTarget::ValidTo:
+        return Value::of_timestamp(assertion.valid_to);
+    case AggregateTarget::ObservedAt:
+        return Value::of_timestamp(assertion.observed_at);
+    case AggregateTarget::Subject:
+        return Value::of_int64(static_cast<int64_t>(assertion.subject));
+    case AggregateTarget::Predicate:
+        return Value::of_int64(static_cast<int64_t>(assertion.predicate));
+    case AggregateTarget::Object:
+        return Value::of_int64(static_cast<int64_t>(assertion.object));
+    }
+
+    return std::nullopt;
+}
+
+// The numeric reading of a target, or nothing when the row has no number there -- a text or boolean
+// object value, or an object with nothing interned against it. Such rows are *skipped* by
+// sum/min/max/avg rather than counted as zero, which would quietly bias every average.
+std::optional<double> target_number(const Assertion &assertion, AggregateTarget target, const Catalog &catalog) {
+    auto value = target_value(assertion, target, catalog);
+    if (!value.has_value()) {
+        return std::nullopt;
+    }
+
+    switch (value->kind) {
+    case ValueKind::Int64:
+        return static_cast<double>(value->int64_value);
+    case ValueKind::Double:
+        return value->double_value;
+    case ValueKind::Timestamp:
+        return static_cast<double>(value->timestamp_value);
+    case ValueKind::Text:
+    case ValueKind::Bool:
+        return std::nullopt;
+    }
+
+    return std::nullopt;
+}
+
+struct AggregateState {
+    // For Count this counts rows; for the numeric functions it counts the rows that actually had a
+    // number, which is what makes "10 rows, average over 3" reportable.
+    int64_t contributing = 0;
+    double sum = 0.0;
+    double minimum = 0.0;
+    double maximum = 0.0;
+    std::unordered_set<Value> distinct;
+};
+
+void validate_aggregate(const AggregateQuery &query) {
+    if (query.ir_version != QUERY_IR_VERSION || query.selection.ir_version != QUERY_IR_VERSION) {
+        throw std::runtime_error("unsupported query IR version");
+    }
+
+    if (query.aggregations.empty()) {
+        throw std::runtime_error("aggregate needs at least one aggregation");
+    }
+
+    if (query.group_by.size() > MAX_GROUP_BY_FIELDS) {
+        throw std::runtime_error("aggregate groups by more than MAX_GROUP_BY_FIELDS fields");
+    }
+
+    for (const auto &group_by : query.group_by) {
+        bool is_bucket =
+            group_by.field == GroupField::ValidFromBucket || group_by.field == GroupField::ObservedAtBucket;
+        if (is_bucket && group_by.bucket_width <= 0) {
+            throw std::runtime_error("bucket group-by needs a positive bucket_width");
+        }
+    }
+
+    // Rejected rather than ignored: these describe how *rows* are returned, and an aggregate returns
+    // groups. A caller who set them meant something the aggregate cannot deliver.
+    const Query &selection = query.selection;
+    if (selection.limit != 0 || selection.offset != 0 || selection.order != QueryOrder::AssertionId ||
+        selection.newest_first || selection.resolve_names) {
+        throw std::runtime_error("aggregate selection must not set limit/offset/order/newest_first/resolve_names");
+    }
+}
+
 } // namespace
 
 QueryResult QueryEngine::execute(const Query &query, const std::vector<Assertion> &assertions,
@@ -416,6 +554,170 @@ QueryResult QueryEngine::execute(const Query &query, const std::vector<Assertion
 
             result.names.push_back(std::move(names));
         }
+    }
+
+    return result;
+}
+
+AggregateResult QueryEngine::aggregate(const AggregateQuery &query, const std::vector<Assertion> &assertions,
+                                       const IndexManager &index_manager, const Catalog &catalog) const {
+    validate_aggregate(query);
+
+    const Query &selection = query.selection;
+    if (selection.filter.has_value()) {
+        validate(*selection.filter, 1);
+    }
+
+    std::optional<EntityId> subject;
+    if (selection.subject.has_value()) {
+        subject = catalog.resolve(*selection.subject);
+    }
+
+    std::optional<EntityId> object;
+    if (selection.object.has_value()) {
+        object = catalog.resolve(*selection.object);
+    }
+
+    size_t max_groups = query.max_groups == 0 ? MAX_GROUP_COUNT : std::min(query.max_groups, MAX_GROUP_COUNT);
+
+    struct Group {
+        int64_t row_count = 0;
+        std::vector<AggregateState> states;
+    };
+
+    // An ordered map, so groups come out in key order without a separate sort, and so the group cap can
+    // be enforced on insertion. Memory is bounded by the group count, not by the number of matching
+    // rows -- rows are folded in and dropped, never collected.
+    std::map<std::vector<Value>, Group, KeyLess> groups;
+
+    auto fold = [&](const Assertion &assertion) {
+        std::vector<Value> key;
+        key.reserve(query.group_by.size());
+        for (const auto &group_by : query.group_by) {
+            key.push_back(group_key_value(assertion, group_by));
+        }
+
+        auto it = groups.find(key);
+        if (it == groups.end()) {
+            if (groups.size() >= max_groups) {
+                throw std::runtime_error("aggregate produced more groups than max_groups allows");
+            }
+
+            Group fresh;
+            fresh.states.resize(query.aggregations.size());
+            it = groups.emplace(std::move(key), std::move(fresh)).first;
+        }
+
+        Group &group = it->second;
+        ++group.row_count;
+
+        for (size_t i = 0; i < query.aggregations.size(); ++i) {
+            const Aggregation &aggregation = query.aggregations[i];
+            AggregateState &state = group.states[i];
+
+            switch (aggregation.function) {
+            case AggregateFunction::Count:
+                ++state.contributing;
+                break;
+
+            case AggregateFunction::CountDistinct: {
+                auto value = target_value(assertion, aggregation.target, catalog);
+                if (value.has_value()) {
+                    state.distinct.insert(*value);
+                }
+                break;
+            }
+
+            case AggregateFunction::Sum:
+            case AggregateFunction::Min:
+            case AggregateFunction::Max:
+            case AggregateFunction::Avg: {
+                auto number = target_number(assertion, aggregation.target, catalog);
+                if (!number.has_value()) {
+                    break;
+                }
+
+                if (state.contributing == 0) {
+                    state.minimum = *number;
+                    state.maximum = *number;
+                } else {
+                    state.minimum = std::min(state.minimum, *number);
+                    state.maximum = std::max(state.maximum, *number);
+                }
+
+                state.sum += *number;
+                ++state.contributing;
+                break;
+            }
+            }
+        }
+    };
+
+    auto candidates = select_candidates(selection, subject, object, index_manager);
+    if (candidates.has_value()) {
+        for (AssertionId id : *candidates) {
+            const Assertion *assertion = find_by_id(assertions, id);
+            if (assertion != nullptr && matches(selection, *assertion, subject, object, catalog)) {
+                fold(*assertion);
+            }
+        }
+    } else {
+        for (const auto &assertion : assertions) {
+            if (matches(selection, assertion, subject, object, catalog)) {
+                fold(assertion);
+            }
+        }
+    }
+
+    AggregateResult result;
+    result.groups.reserve(groups.size());
+
+    for (auto &[key, group] : groups) {
+        AggregateGroup out;
+        out.key = key;
+        out.row_count = group.row_count;
+        out.values.reserve(query.aggregations.size());
+
+        for (size_t i = 0; i < query.aggregations.size(); ++i) {
+            const Aggregation &aggregation = query.aggregations[i];
+            const AggregateState &state = group.states[i];
+
+            AggregateCell cell;
+            switch (aggregation.function) {
+            case AggregateFunction::Count:
+                cell.count = state.contributing;
+                break;
+            case AggregateFunction::CountDistinct:
+                cell.count = static_cast<int64_t>(state.distinct.size());
+                break;
+            case AggregateFunction::Sum:
+                // Absent, not zero: a sum over nothing is unknown, and reporting 0.0 would be a claim
+                // about data that was never there.
+                if (state.contributing > 0) {
+                    cell.number = state.sum;
+                }
+                break;
+            case AggregateFunction::Min:
+                if (state.contributing > 0) {
+                    cell.number = state.minimum;
+                }
+                break;
+            case AggregateFunction::Max:
+                if (state.contributing > 0) {
+                    cell.number = state.maximum;
+                }
+                break;
+            case AggregateFunction::Avg:
+                if (state.contributing > 0) {
+                    cell.number = state.sum / static_cast<double>(state.contributing);
+                }
+                break;
+            }
+
+            out.values.push_back(cell);
+        }
+
+        result.groups.push_back(std::move(out));
     }
 
     return result;

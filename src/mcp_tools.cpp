@@ -352,6 +352,131 @@ std::optional<Filter> optional_filter(const nlohmann::json &args, const char *ke
     return parse_filter(args.at(key), 1);
 }
 
+AggregateFunction aggregate_function_from_name(const std::string &name) {
+    if (name == "count") {
+        return AggregateFunction::Count;
+    }
+    if (name == "count_distinct") {
+        return AggregateFunction::CountDistinct;
+    }
+    if (name == "sum") {
+        return AggregateFunction::Sum;
+    }
+    if (name == "min") {
+        return AggregateFunction::Min;
+    }
+    if (name == "max") {
+        return AggregateFunction::Max;
+    }
+    if (name == "avg") {
+        return AggregateFunction::Avg;
+    }
+
+    throw std::runtime_error("unknown aggregate function: " + name);
+}
+
+AggregateTarget aggregate_target_from_name(const std::string &name) {
+    if (name == "object_value") {
+        return AggregateTarget::ObjectValue;
+    }
+    if (name == "confidence") {
+        return AggregateTarget::Confidence;
+    }
+    if (name == "valid_from") {
+        return AggregateTarget::ValidFrom;
+    }
+    if (name == "valid_to") {
+        return AggregateTarget::ValidTo;
+    }
+    if (name == "observed_at") {
+        return AggregateTarget::ObservedAt;
+    }
+    if (name == "subject") {
+        return AggregateTarget::Subject;
+    }
+    if (name == "predicate") {
+        return AggregateTarget::Predicate;
+    }
+    if (name == "object") {
+        return AggregateTarget::Object;
+    }
+
+    throw std::runtime_error("unknown aggregate target: " + name);
+}
+
+GroupField group_field_from_name(const std::string &name) {
+    if (name == "subject") {
+        return GroupField::Subject;
+    }
+    if (name == "predicate") {
+        return GroupField::Predicate;
+    }
+    if (name == "object") {
+        return GroupField::Object;
+    }
+    if (name == "status") {
+        return GroupField::Status;
+    }
+    if (name == "valid_from_bucket") {
+        return GroupField::ValidFromBucket;
+    }
+    if (name == "observed_at_bucket") {
+        return GroupField::ObservedAtBucket;
+    }
+
+    throw std::runtime_error("unknown group-by field: " + name);
+}
+
+std::vector<Aggregation> require_aggregations(const nlohmann::json &args, const char *key) {
+    const auto &values = args.at(key);
+    if (!values.is_array()) {
+        throw std::runtime_error("aggregations must be an array");
+    }
+
+    std::vector<Aggregation> aggregations;
+    aggregations.reserve(values.size());
+
+    for (const auto &entry : values) {
+        Aggregation aggregation;
+        aggregation.function = aggregate_function_from_name(entry.at("function").get<std::string>());
+
+        // count ignores its target, so it is the one aggregation that may omit it.
+        if (aggregation.function != AggregateFunction::Count) {
+            aggregation.target = aggregate_target_from_name(entry.at("target").get<std::string>());
+        } else if (entry.contains("target") && !entry.at("target").is_null()) {
+            aggregation.target = aggregate_target_from_name(entry.at("target").get<std::string>());
+        }
+
+        aggregations.push_back(aggregation);
+    }
+
+    return aggregations;
+}
+
+std::vector<GroupBy> optional_group_by(const nlohmann::json &args, const char *key) {
+    std::vector<GroupBy> group_by;
+
+    if (!args.contains(key) || args.at(key).is_null()) {
+        return group_by;
+    }
+
+    const auto &values = args.at(key);
+    if (!values.is_array()) {
+        throw std::runtime_error("group_by must be an array");
+    }
+
+    for (const auto &entry : values) {
+        GroupBy group;
+        group.field = group_field_from_name(entry.at("field").get<std::string>());
+        if (entry.contains("bucket_width") && !entry.at("bucket_width").is_null()) {
+            group.bucket_width = entry.at("bucket_width").get<Timestamp>();
+        }
+        group_by.push_back(group);
+    }
+
+    return group_by;
+}
+
 // Builds the IR from tool arguments. Every field is optional: an empty query means "everything, up to
 // the result ceiling", which is well defined and bounded. force_scan is deliberately absent -- it is a
 // differential-testing knob, not part of the callable surface.
@@ -924,6 +1049,55 @@ const std::vector<ToolDefinition> &tool_definitions() {
                   {})},
              [](KnowledgeKernel &kernel, const nlohmann::json &args) -> KernelResult {
                  return kernel.execute(QueryCommand{require_query(args)});
+             }});
+
+        defs.push_back(
+            {{"aggregate",
+              "Aggregates matching assertions instead of returning them: count, count_distinct, sum, "
+              "min, max and avg, optionally grouped by subject, predicate, object, status, or a "
+              "fixed-width valid-time or observed-time bucket. Selection uses the same arguments as "
+              "query (subject/predicate/object, valid_at, the observed window, open_ended_only, "
+              "statuses, filter), so an aggregate and a query can never disagree about which rows are "
+              "current. Returns {groups: [{key, row_count, values}]}, with values parallel to "
+              "aggregations: counts are integers, sum/min/max/avg are numbers or null when no row in "
+              "the group had one. Rows whose target is absent or non-numeric are skipped rather than "
+              "counted as zero, which is why row_count can exceed the count an average was taken over. "
+              "At most " +
+                  std::to_string(MAX_GROUP_COUNT) + " groups: exceeding it is an error, never a truncated answer.",
+              object_schema(
+                  {{"aggregations",
+                    array_property("What to compute; at least one.", 16,
+                                   object_property("{function: count|count_distinct|sum|min|max|avg, target: "
+                                                   "object_value|confidence|valid_from|valid_to|observed_at|"
+                                                   "subject|predicate|object}. target is ignored by count."))},
+                   {"group_by",
+                    array_property("How to group; omitted means one group over everything.", MAX_GROUP_BY_FIELDS,
+                                   object_property("{field: subject|predicate|object|status|valid_from_bucket|"
+                                                   "observed_at_bucket, bucket_width: <positive integer, required "
+                                                   "for the bucket fields>}."))},
+                   {"subject", integer_property("Subject EntityId; omitted means any.")},
+                   {"predicate", integer_property("Predicate PredicateId; omitted means any.")},
+                   {"object", integer_property("Object EntityId; omitted means any.")},
+                   {"valid_at", integer_property("Valid-time point, as in query.")},
+                   {"observed_from", integer_property("Lower inclusive bound on observed_at.")},
+                   {"observed_to", integer_property("Upper inclusive bound on observed_at.")},
+                   {"open_ended_only", boolean_property("Only assertions whose valid_to is 0 (open-ended).")},
+                   {"statuses", array_property("Statuses to include; omitted means every status.", 5,
+                                               enum_property("Assertion status.", {"Active", "Superseded", "Retracted",
+                                                                                   "Retraction", "Hypothesis"}))},
+                   {"filter", object_property("Filter tree, exactly as in query.")},
+                   {"max_groups", integer_property("Group cap; 0 or omitted means the ceiling, and a larger "
+                                                   "value is capped to it.")},
+                   {"ir_version", integer_property("Query IR version; omitted means the current one.")}},
+                  {"aggregations"})},
+             [](KnowledgeKernel &kernel, const nlohmann::json &args) -> KernelResult {
+                 AggregateQuery aggregate;
+                 aggregate.selection = require_query(args);
+                 aggregate.aggregations = require_aggregations(args, "aggregations");
+                 aggregate.group_by = optional_group_by(args, "group_by");
+                 aggregate.max_groups = optional_size(args, "max_groups", 0);
+                 aggregate.ir_version = aggregate.selection.ir_version;
+                 return kernel.execute(AggregateCommand{std::move(aggregate)});
              }});
 
         defs.push_back({{"hypotheses_for", "Returns open (Hypothesis-status) predictions for a subject.",

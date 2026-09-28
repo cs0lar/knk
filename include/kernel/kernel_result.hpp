@@ -7,6 +7,7 @@
 #include <variant>
 #include <vector>
 
+#include "kernel/aggregate.hpp"
 #include "kernel/assertion.hpp"
 #include "kernel/ids.hpp"
 #include "kernel/provenance_log.hpp"
@@ -51,6 +52,7 @@ using KernelResult = std::variant<std::monostate,                               
                                   std::vector<std::optional<std::string>>, // entity_name_batch/predicate_name_batch
                                   std::vector<std::optional<Value>>,       // entity_value_batch
                                   std::vector<std::optional<ProvenanceRecord>>, // provenance_for_batch
-                                  QueryResult>;                                 // query
+                                  QueryResult,                                  // query
+                                  AggregateResult>;                             // aggregate
 
 } // namespace knk

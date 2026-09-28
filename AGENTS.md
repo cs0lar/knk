@@ -1197,6 +1197,42 @@ Where "analytics" starts being true rather than aspirational.
 * **Tests:** differential against brute-force aggregation; as-of aggregates obey the same status rules
  as the record queries.
 
+Current implementation status (shipped 2026-09-28):
+
+* `include/kernel/aggregate.hpp` holds the aggregate IR. Functions: `count`, `count_distinct`, `sum`,
+ `min`, `max`, `avg`; targets: `object_value` (the object's interned `Value`, which is what makes
+ "average salary" expressible), `confidence`, the three timestamps, and the three ids; grouping by
+ subject, predicate, object, status, or a fixed-width valid/observed bucket, up to
+ `MAX_GROUP_BY_FIELDS` (4), or none at all for one global group.
+* **`AggregateQuery` embeds a `Query` for selection rather than restating the filter surface.** That is
+ the decision that keeps "how many" and "which" from ever disagreeing about what is current: filters,
+ selectors, bitemporal cutoffs and status rules are the same code. The row-shaping fields (`limit`,
+ `offset`, `order`, `newest_first`, `resolve_names`) describe how rows are *returned* and mean nothing
+ for an aggregate, so a selection carrying them is **rejected**, not ignored.
+* **Rows with no number are skipped, never counted as zero**, and each group reports `row_count`
+ alongside each cell's own count — so "10 rows, average over 3" is a visible, representable state
+ rather than a silently depressed average. A `sum` over no contributing rows is null, not `0.0`, for
+ the same reason: zero would be a claim about data never seen.
+* Counts are `int64_t` and numeric results are `double`, so a large count cannot lose precision to a
+ double while numeric aggregation stays simple.
+* Buckets floor (`floor(t / width) * width`), so a timestamp before the epoch lands in the bucket below
+ it rather than in zero — the case truncating division gets wrong, and one the tests pin.
+* **Exceeding `MAX_GROUP_COUNT` (10,000) throws.** A truncated aggregate is a wrong answer that looks
+ like a right one, which is the one failure mode a caller cannot detect for themselves.
+* **Streaming, as promised:** rows are folded into an ordered group map as they are visited and never
+ collected, so memory is bounded by groups rather than by matching rows. `count_distinct` is the noted
+ exception -- it has to remember the values it has seen.
+* **Tested** in `tests/query_aggregate_tests.cpp` (global and grouped shapes, bucket flooring including
+ negative timestamps, skipped rows, every rejection, the group cap at and over the line, restart) and by
+ a second randomized suite in `tests/query_differential_tests.cpp`: 2,000 seeded random aggregates,
+ each answered index-selected, force-scanned, and by an independently written reference. Both suites
+ were mutation-verified — dividing `avg` by `row_count` instead of the contributing count fails both,
+ the targeted one at exactly its "skips rows" assertion.
+* **Baseline** in `docs/benchmarks.md`: counting every row costs 0.077 ms against the 0.856 ms the row
+ query over those same 10,000 rows takes — ~11x cheaper, because an aggregate never materializes or
+ sorts. Cost scales with groups, not rows (0.077 ms at one group, 0.970 ms at 5,000), and at width the
+ work is key construction plus ordered-map inserts, which is the Phase 15 target.
+
 #### Phase 13 — Read-only concurrent opens ("many readers later")
 
 The hard blocker for *external* analytics: today `StorageEngine` takes an exclusive `flock()`, so a

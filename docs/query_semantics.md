@@ -210,6 +210,42 @@ Only the returned **page** is resolved, never the whole match set: a 10,000-row 
 time costs three lookups per field, not 10,000. It is off by default because it costs two catalog
 lookups per returned row (~27% on the shape measured in `docs/benchmarks.md`).
 
+## Aggregation (Phase 12)
+
+`KnowledgeKernel::aggregate(const AggregateQuery&)` folds matching rows into groups instead of
+returning them. The selection half is an ordinary `Query` — same selectors, same filter tree, same
+bitemporal and status rules — so an aggregate and a row query can never disagree about which rows are
+current.
+
+| | |
+|---|---|
+| Functions | `count`, `count_distinct`, `sum`, `min`, `max`, `avg` |
+| Targets | `object_value` (the object's interned `Value`), `confidence`, `valid_from`, `valid_to`, `observed_at`, `subject`, `predicate`, `object` |
+| Group by | `subject`, `predicate`, `object`, `status`, or a fixed-width `valid_from`/`observed_at` bucket — up to `MAX_GROUP_BY_FIELDS` (4), or none for one global group |
+
+Five behaviors worth knowing before reading a result:
+
+* **Rows with no number are skipped, not counted as zero.** `avg` over a group whose objects are text
+  has nothing to average, and treating those as 0 would silently drag every average down. This is why
+  each group reports `row_count` *and* each cell reports its own count: 10 rows with an average over 3
+  is a representable, visible state.
+* **An empty aggregate is null, not zero.** `sum` over no contributing rows returns null, because 0.0
+  would be a claim about data that was never there.
+* **Counts are integers, everything else is a number.** Counts never pass through a double, so a large
+  count cannot lose precision.
+* **Buckets floor, including before the epoch.** A bucket is `floor(t / width) * width`, so `observed_at
+  = -50` with width 100 lands in bucket `-100`, not `0` — which truncating division would get wrong.
+* **Exceeding the group cap is an error, never a truncated answer.** `MAX_GROUP_COUNT` is 10,000; a
+  caller silently handed the first 10,000 groups of a `group by subject` would have no way to know the
+  answer was wrong.
+
+Row-shaping fields (`limit`, `offset`, `order`, `newest_first`, `resolve_names`) describe how *rows*
+come back and mean nothing for an aggregate, so a selection carrying them is rejected rather than
+quietly ignored.
+
+Groups come back ordered deterministically by key (kind first, then the kind's value), so repeated runs
+and index-selected versus scanned evaluation agree on order as well as content.
+
 ---
 
 ## Quick reference

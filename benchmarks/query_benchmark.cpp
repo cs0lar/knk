@@ -2,6 +2,7 @@
 #include <filesystem>
 #include <string>
 
+#include "kernel/aggregate.hpp"
 #include "kernel/knowledge_kernel.hpp"
 #include "kernel/query.hpp"
 #include "kernel/storage_config.hpp"
@@ -178,6 +179,45 @@ void ir_filter_latency(const KnowledgeKernel &kernel, size_t queries) {
     report("query{filter: confidence >= 0.5} (matches all)", broad / static_cast<double>(queries) * 1000.0, "ms/query");
 }
 
+// --- aggregation (Phase 12) ------------------------------------------------------
+//
+// Aggregates fold rows as they are visited rather than collecting them, so the interesting comparison
+// is against the row query that would have had to materialize the same rows.
+
+void aggregate_latency(const KnowledgeKernel &kernel, size_t queries) {
+    Timer global_timer;
+    for (size_t i = 0; i < queries; ++i) {
+        AggregateQuery query;
+        query.aggregations = {{AggregateFunction::Count, AggregateTarget::ObjectValue}};
+        kernel.aggregate(query);
+    }
+    report("aggregate{count, no grouping}", global_timer.elapsed_seconds() / static_cast<double>(queries) * 1000.0,
+           "ms/query");
+
+    Timer grouped_timer;
+    for (size_t i = 0; i < queries; ++i) {
+        AggregateQuery query;
+        query.group_by = {{GroupField::Predicate, 0}};
+        query.aggregations = {{AggregateFunction::Count, AggregateTarget::ObjectValue},
+                              {AggregateFunction::Avg, AggregateTarget::Confidence}};
+        kernel.aggregate(query);
+    }
+    report("aggregate{count+avg, by predicate}",
+           grouped_timer.elapsed_seconds() / static_cast<double>(queries) * 1000.0, "ms/query");
+
+    // One group per subject: 5,000 groups from 10,000 rows, which is where the ordered group map and
+    // the key construction per row start to show up.
+    Timer wide_timer;
+    for (size_t i = 0; i < queries; ++i) {
+        AggregateQuery query;
+        query.group_by = {{GroupField::Subject, 0}};
+        query.aggregations = {{AggregateFunction::Count, AggregateTarget::ObjectValue}};
+        kernel.aggregate(query);
+    }
+    report("aggregate{count, by subject (5000 groups)}",
+           wide_timer.elapsed_seconds() / static_cast<double>(queries) * 1000.0, "ms/query");
+}
+
 } // namespace
 
 int main() {
@@ -197,6 +237,9 @@ int main() {
     ir_resolve_names_throughput(kernel, rounds);
     ir_forced_scan_latency(kernel, 200);
     ir_filter_latency(kernel, 200);
+
+    section("aggregation over the same corpus");
+    aggregate_latency(kernel, 200);
 
     std::filesystem::remove_all(root);
     return 0;

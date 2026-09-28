@@ -241,6 +241,31 @@ nlohmann::json kernel_result_to_json(const KernelResult &result) {
                     array.push_back(id);
                 }
                 return array;
+            } else if constexpr (std::is_same_v<T, AggregateResult>) {
+                nlohmann::json groups = nlohmann::json::array();
+                for (const auto &group : value.groups) {
+                    nlohmann::json key = nlohmann::json::array();
+                    for (const auto &part : group.key) {
+                        key.push_back(value_to_json(part));
+                    }
+
+                    nlohmann::json cells = nlohmann::json::array();
+                    for (const auto &cell : group.values) {
+                        // Counts are integers; everything else is a number that may be null when no row
+                        // in the group contributed one. Exactly one of the two is ever set.
+                        if (cell.count.has_value()) {
+                            cells.push_back(nlohmann::json(*cell.count));
+                        } else if (cell.number.has_value()) {
+                            cells.push_back(nlohmann::json(*cell.number));
+                        } else {
+                            cells.push_back(nlohmann::json(nullptr));
+                        }
+                    }
+
+                    groups.push_back(nlohmann::json{{"key", key}, {"row_count", group.row_count}, {"values", cells}});
+                }
+
+                return nlohmann::json{{"groups", groups}};
             } else if constexpr (std::is_same_v<T, QueryResult>) {
                 nlohmann::json assertions = nlohmann::json::array();
                 for (const auto &assertion : value.assertions) {

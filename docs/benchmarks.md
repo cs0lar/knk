@@ -169,6 +169,27 @@ Four things worth reading off these, all of them baselines for later phases to b
   compare against. Both are Phase 15 targets (columnar evaluation avoids the `Value`; a top-k heap
   avoids sorting what the limit will discard).
 
+### `query_benchmark` — aggregation (2026-09-28)
+
+Recorded with Phase 12, same corpus and machine as the section above.
+
+```
+== aggregation over the same corpus ==
+aggregate{count, no grouping}                            0.077 ms/query
+aggregate{count+avg, by predicate}                       0.192 ms/query
+aggregate{count, by subject (5000 groups)}               0.970 ms/query
+```
+
+The number that matters is the comparison with the row query directly above: counting every row costs
+**0.077 ms against the 0.856 ms** a query matching those same 10,000 rows takes — about **11x cheaper**,
+because an aggregate folds each row into its group and drops it, while the row query builds and sorts
+10,000 `Assertion` copies. That is the streaming claim, measured rather than asserted.
+
+Cost scales with *groups*, not rows: one group is 0.077 ms, two groups with a second aggregation is
+0.192 ms, and 5,000 groups from the same 10,000 rows is 0.970 ms. At that width the work is dominated by
+constructing a key `Value` per row and inserting into the ordered group map — the natural Phase 15
+target, where a columnar pass can compute keys without materializing a `Value`.
+
 ### `replay_benchmark`
 
 ```

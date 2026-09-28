@@ -43,6 +43,9 @@ never loses the history of how its knowledge changed.
 - **Filters and projection** — queries carry a filter tree (ordered comparisons, comparisons against
   an object's interned value, and `and`/`or`/`not`), and can resolve catalog names for the returned
   page in the same call, so rendering results needs no second round trip.
+- **Aggregation** — `aggregate` answers `count`/`count_distinct`/`sum`/`min`/`max`/`avg` over the same
+  selection surface, grouped by subject, predicate, object, status, or a fixed-width time bucket,
+  streaming rows into groups rather than materializing them.
 - **Entity/predicate catalog** — idempotent name and typed-literal interning
   (`intern_entity`/`intern_value`/`intern_predicate`), plus a payload store for large content
   (documents) addressed by id.

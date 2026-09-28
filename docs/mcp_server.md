@@ -46,7 +46,7 @@ one-liner, which works for testing but isn't how a real MCP client talks to it.
 
 ## Tools
 
-One tool per `KnowledgeKernel` method, 48 total — the exact set `KernelCommand` reifies (see
+One tool per `KnowledgeKernel` method, 49 total — the exact set `KernelCommand` reifies (see
 `include/kernel/kernel_command.hpp`). Argument and return types follow the method signatures directly:
 `EntityId`/`PredicateId`/`AssertionId` are JSON integers, `Timestamp` is a JSON integer (Unix seconds),
 `confidence` is a JSON number, raw bytes (`intern_document`'s `content`, `document_content`'s return
@@ -111,6 +111,7 @@ against a running server for the full JSON Schema of each.
 | `co_occurring_predicates` | Currently active predicates for a subject. |
 | `resolve_entity` | Resolves an id through recorded merge redirects to its canonical id. |
 | `query` | Runs a shaped read against the query IR: subject/predicate/object, a valid-time point, an observed-time window, open-endedness, an explicit status set, a `filter` tree (ordered comparisons, comparisons against the object's value, and and/or/not up to 8 deep), ordering and paging — any combination, all arguments optional. `resolve_names` adds a parallel `names` array so rendering needs no second round trip. Returns `{assertions, truncated}` plus `names` when asked. Capped at 10,000 rows; an unknown `ir_version` or a malformed filter is rejected. |
+| `aggregate` | Aggregates matching assertions instead of returning them: `count`, `count_distinct`, `sum`, `min`, `max`, `avg`, optionally grouped by subject, predicate, object, status, or a fixed-width time bucket. Selection uses the same arguments as `query`. Returns `{groups: [{key, row_count, values}]}`; rows with no number are skipped rather than counted as zero, and exceeding the 10,000-group cap is an error rather than a truncated answer. |
 
 ## Example session
 

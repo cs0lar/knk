@@ -112,6 +112,8 @@ KernelResult KnowledgeKernel::execute(const KernelCommand &command) {
                 return provenance_for(cmd.assertion_id);
             } else if constexpr (std::is_same_v<T, QueryCommand>) {
                 return query(cmd.query);
+            } else if constexpr (std::is_same_v<T, AggregateCommand>) {
+                return aggregate(cmd.query);
             } else if constexpr (std::is_same_v<T, EntityNameBatchCommand>) {
                 return entity_name_batch(cmd.ids);
             } else if constexpr (std::is_same_v<T, EntityValueBatchCommand>) {

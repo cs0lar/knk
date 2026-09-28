@@ -9,6 +9,7 @@
 #include <utility>
 #include <vector>
 
+#include "kernel/aggregate.hpp"
 #include "kernel/assertion.hpp"
 #include "kernel/catalog.hpp"
 #include "kernel/ids.hpp"
@@ -309,6 +310,15 @@ class KnowledgeKernel {
     // std::runtime_error for an unknown Query::ir_version; every other malformed-looking query is just a
     // filter that matches nothing.
     QueryResult query(const Query &query) const;
+
+    // Aggregates rows in a single streaming pass (Phase 12): counts, sums and extrema over groups, with
+    // the same selection surface a row query uses, so "how many" and "which" can never disagree about
+    // what is current. Memory is bounded by the number of groups, not the number of matching rows.
+    //
+    // Throws std::runtime_error for the caller mistakes described on QueryEngine::aggregate, including
+    // an aggregate that would produce more groups than its cap allows -- truncating an aggregate would
+    // hand back a wrong answer that looks like a right one.
+    AggregateResult aggregate(const AggregateQuery &query) const;
 
     // Merges absorb into keep: a one-way, append-only redirect durably recorded in EntityMergeLog,
     // then applied to the in-memory Catalog. Assertions are never rewritten by a merge -- assertions_
