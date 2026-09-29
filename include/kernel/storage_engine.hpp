@@ -28,7 +28,13 @@ namespace knk {
 
 class StorageEngine {
   public:
-    explicit StorageEngine(StorageConfig config);
+    // A ReadOnly engine creates nothing and writes nothing: no lock file, no directories, and every
+    // mutating method below throws. See OpenMode in storage_config.hpp for why a reader takes no lock.
+    // Throws if a ReadOnly open names a root that does not exist -- there is nothing to read, and
+    // creating it would be a write.
+    explicit StorageEngine(StorageConfig config, OpenMode mode = OpenMode::ReadWrite);
+
+    OpenMode mode() const;
 
     void append_assertion(const Assertion &assertion);
 
@@ -106,10 +112,17 @@ class StorageEngine {
     const StorageConfig &config() const;
 
   private:
+    // Throws when this engine was opened ReadOnly, naming the operation. The layer that owns the files
+    // is the layer that refuses to write them; KnowledgeKernel guards its own public methods as well,
+    // so a rejected call never half-mutates in-memory state first.
+    void require_writable(const char *operation) const;
+
     StorageConfig config_;
+    OpenMode mode_;
     // Declared before every log member so it is constructed first and released last, enforcing the
-    // single-writer model for the object's entire lifetime -- see kernel/storage_lock.hpp.
-    StorageLock storage_lock_;
+    // single-writer model for the object's entire lifetime -- see kernel/storage_lock.hpp. Empty for a
+    // ReadOnly open, which takes no lock; that absence is what lets readers coexist with the writer.
+    std::optional<StorageLock> storage_lock_;
     AssertionLog assertion_log_;
     ObservedTimeIndexLog observed_time_index_log_;
     SubjectIndexLog subject_index_log_;

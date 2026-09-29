@@ -46,6 +46,9 @@ never loses the history of how its knowledge changed.
 - **Aggregation** — `aggregate` answers `count`/`count_distinct`/`sum`/`min`/`max`/`avg` over the same
   selection surface, grouped by subject, predicate, object, status, or a fixed-width time bucket,
   streaming rows into groups rather than materializing them.
+- **Read-only opens** — `mcp_server <root> --read-only` (or `OpenMode::ReadOnly`) queries a live storage
+  root alongside the writing process, taking no lock and writing nothing, so an external analytics
+  client can read without stopping the writer.
 - **Entity/predicate catalog** — idempotent name and typed-literal interning
   (`intern_entity`/`intern_value`/`intern_predicate`), plus a payload store for large content
   (documents) addressed by id.

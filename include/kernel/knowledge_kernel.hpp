@@ -28,7 +28,19 @@ namespace knk {
 
 class KnowledgeKernel {
   public:
-    explicit KnowledgeKernel(StorageConfig config);
+    // ReadOnly (Phase 13) opens the root for querying alongside a live writer: it takes no lock, creates
+    // nothing, and every mutating method below throws instead of writing. Two consequences worth knowing
+    // before using it:
+    //
+    //  * A read-only kernel is a **snapshot as of its own construction**, not a live view. It replays the
+    //    log once, in the constructor, exactly as a read-write kernel does; commits a writer makes
+    //    afterwards are invisible to it until it is reopened.
+    //  * It cannot repair derived state. If the persisted indexes are stale or corrupt it rebuilds them
+    //    *in memory* and answers correctly, but leaves the files untouched -- so every read-only open of
+    //    such a root pays a full replay until a writer opens it once and heals them.
+    explicit KnowledgeKernel(StorageConfig config, OpenMode mode = OpenMode::ReadWrite);
+
+    OpenMode mode() const;
 
     AssertionId commit(EntityId subject, PredicateId predicate, EntityId object, Timestamp valid_from,
                        Timestamp valid_to, Timestamp observed_at, double confidence);
@@ -346,6 +358,11 @@ class KnowledgeKernel {
     KernelResult execute(const KernelCommand &command);
 
   private:
+    // Throws when this kernel was opened ReadOnly, naming the operation. Called at the top of every
+    // mutating method, before any in-memory state is touched: intern_document, for instance, allocates
+    // an id before it reaches storage, so relying on the storage layer's own guard would leak one.
+    void require_writable(const char *operation) const;
+
     void restore_assertion(const Assertion &assertion);
 
     AssertionId next_id_ = 1;

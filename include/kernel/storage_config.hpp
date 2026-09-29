@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <cstdio>
 #include <filesystem>
 #include <string>
@@ -7,6 +8,24 @@
 #include "kernel/ids.hpp"
 
 namespace knk {
+
+// How a storage root is opened (Phase 13).
+//
+// ReadWrite is everything the kernel did before this existed: it takes the exclusive writer lock on
+// the root, creates the directory layout if absent, and may repair derived state (rebuilding and
+// rewriting a stale or corrupt index, moving the checkpoint forward).
+//
+// ReadOnly takes **no** lock at all, and that is deliberate rather than lazy. The obvious design --
+// readers take flock(LOCK_SH) on the same LOCK file -- cannot work: the writer holds LOCK_EX on that
+// file for its whole lifetime, and LOCK_EX excludes LOCK_SH, so a "shared lock" reader could never
+// open alongside the writer it is meant to coexist with. Since a reader cannot corrupt anything it
+// never writes to, the honest design is that LOCK stays purely the single-writer guard and readers
+// do not participate in it. If some future destructive operation (a compaction, say) needs to wait
+// for readers to drain, that wants its own reader-presence lock, added then.
+//
+// A ReadOnly open creates nothing -- not the root, not a subdirectory, not a lock file -- and every
+// write path throws instead of writing. See docs/storage_format.md's "Storage root lock" section.
+enum class OpenMode : uint8_t { ReadWrite, ReadOnly };
 
 struct StorageConfig {
     std::filesystem::path root;

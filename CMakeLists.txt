@@ -195,6 +195,10 @@ add_executable(query_aggregate_tests
     tests/query_aggregate_tests.cpp
 )
 
+add_executable(read_only_open_tests
+    tests/read_only_open_tests.cpp
+)
+
 target_link_libraries(knowledge_kernel_tests
     PRIVATE kernel
 )
@@ -288,6 +292,10 @@ target_link_libraries(query_differential_tests
 )
 
 target_link_libraries(query_aggregate_tests
+    PRIVATE kernel
+)
+
+target_link_libraries(read_only_open_tests
     PRIVATE kernel
 )
 
@@ -409,4 +417,9 @@ add_test(
 add_test(
     NAME query_aggregate_tests
     COMMAND query_aggregate_tests
+)
+
+add_test(
+    NAME read_only_open_tests
+    COMMAND read_only_open_tests
 )

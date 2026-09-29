@@ -1238,14 +1238,52 @@ Current implementation status (shipped 2026-09-28):
 The hard blocker for *external* analytics: today `StorageEngine` takes an exclusive `flock()`, so a
 second process cannot even open the root read-only while the kernel runs.
 
-* A read-only open mode taking a **shared** lock, many readers alongside the single writer, exactly the
- additive change the Concurrency Rules already anticipate.
-* A reader never writes: no index self-heal, no checkpoint rewrite, no snapshot write. A reader that
- finds a corrupt index fails loudly instead, because repairing is a write.
+* A read-only open mode taking ~~a **shared** lock~~ **no lock at all**, many readers alongside the
+ single writer. (Corrected while implementing: a shared lock on the writer's own lock file can never be
+ acquired while the writer holds it exclusively, so the planned design was unimplementable as written.)
+* A reader never writes: no index self-heal, no checkpoint rewrite, no snapshot write. ~~A reader that
+ finds a corrupt index fails loudly instead, because repairing is a write.~~ **It rebuilds in memory and
+ keeps serving** -- also corrected, see below.
 * Readers see a consistent committed prefix, not a torn mid-commit state.
-* **Tests:** reader opens succeed against a live writer and fail closed on corruption; a reader leaves
- every file byte-identical; a reader sees commits up to a point and never a partial batch.
+* **Tests:** reader opens succeed against a live writer; a reader leaves every file byte-identical; a
+ reader sees a committed prefix (~~never a partial batch~~ -- a batch in flight *may* be partially
+ visible, exactly as a crash can leave a prefix durable; the original wording promised more than the
+ format does).
 * **Docs:** `docs/storage_format.md`'s "Storage root lock" section.
+
+Current implementation status (shipped 2026-09-29):
+
+* `OpenMode` (`storage_config.hpp`) is threaded through `StorageEngine` and `KnowledgeKernel`, defaulting
+ to `ReadWrite` so every existing caller is unchanged. `mcp_server <root> --read-only` exposes it, which
+ is how an external process actually gets at a live store.
+* **Three corrections to the plan, all found by implementing it:**
+ 1. **A reader takes no lock.** The planned `LOCK_SH` cannot be acquired while the writer holds `LOCK_EX`
+ on that file for its lifetime -- precisely the situation readers exist for. `LOCK` stays the
+ single-writer guard; a reader that writes nothing needs no lock. If a later destructive operation needs
+ to drain readers, it wants its own reader-presence lock, added then.
+ 2. **A reader tolerates corrupt derived state instead of failing loudly.** "Repairing is a write" is
+ true, but rebuilding *in memory* is not -- and the log is the source of truth, so a reader that can
+ answer correctly should. Failing would take an analytics reader offline over a problem only a writer can
+ fix. The cost is documented instead: such a root makes every read-only open pay a full replay until a
+ writer heals it.
+ 3. **"Never a partial batch" was wrong.** Batch durability is prefix-shaped (see "Batch Commits"), so a
+ reader can see a prefix of an in-flight batch for the same reason a crash can leave one. A reader is not
+ a transaction boundary, and claiming otherwise promised what the format does not.
+* **A read-only kernel is a snapshot as of its own construction,** not a live view: replay happens once in
+ the constructor, so later commits need a reopen. Worth stating loudly, because it is the difference
+ between this and a database connection.
+* Writes are refused at **both** layers: `StorageEngine` guards all 20 of its mutating methods (the layer
+ that owns the files refuses to write them), and `KnowledgeKernel` guards all 16 of its public mutating
+ methods *before* touching memory -- necessary because `intern_document` allocates an id before it reaches
+ storage, so a storage-only guard would leak one. Over MCP a refused write surfaces as an ordinary
+ `isError` tool result, not a crashed server.
+* **Tested** in `tests/read_only_open_tests.cpp`: a reader opening against a live writer while a second
+ *writer* is still refused; the snapshot semantics; all 16 rejections plus the command layer; byte-for-byte
+ fingerprints of the whole root across a reader's queries, filters, name resolution and aggregates; a stale
+ checkpoint and a corrupt index each left unhealed; a torn trailing record dropped; a missing root throwing
+ without creating anything; three readers at once; MCP tool errors; and `StorageEngine` refusing writes
+ directly. Verified across real processes too: a writer `mcp_server` holding the root while a `--read-only`
+ server queried it, was refused a `commit`, and a second writer failed with a single-writer violation.
 
 #### Phase 14 — Columnar projection store
 
@@ -2153,7 +2191,8 @@ root for its lifetime (`kernel/storage_lock.hpp`), so a second concurrent open o
 in `mcp_server`, or any caller linking `libkernel.a` directly — fails fast with a clear error
 instead of silently corrupting the log. This is enforcement of the already-declared model, not new
 concurrency: readers still don't exist, so every open (read or write) takes the exclusive lock
-today; a read-only open can switch to a shared lock additively once "many readers later" lands. See
+today; **Phase 13 changed this: a read-only open takes no lock at all** (a shared lock on this file is
+unacquirable while a writer holds it exclusively), so `LOCK` is now specifically the writer lock. See
 `docs/storage_format.md`'s "Storage root lock" section.
 
 Do not add concurrency prematurely.
@@ -2169,11 +2208,15 @@ When concurrency is introduced:
 process cannot currently open a live storage root at all, which is the concrete blocker that schedules
 it. The shape, additive to the exclusive lock already in place:
 
-* A read-only open takes a **shared** `flock()`; many readers coexist with the single writer.
-* A reader never writes — no index self-heal, no checkpoint or snapshot rewrite. A reader meeting a
- corrupt index fails loudly, because repairing it would be a write. This is a genuine behavioral
- difference from a read-write open, and has to be documented as one.
-* A reader sees a consistent committed prefix of the log, never a torn mid-commit or mid-batch state.
+* A read-only open takes **no lock at all** -- the shape that shipped. `LOCK_SH` on the writer's own lock
+ file is unacquirable while the writer holds `LOCK_EX`, so `LOCK` stays purely the single-writer guard and
+ readers, which write nothing, do not participate in it.
+* A reader never writes — no index self-heal, no checkpoint or snapshot rewrite. A reader meeting stale or
+ corrupt derived state rebuilds it **in memory** and keeps serving, because the log is the source of truth
+ and an in-memory rebuild is not a write; the files are left for a writer to heal. This is a genuine
+ behavioral difference from a read-write open, and is documented as one in `docs/storage_format.md`.
+* A reader sees a consistent committed prefix of the log and never a torn record; an in-flight *batch*,
+ however, may be partially visible, since batch durability is itself prefix-shaped.
 * The writer stays single. Nothing here introduces multi-writer anything.
 
 -- -

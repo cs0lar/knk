@@ -9,6 +9,7 @@
 // points in this repo (kernel_demo, the benchmarks) aren't -- verified instead by piping requests
 // into the built binary manually.
 
+#include <filesystem>
 #include <iostream>
 #include <optional>
 #include <string>
@@ -114,17 +115,42 @@ std::optional<nlohmann::ordered_json> handle_request(KnowledgeKernel &kernel, co
 } // namespace
 
 int main(int argc, char **argv) {
-    if (argc != 2) {
-        std::cerr << "usage: " << (argc > 0 ? argv[0] : "mcp_server") << " <storage-root>\n";
+    // --read-only (Phase 13) is how an analytics process actually gets at a live store: it opens the
+    // root without the writer lock, so it coexists with whatever process is writing, and every mutating
+    // tool answers with an error instead of writing. It is a snapshot as of startup -- this process
+    // replays once at open, so commits made afterwards need a restart to be seen.
+    std::filesystem::path root;
+    OpenMode mode = OpenMode::ReadWrite;
+    bool usage_error = false;
+
+    for (int i = 1; i < argc; ++i) {
+        std::string argument(argv[i]);
+        if (argument == "--read-only") {
+            mode = OpenMode::ReadOnly;
+        } else if (!argument.empty() && argument[0] == '-') {
+            usage_error = true;
+        } else if (root.empty()) {
+            root = std::filesystem::path(argument);
+        } else {
+            usage_error = true;
+        }
+    }
+
+    if (usage_error || root.empty()) {
+        std::cerr << "usage: " << (argc > 0 ? argv[0] : "mcp_server") << " <storage-root> [--read-only]\n";
         return 1;
     }
 
     std::optional<KnowledgeKernel> kernel_storage;
     try {
-        kernel_storage.emplace(StorageConfig{std::filesystem::path(argv[1])});
+        kernel_storage.emplace(StorageConfig{root}, mode);
     } catch (const std::exception &error) {
         std::cerr << "mcp_server: failed to open storage root: " << error.what() << "\n";
         return 1;
+    }
+
+    if (mode == OpenMode::ReadOnly) {
+        std::cerr << "mcp_server: opened '" << root.string() << "' read-only (no writer lock; writes will fail)\n";
     }
     KnowledgeKernel &kernel = *kernel_storage;
 
