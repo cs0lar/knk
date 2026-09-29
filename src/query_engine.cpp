@@ -1,8 +1,11 @@
 #include <algorithm>
+#include <limits>
 #include <map>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <unordered_set>
 
 #include "kernel/query_engine.hpp"
@@ -118,48 +121,61 @@ bool apply_op(CompareOp op, int ordering) {
     return false;
 }
 
-// The row's value for a field, as a Value so one comparison path serves every field. ObjectValue is the
-// only one that can be absent: an object id with nothing interned against it (a document id, or an id
-// that was never interned at all) simply has no value to compare.
-std::optional<Value> field_value(const Assertion &assertion, FilterField field, const Catalog &catalog) {
-    switch (field) {
+// Compares one field against the filter's operand **without materializing a Value for the row**.
+//
+// The earlier form built a Value per row per comparison and, for ObjectValue, copied the catalog's
+// std::string into an optional. Phase 11 measured per-row filter evaluation at ~7 ns, most of it exactly
+// that; a comparison is a few instructions, so the allocation dominated the work it was wrapping.
+//
+// Semantics are unchanged, deliberately down to the awkward corner: status compares by *name*, so
+// ordered comparisons on status stay lexicographic. A string_view makes that allocation-free without
+// changing what it means.
+int compare_ints(int64_t left, int64_t right) { return left < right ? -1 : (left == right ? 0 : 1); }
+
+bool evaluate_comparison(const Filter &filter, const Assertion &assertion, const Catalog &catalog) {
+    const Value &operand = filter.operand;
+
+    switch (filter.field) {
     case FilterField::Subject:
-        return Value::of_int64(static_cast<int64_t>(assertion.subject));
+        return apply_op(filter.op, compare_ints(static_cast<int64_t>(assertion.subject), operand.int64_value));
     case FilterField::Predicate:
-        return Value::of_int64(static_cast<int64_t>(assertion.predicate));
+        return apply_op(filter.op, compare_ints(static_cast<int64_t>(assertion.predicate), operand.int64_value));
     case FilterField::Object:
-        return Value::of_int64(static_cast<int64_t>(assertion.object));
-    case FilterField::ObjectValue:
-        return catalog.entity_value(assertion.object);
-    case FilterField::Confidence:
-        return Value::of_double(assertion.confidence);
+        return apply_op(filter.op, compare_ints(static_cast<int64_t>(assertion.object), operand.int64_value));
+    case FilterField::Confidence: {
+        double left = assertion.confidence;
+        double right = operand.double_value;
+        return apply_op(filter.op, left < right ? -1 : (left == right ? 0 : 1));
+    }
     case FilterField::ValidFrom:
-        return Value::of_timestamp(assertion.valid_from);
+        return apply_op(filter.op, compare_ints(assertion.valid_from, operand.timestamp_value));
     case FilterField::ValidTo:
-        return Value::of_timestamp(assertion.valid_to);
+        return apply_op(filter.op, compare_ints(assertion.valid_to, operand.timestamp_value));
     case FilterField::ObservedAt:
-        return Value::of_timestamp(assertion.observed_at);
-    case FilterField::Status:
-        return Value::of_text(status_name(assertion.status));
+        return apply_op(filter.op, compare_ints(assertion.observed_at, operand.timestamp_value));
+    case FilterField::Status: {
+        std::string_view left(status_name(assertion.status));
+        std::string_view right(operand.text);
+        return apply_op(filter.op, left < right ? -1 : (left == right ? 0 : 1));
+    }
+    case FilterField::ObjectValue: {
+        // The one field that has to consult the catalog, and the one that can legitimately be absent or
+        // of another kind -- heterogeneous data, not a malformed query, so it simply does not match.
+        const Value *value = catalog.find_entity_value(assertion.object);
+        if (value == nullptr || value->kind != operand.kind) {
+            return false;
+        }
+        return apply_op(filter.op, compare_same_kind(*value, operand));
+    }
     }
 
-    return std::nullopt;
+    return false;
 }
 
 bool evaluate(const Filter &filter, const Assertion &assertion, const Catalog &catalog) {
     switch (filter.kind) {
-    case FilterKind::Comparison: {
-        auto value = field_value(assertion, filter.field, catalog);
-
-        // A kind mismatch is heterogeneous data, not a malformed query: objects across the kernel are
-        // a mix of named entities and typed literals, so "object value > 100" simply does not match a
-        // row whose object is text.
-        if (!value.has_value() || value->kind != filter.operand.kind) {
-            return false;
-        }
-
-        return apply_op(filter.op, compare_same_kind(*value, filter.operand));
-    }
+    case FilterKind::Comparison:
+        return evaluate_comparison(filter, assertion, catalog);
 
     case FilterKind::And:
         for (const auto &child : filter.children) {
@@ -331,7 +347,7 @@ bool ordered_before(const Assertion &a, const Assertion &b, QueryOrder order) {
     return a.id < b.id;
 }
 
-const Assertion *find_by_id(const std::vector<Assertion> &assertions, AssertionId id) {
+const Assertion *find_by_id(std::span<const Assertion> assertions, AssertionId id) {
     if (id == 0 || id > assertions.size()) {
         return nullptr;
     }
@@ -479,8 +495,11 @@ void validate_aggregate(const AggregateQuery &query) {
 
 } // namespace
 
-QueryResult QueryEngine::execute(const Query &query, const std::vector<Assertion> &assertions,
-                                 const IndexManager &index_manager, const Catalog &catalog) const {
+QueryResult QueryEngine::execute(const Query &query, const QuerySource &source) const {
+    const auto &assertions = source.assertions;
+    const auto &index_manager = source.index_manager;
+    const auto &catalog = source.catalog;
+
     if (query.ir_version != QUERY_IR_VERSION) {
         throw std::runtime_error("unsupported query IR version");
     }
@@ -500,41 +519,80 @@ QueryResult QueryEngine::execute(const Query &query, const std::vector<Assertion
         object = catalog.resolve(*query.object);
     }
 
-    std::vector<Assertion> matched;
+    // Row indices, not rows. Everything up to the page boundary works on 4-byte indices: filtering
+    // pushes them, sorting swaps them, and only the rows that survive paging are ever copied. Phase 12
+    // measured a broad query as ~12x dominated by building and sorting 10,000 Assertion copies, which is
+    // what this removes -- late materialization, the other half of the columnar story.
+    std::vector<uint32_t> matched;
 
     auto candidates = select_candidates(query, subject, object, index_manager);
     if (candidates.has_value()) {
         for (AssertionId id : *candidates) {
             const Assertion *assertion = find_by_id(assertions, id);
             if (assertion != nullptr && matches(query, *assertion, subject, object, catalog)) {
-                matched.push_back(*assertion);
+                matched.push_back(static_cast<uint32_t>(id - 1));
             }
         }
+    } else if (!query.force_row_scan && columns_usable(source.columns, source.effective_status, assertions.size())) {
+        // The columnar path: the selectors, time windows, open-endedness and status set are answered by
+        // passes over single columns, and only the survivors are touched as rows.
+        vectorized_select(query, source.columns, source.effective_status, subject, object, matched);
+
+        if (query.filter.has_value()) {
+            // The filter tree stays per-row: it can consult the catalog and has arbitrary boolean shape,
+            // so it is applied to what the vectorized passes left rather than to everything.
+            auto surviving = matched.begin();
+            for (uint32_t row : matched) {
+                if (evaluate(*query.filter, assertions[row], catalog)) {
+                    *surviving++ = row;
+                }
+            }
+            matched.erase(surviving, matched.end());
+        }
     } else {
-        for (const auto &assertion : assertions) {
-            if (matches(query, assertion, subject, object, catalog)) {
-                matched.push_back(assertion);
+        for (size_t i = 0; i < assertions.size(); ++i) {
+            if (matches(query, assertions[i], subject, object, catalog)) {
+                matched.push_back(static_cast<uint32_t>(i));
             }
         }
     }
 
-    std::sort(matched.begin(), matched.end(), [&query](const Assertion &a, const Assertion &b) {
-        return query.newest_first ? ordered_before(b, a, query.order) : ordered_before(a, b, query.order);
-    });
+    auto ordered = [&query, &assertions](uint32_t left, uint32_t right) {
+        return query.newest_first ? ordered_before(assertions[right], assertions[left], query.order)
+                                  : ordered_before(assertions[left], assertions[right], query.order);
+    };
 
     size_t limit = query.limit == 0 ? MAX_QUERY_RESULT : std::min(query.limit, MAX_QUERY_RESULT);
 
     QueryResult result;
-    result.truncated = matched.size() > query.offset + limit;
+
+    // Saturating rather than wrapping: offset is caller-supplied and unbounded, so a wrapped offset+limit
+    // would turn "a page past the end" into "a page from the beginning".
+    size_t requested_end = query.offset > std::numeric_limits<size_t>::max() - limit
+                               ? std::numeric_limits<size_t>::max()
+                               : query.offset + limit;
+
+    result.truncated = matched.size() > requested_end;
+
+    size_t page_end = std::min(matched.size(), requested_end);
+
+    // Only the page has to be in order: sorting the tail that paging discards is work whose result is
+    // thrown away, and a limit is the common case rather than the exception.
+    if (page_end < matched.size()) {
+        std::partial_sort(matched.begin(), matched.begin() + static_cast<std::ptrdiff_t>(page_end), matched.end(),
+                          ordered);
+    } else {
+        std::sort(matched.begin(), matched.end(), ordered);
+    }
 
     if (query.offset >= matched.size()) {
         return result; // offset past the end is an empty page, not an error
     }
 
-    auto begin = matched.begin() + static_cast<std::ptrdiff_t>(query.offset);
-    auto end = matched.size() - query.offset > limit ? begin + static_cast<std::ptrdiff_t>(limit) : matched.end();
-
-    result.assertions.assign(begin, end);
+    result.assertions.reserve(page_end - query.offset);
+    for (size_t i = query.offset; i < page_end; ++i) {
+        result.assertions.push_back(assertions[matched[i]]);
+    }
 
     // Only the returned page is resolved, never the whole match set: a 10,000-row match paged three at
     // a time costs three lookups per field, not 10,000.
@@ -559,8 +617,11 @@ QueryResult QueryEngine::execute(const Query &query, const std::vector<Assertion
     return result;
 }
 
-AggregateResult QueryEngine::aggregate(const AggregateQuery &query, const std::vector<Assertion> &assertions,
-                                       const IndexManager &index_manager, const Catalog &catalog) const {
+AggregateResult QueryEngine::aggregate(const AggregateQuery &query, const QuerySource &source) const {
+    const auto &assertions = source.assertions;
+    const auto &index_manager = source.index_manager;
+    const auto &catalog = source.catalog;
+
     validate_aggregate(query);
 
     const Query &selection = query.selection;
@@ -659,6 +720,17 @@ AggregateResult QueryEngine::aggregate(const AggregateQuery &query, const std::v
             const Assertion *assertion = find_by_id(assertions, id);
             if (assertion != nullptr && matches(selection, *assertion, subject, object, catalog)) {
                 fold(*assertion);
+            }
+        }
+    } else if (!selection.force_row_scan &&
+               columns_usable(source.columns, source.effective_status, assertions.size())) {
+        std::vector<uint32_t> rows;
+        vectorized_select(selection, source.columns, source.effective_status, subject, object, rows);
+
+        for (uint32_t row : rows) {
+            const Assertion &assertion = assertions[row];
+            if (!selection.filter.has_value() || evaluate(*selection.filter, assertion, catalog)) {
+                fold(assertion);
             }
         }
     } else {

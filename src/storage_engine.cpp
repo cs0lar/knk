@@ -60,7 +60,7 @@ size_t StorageEngine::column_row_count() const { return column_store_.row_count(
 
 bool StorageEngine::verify_columns() const { return column_store_.verify(); }
 
-ColumnSpans StorageEngine::map_columns() { return column_store_.map(); }
+ColumnSpans StorageEngine::map_columns() const { return column_store_.map(); }
 
 OpenMode StorageEngine::mode() const { return mode_; }
 

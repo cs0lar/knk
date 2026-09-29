@@ -14,6 +14,8 @@
 // It sits above IndexManager in the layering, so IndexManager keeps returning ids only and never
 // learns what "current" means.
 
+#include <cstdint>
+#include <span>
 #include <vector>
 
 #include "kernel/aggregate.hpp"
@@ -21,8 +23,26 @@
 #include "kernel/catalog.hpp"
 #include "kernel/index_manager.hpp"
 #include "kernel/query.hpp"
+#include "kernel/vectorized_scan.hpp"
 
 namespace knk {
+
+// Everything a query runs against, passed rather than held -- see the note above on why this engine is
+// stateless. Grouped into a struct because Phase 15 added two more inputs and later phases will add
+// statistics; a five-parameter call that grows every phase is its own kind of bug.
+struct QuerySource {
+    std::span<const Assertion> assertions;
+    const IndexManager &index_manager;
+    const Catalog &catalog;
+
+    // The columnar projection, empty when unavailable (no columns/ at all, a read-only open of a root
+    // that never had them, or a store that lags the log). Empty simply means the row path answers.
+    ColumnSpans columns;
+
+    // Replayed, effective status per row, parallel to `assertions`. Needed because the columns are a
+    // verbatim projection of the log and their status byte is the one the record was *appended* with.
+    std::span<const uint8_t> effective_status;
+};
 
 class QueryEngine {
   public:
@@ -35,8 +55,7 @@ class QueryEngine {
     // rather than refused, a query naming ids that were never interned returns nothing, and an
     // ObjectValue comparison against a row whose value is of a different kind (or has no interned value
     // at all) is false rather than an error -- assertion objects are heterogeneous by design.
-    QueryResult execute(const Query &query, const std::vector<Assertion> &assertions, const IndexManager &index_manager,
-                        const Catalog &catalog) const;
+    QueryResult execute(const Query &query, const QuerySource &source) const;
 
     // Aggregates the rows an AggregateQuery::selection matches, in a single streaming pass: rows are
     // folded into their group as they are visited and never materialized as a result set, so memory is
@@ -47,8 +66,7 @@ class QueryEngine {
     // aggregations, more than MAX_GROUP_BY_FIELDS group-by fields, a bucket field without a positive
     // width, a selection carrying row-shaping fields that mean nothing here, and -- at evaluation time
     // -- an aggregate producing more groups than its cap allows.
-    AggregateResult aggregate(const AggregateQuery &query, const std::vector<Assertion> &assertions,
-                              const IndexManager &index_manager, const Catalog &catalog) const;
+    AggregateResult aggregate(const AggregateQuery &query, const QuerySource &source) const;
 };
 
 } // namespace knk

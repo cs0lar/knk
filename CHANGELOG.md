@@ -87,6 +87,17 @@ the PR that makes it — see `CONTRIBUTING.md`.
   `MAX_BATCH_SIZE`; available as a `RecordProvenanceBatchCommand` and the `record_provenance_batch`
   MCP tool.
 
+- **Phase 15 — vectorized execution:** queries now scan the columnar store instead of the row layout
+  where no index applies, evaluating each columnar predicate as one branch-free pass over one column and
+  testing the filter tree only on the survivors. Filtering, sorting and paging work on row indices
+  rather than `Assertion` copies, and a limited query only orders the page it returns, so a broad filter
+  over 10,000 rows measures **6.5x faster** (0.849 → 0.131 ms) and scans ~1.7x. Filter comparisons no
+  longer build a `Value` per row, and `ObjectValue` borrows the catalog's value rather than copying a
+  string per row. Results are unchanged by construction: the randomized differential suites now answer
+  every generated query through an index, through the columnar scan, and through the row scan, and
+  require all three to agree with an independent reference. Also fixes a latent overflow in paging where
+  a large `offset + limit` could wrap and return a page from the beginning instead of nothing.
+
 - **Phase 14 — columnar projection store:** a new `columns/` directory holds ten fixed-width, memory-
   mapped arrays — one per `Assertion` field — in assertion-id order, maintained in lockstep by every
   commit path and rebuilt from the log whenever it cannot be trusted. It is purely derived state: never

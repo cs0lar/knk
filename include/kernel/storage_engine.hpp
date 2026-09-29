@@ -53,7 +53,7 @@ class StorageEngine {
 
     bool verify_columns() const;
 
-    ColumnSpans map_columns();
+    ColumnSpans map_columns() const;
 
     std::vector<Assertion> load_assertions() const;
 

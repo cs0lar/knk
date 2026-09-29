@@ -108,9 +108,11 @@ class ColumnStore {
 
     // Maps every column for reading. Returns empty spans when the store is unusable (absent, or failing
     // verify); a caller that gets empty spans falls back to the log, which is always authoritative.
-    ColumnSpans map();
+    // const because mapping is a read: the mappings it caches are a detail of how the bytes are reached,
+    // not a change to what the store holds. That matters because KnowledgeKernel::query is const.
+    ColumnSpans map() const;
 
-    void unmap();
+    void unmap() const;
 
   private:
     struct Mapping {
@@ -132,7 +134,7 @@ class ColumnStore {
     // checksum instead of recomputing it over every row.
     std::vector<uint32_t> manifest_checksums_;
 
-    std::vector<Mapping> mappings_;
+    mutable std::vector<Mapping> mappings_;
 };
 
 } // namespace knk

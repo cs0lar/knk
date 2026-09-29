@@ -27,6 +27,7 @@ add_library(kernel
     src/json_codec.cpp
     src/mcp_tools.cpp
     src/column_store.cpp
+    src/vectorized_scan.cpp
     src/query_engine.cpp
     src/storage_lock.cpp
 )

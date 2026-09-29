@@ -52,6 +52,9 @@ never loses the history of how its knowledge changed.
 - **Columnar projection** — a memory-mapped, column-per-field projection of the log, maintained in
   lockstep with every commit and rebuilt from the log whenever it cannot be verified: derived state that
   the scan-oriented query paths are built on.
+- **Vectorized scans** — queries without an applicable index filter column-at-a-time and materialize only
+  the page they return, which is both faster and provably identical to the row path: every randomized
+  test query is answered through an index, the columnar scan, and the row scan, and all must agree.
 - **Entity/predicate catalog** — idempotent name and typed-literal interning
   (`intern_entity`/`intern_value`/`intern_predicate`), plus a payload store for large content
   (documents) addressed by id.

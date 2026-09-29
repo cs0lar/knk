@@ -35,6 +35,11 @@ class Catalog {
     std::optional<PredicateId> find_predicate(const std::string &name) const;
 
     std::optional<Value> entity_value(EntityId id) const;
+
+    // The copy-free form of entity_value: a borrowed pointer into the catalog, or nullptr. Exists for the
+    // query engine's per-row filter path, where returning an optional<Value> copies a std::string for
+    // every row examined. Valid until the next mutation of this Catalog.
+    const Value *find_entity_value(EntityId id) const;
     std::optional<std::string> predicate_name(PredicateId id) const;
 
     EntityId next_entity_id() const;

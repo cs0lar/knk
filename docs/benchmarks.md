@@ -224,6 +224,52 @@ reopening per commit — deliberately not done here, because it trades ten open 
 and a stale-handle case after every rebuild for ~15 µs on a path whose recommended bulk form
 (`commit_batch`, still ~1M commits/sec) barely notices.
 
+### `query_benchmark` — vectorized execution (2026-09-29)
+
+Phase 15. Before/after measured **in the same session on the same machine**, which matters: an earlier
+draft of this comparison used a number recorded on another day and read a 3x machine-state difference as
+a code regression.
+
+```
+                                        Phase 14      Phase 15    speedup
+scan, current-shaped query              0.015         0.009       1.7x
+filter, matches none (10,000 rows)      0.054         0.030       1.8x
+filter, matches all (10,000 rows)       0.849         0.131       6.5x
+```
+
+Three separate changes, each aimed at a cost an earlier phase had measured and named:
+
+* **Late materialization** is where the 6.5x comes from, and it has nothing to do with SIMD. Filtering,
+  sorting and paging now work on 4-byte row indices, and only the rows that survive paging are copied.
+  Phase 12 measured a broad query as ~12x dominated by building and sorting 10,000 `Assertion` copies;
+  sorting indices and materializing one page removes almost all of it. `partial_sort` finishes the job:
+  when a limit discards a tail, ordering that tail is work thrown away.
+* **Vectorized column passes** give the 1.7x on scans. Each columnar predicate is one branch-free pass
+  over one contiguous column writing a byte mask, instead of re-testing every predicate per 88-byte
+  record. Part of that win is not the layout at all: the row path re-tests *absent* predicates on every
+  row, while the columnar path simply never runs a pass for a predicate the query did not ask for.
+* **No `Value` per row.** Filter comparisons now read the field directly instead of materializing a
+  `Value` (a struct containing a `std::string`) per row per comparison, and `ObjectValue` borrows the
+  catalog's value rather than copying it. Worth ~1.3x on its own on the filter-only path.
+
+```
+== aggregation over the same corpus ==
+aggregate{count, no grouping}                            0.066 ms/query   (was 0.077)
+aggregate{count+avg, by predicate}                       0.182 ms/query   (was 0.192)
+aggregate{count, by subject (5000 groups)}               1.035 ms/query   (was 0.970)
+```
+
+Aggregation gains little and the widest case is marginally *worse*: its cost is key construction and
+ordered-map insertion, which vectorized selection does not touch, and the selection vector is pure
+overhead when nothing narrows it. That is the honest read, and it says where aggregation work belongs
+next — hashing group keys without building a `Value` per row — rather than here.
+
+**What did not improve, and why.** At 10,000 rows everything is cache-resident, so these numbers measure
+instruction count far more than memory bandwidth; the layout advantage grows on corpora too large to
+cache, which this corpus cannot show. No explicit SIMD intrinsics were added: the passes are written
+branch-free for the compiler to vectorize, and nothing here yet justifies hand-written intrinsics over
+that.
+
 ### `query_benchmark` — the columnar substrate (2026-09-29)
 
 Recorded with Phase 14, same 10,000-assertion corpus and machine as the sections above. Nothing queries
