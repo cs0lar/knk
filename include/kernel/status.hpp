@@ -1,11 +1,21 @@
 #pragma once
 
+#include <cstdint>
 #include <optional>
 #include <string_view>
 
 namespace knk {
 
-enum class AssertionStatus { Active, Superseded, Retracted, Retraction, Hypothesis };
+// The numeric values are explicit because they are **on-disk format** as of Phase 14: the columnar
+// store writes status as this enum's underlying value (one byte per row), so renumbering these would
+// silently reinterpret every stored row. Adding a status means appending to the end.
+enum class AssertionStatus : uint8_t {
+    Active = 0,
+    Superseded = 1,
+    Retracted = 2,
+    Retraction = 3,
+    Hypothesis = 4,
+};
 
 // The canonical spelling of each status. Promoted out of json_codec.cpp (2026-09-28) when the query
 // IR's Status filter needed the same names: two independent switch statements over the same enum are

@@ -49,6 +49,9 @@ never loses the history of how its knowledge changed.
 - **Read-only opens** — `mcp_server <root> --read-only` (or `OpenMode::ReadOnly`) queries a live storage
   root alongside the writing process, taking no lock and writing nothing, so an external analytics
   client can read without stopping the writer.
+- **Columnar projection** — a memory-mapped, column-per-field projection of the log, maintained in
+  lockstep with every commit and rebuilt from the log whenever it cannot be verified: derived state that
+  the scan-oriented query paths are built on.
 - **Entity/predicate catalog** — idempotent name and typed-literal interning
   (`intern_entity`/`intern_value`/`intern_predicate`), plus a payload store for large content
   (documents) addressed by id.

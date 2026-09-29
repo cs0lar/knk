@@ -388,6 +388,67 @@ which read the full log, are completely unaffected by archival.
 True, irreversible deletion is an explicit **non-goal**, not deferred future work — see `AGENTS.md`'s
 Phase 8 section.
 
+## Columnar projection (`columns/`)
+
+A column-oriented projection of the assertion log: ten fixed-width arrays, one per `Assertion` field, in
+assertion-id order — row *i* is id *i+1*. Added in Phase 14 as the substrate Phase 15's vectorized
+execution needs; a filter on one field touches one contiguous byte range instead of striding over
+88-byte records.
+
+```text
+columns/
+├── manifest              row count + one checksum per column
+├── subject.col           uint64 per row
+├── predicate.col         uint64
+├── object.col            uint64
+├── valid_from.col        int64
+├── valid_to.col          int64
+├── observed_at.col       int64
+├── confidence.col        double (IEEE 754, native byte order)
+├── status.col            uint8  (AssertionStatus's underlying value)
+├── supersedes_id.col     uint64
+└── retracts_id.col       uint64
+```
+
+Each column file is `[4-byte magic "KNKL"][uint32 version][uint64 element size]` followed by raw
+elements. The element size is stored so a stride change is caught as a format mismatch rather than read
+as garbage. `status.col` makes the numeric values of `AssertionStatus` part of the on-disk format, which
+is why `status.hpp` now spells them out explicitly.
+
+**The projection is verbatim, not effective.** Each row is the log record *as appended*, including the
+status it was appended with. A superseded row's `status.col` byte still says `Active`, because
+append-only storage never rewrote it — the `Superseded` status exists only in replayed in-memory state.
+That is why `supersedes_id`/`retracts_id` are part of the projection: together with `status` they make
+effective status derivable from the columns alone (a row is superseded or retracted exactly when some
+later row points at it), which is the same derivation replay performs and the one Phase 19 will restrict
+by id. Mirroring effective status instead would mean rewriting an arbitrary earlier row on every
+supersession — an in-place write into a fixed-stride file, plus a full checksum recomputation.
+
+**Integrity works differently here than anywhere else in the storage root.** Every log carries a CRC per
+record; fixed-stride columns cannot, without giving up the stride that makes them worth having. Instead
+`columns/manifest` holds the row count and one CRC-32 per column, written with the same atomic
+temp-then-rename as the checkpoint, and self-checksummed so a truncated manifest is rejected rather than
+read as a row count. Appends continue each column's checksum incrementally (see `crc32_update` in
+`checksum.hpp`) — recomputing over every row per append would make appending O(store) rather than
+O(appended), i.e. quadratic over the store's life.
+
+**Recovery is the Phase 3 index treatment, not the log's:** never fatal, always rebuildable.
+`StorageEngine`'s constructor verifies the store and then either
+
+* **rebuilds** it wholesale from `assertions.log` — a store that fails verification, or a root written
+  before this phase existed and has no `columns/` at all (a one-time O(log) migration); or
+* **appends the missing tail** — a store that merely lags, which is the ordinary crash-between-appends
+  case, since `append_assertion` writes the log first and the columns second on purpose.
+
+Columns are maintained inside `StorageEngine::append_assertion`/`append_assertions`, so every commit path
+— single, superseding, retraction, hypothesis, and batch — stays in lockstep without having to remember.
+
+**A read-only open neither builds nor repairs them** (both are writes). It serves queries from the log,
+which is always authoritative, and leaves a missing or damaged `columns/` exactly as found.
+
+Like the raw-struct serialization noted below, these files are native-endian and native-layout: portable
+only between builds that agree on those.
+
 ## Durability
 
 Every `append()` closes its `std::ofstream` and then fsyncs the file (`knk::fsync_file`,

@@ -3,9 +3,11 @@
 #include <string>
 
 #include "kernel/aggregate.hpp"
+#include "kernel/column_store.hpp"
 #include "kernel/knowledge_kernel.hpp"
 #include "kernel/query.hpp"
 #include "kernel/storage_config.hpp"
+#include "kernel/storage_engine.hpp"
 #include "kernel/time.hpp"
 
 #include "benchmark_harness.hpp"
@@ -218,6 +220,65 @@ void aggregate_latency(const KnowledgeKernel &kernel, size_t queries) {
            wide_timer.elapsed_seconds() / static_cast<double>(queries) * 1000.0, "ms/query");
 }
 
+// --- the columnar substrate (Phase 14) -------------------------------------------
+//
+// Nothing queries columns yet -- Phase 15 is what changes execution -- so these numbers exist to be
+// beaten: they establish how fast the same predicate is over one mapped column versus over the
+// row-of-structs layout the engine scans today, and what the manifest-checksum design costs at open.
+//
+// The engine is opened read-only (Phase 13), which is also the only reason it can coexist with the
+// KnowledgeKernel holding the writer lock a few lines up.
+void columnar_substrate(const std::filesystem::path &root, size_t rounds) {
+    StorageEngine engine(StorageConfig{root}, OpenMode::ReadOnly);
+
+    auto columns = engine.map_columns();
+    if (columns.empty()) {
+        report("columns unavailable -- skipped", 0.0, "ms");
+        return;
+    }
+
+    // One column, one contiguous byte range: 8 bytes touched per row instead of striding over an
+    // 88-byte record for the one field the predicate reads.
+    Timer column_timer;
+    size_t column_matches = 0;
+    for (size_t round = 0; round < rounds; ++round) {
+        for (size_t i = 0; i < columns.confidence.size(); ++i) {
+            if (columns.confidence[i] >= 0.5) {
+                ++column_matches;
+            }
+        }
+    }
+    double column_elapsed = column_timer.elapsed_seconds();
+    report("columns: count(confidence >= 0.5)", column_elapsed / static_cast<double>(rounds) * 1000.0, "ms/scan");
+
+    // The same predicate over the row layout, which is what the query engine scans today.
+    auto rows = engine.load_assertions();
+    Timer row_timer;
+    size_t row_matches = 0;
+    for (size_t round = 0; round < rounds; ++round) {
+        for (const auto &assertion : rows) {
+            if (assertion.confidence >= 0.5) {
+                ++row_matches;
+            }
+        }
+    }
+    double row_elapsed = row_timer.elapsed_seconds();
+    report("rows:    count(confidence >= 0.5)", row_elapsed / static_cast<double>(rounds) * 1000.0, "ms/scan");
+
+    if (column_matches != row_matches) {
+        report("MISMATCH between column and row scan", static_cast<double>(column_matches), "matches");
+    }
+
+    // What verifying the manifest costs, since that is the price paid for columns having no per-row
+    // checksum: an O(rows) read every time a root is opened read-write.
+    Timer verify_timer;
+    for (size_t round = 0; round < rounds; ++round) {
+        engine.verify_columns();
+    }
+    report("columns: verify (manifest checksums)",
+           verify_timer.elapsed_seconds() / static_cast<double>(rounds) * 1000.0, "ms/open");
+}
+
 } // namespace
 
 int main() {
@@ -240,6 +301,9 @@ int main() {
 
     section("aggregation over the same corpus");
     aggregate_latency(kernel, 200);
+
+    section("columnar substrate over the same corpus");
+    columnar_substrate(root, 20);
 
     std::filesystem::remove_all(root);
     return 0;

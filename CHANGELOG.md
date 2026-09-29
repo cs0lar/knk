@@ -87,6 +87,19 @@ the PR that makes it — see `CONTRIBUTING.md`.
   `MAX_BATCH_SIZE`; available as a `RecordProvenanceBatchCommand` and the `record_provenance_batch`
   MCP tool.
 
+- **Phase 14 — columnar projection store:** a new `columns/` directory holds ten fixed-width, memory-
+  mapped arrays — one per `Assertion` field — in assertion-id order, maintained in lockstep by every
+  commit path and rebuilt from the log whenever it cannot be trusted. It is purely derived state: never
+  authoritative, never fatal when damaged, and a read-only open neither builds nor repairs it. The
+  projection is *verbatim*, meaning each row is the log record as appended, so a superseded row's status
+  byte still reads `Active`; `supersedes_id`/`retracts_id` are part of the projection so that effective
+  status stays derivable from the columns alone. Integrity comes from `columns/manifest` (row count plus
+  a CRC per column, atomically replaced and self-checksummed) rather than a per-row checksum, which
+  fixed-stride columns cannot carry; `checksum.hpp` gained an incremental `crc32_update`/`crc32_finalize`
+  so an append stays O(appended) rather than O(store). A root written before this phase is migrated on
+  its next read-write open. Nothing queries columns yet — that is the next phase; this one establishes
+  the substrate and its baselines.
+
 - **Phase 13 — read-only concurrent opens:** `KnowledgeKernel` and `StorageEngine` take an `OpenMode`,
   and `mcp_server <root> --read-only` exposes it, so an external process can query a storage root while
   another process is writing it — previously impossible, since every open took the exclusive writer
