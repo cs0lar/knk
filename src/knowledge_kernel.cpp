@@ -1037,6 +1037,10 @@ QuerySource KnowledgeKernel::query_source() const {
 
 QueryResult KnowledgeKernel::query(const Query &query) const { return query_engine_.execute(query, query_source()); }
 
+QueryPlan KnowledgeKernel::explain_query(const Query &query) const {
+    return query_engine_.explain(query, query_source());
+}
+
 AggregateResult KnowledgeKernel::aggregate(const AggregateQuery &query) const {
     return query_engine_.aggregate(query, query_source());
 }

@@ -87,6 +87,18 @@ the PR that makes it — see `CONTRIBUTING.md`.
   `MAX_BATCH_SIZE`; available as a `RecordProvenanceBatchCommand` and the `record_provenance_batch`
   MCP tool.
 
+- **Phase 16 — cost-based planning and `explain_query`:** the engine now costs every usable source for a
+  query — the subject, observed-time, object and predicate indexes, the columnar scan and the row scan —
+  and takes the cheapest, replacing Phase 11's fixed heuristics. Candidate row counts are *exact* (an
+  index bucket's size or a binary search, read without materializing anything), so only cost per row is
+  modelled, from constants measured in `query_benchmark`. The practical change: an index is no longer
+  taken merely because it applies, so a predicate matching most of the corpus is scanned instead — timed
+  on a 250,000-assertion corpus, the index the planner declined costs ~1.3 ms against the chosen scan's
+  ~0.4 ms. `explain_query` (also an MCP tool) returns the plan without running it, including every
+  alternative weighed and why it was rejected, and is produced by the same call the executor makes so the
+  two cannot disagree. Planning changes cost only: the randomized differential suites still require every
+  path to return identical rows.
+
 - **Phase 15 — vectorized execution:** queries now scan the columnar store instead of the row layout
   where no index applies, evaluating each columnar predicate as one branch-free pass over one column and
   testing the filter tree only on the survivors. Filtering, sorting and paging work on row indices

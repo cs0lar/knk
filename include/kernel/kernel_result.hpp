@@ -12,6 +12,7 @@
 #include "kernel/ids.hpp"
 #include "kernel/provenance_log.hpp"
 #include "kernel/query.hpp"
+#include "kernel/query_plan.hpp"
 #include "kernel/value.hpp"
 
 namespace knk {
@@ -53,6 +54,7 @@ using KernelResult = std::variant<std::monostate,                               
                                   std::vector<std::optional<Value>>,       // entity_value_batch
                                   std::vector<std::optional<ProvenanceRecord>>, // provenance_for_batch
                                   QueryResult,                                  // query
-                                  AggregateResult>;                             // aggregate
+                                  AggregateResult,                              // aggregate
+                                  QueryPlan>;                                   // explain_query
 
 } // namespace knk

@@ -55,6 +55,9 @@ never loses the history of how its knowledge changed.
 - **Vectorized scans** — queries without an applicable index filter column-at-a-time and materialize only
   the page they return, which is both faster and provably identical to the row path: every randomized
   test query is answered through an index, the columnar scan, and the row scan, and all must agree.
+- **Cost-based planning** — every usable source is costed on exact row counts and the cheapest is taken,
+  so an index is used when it is selective and skipped when it is not; `explain_query` returns the plan,
+  its alternatives, and why each was rejected, without running the query.
 - **Entity/predicate catalog** — idempotent name and typed-literal interning
   (`intern_entity`/`intern_value`/`intern_predicate`), plus a payload store for large content
   (documents) addressed by id.

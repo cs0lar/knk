@@ -10,6 +10,7 @@
 #include "kernel/ids.hpp"
 #include "kernel/provenance_log.hpp"
 #include "kernel/query.hpp"
+#include "kernel/query_plan.hpp"
 #include "kernel/time.hpp"
 #include "kernel/value.hpp"
 
@@ -282,18 +283,22 @@ struct AggregateCommand {
     AggregateQuery query;
 };
 
-using KernelCommand =
-    std::variant<CommitCommand, CommitByNameCommand, CommitBatchCommand, CommitBatchByNameCommand,
-                 CommitRetractionCommand, CommitSupersedingCommand, WriteSnapshotCommand, InternEntityCommand,
-                 InternValueCommand, InternPredicateCommand, InternDocumentCommand, RecordProvenanceCommand,
-                 RecordProvenanceBatchCommand, CommitHypothesisCommand, MergeEntitiesCommand,
-                 ArchiveSegmentsBeforeCommand, GetCommand, AssertionsForSubjectCommand, CurrentCommand,
-                 CurrentByNameCommand, CurrentByObjectCommand, CurrentByPredicateCommand, ValidAtCommand,
-                 KnownAtCommand, ValidAtKnownAtCommand, ValidTimeTimelineCommand, ObservedTimeTimelineCommand,
-                 CommitHistoryCommand, ChangesSinceCommand, ExplainCommand, FindConflictsCommand, FindEntityCommand,
-                 FindValueCommand, FindPredicateCommand, EntityNameCommand, EntityValueCommand, PredicateNameCommand,
-                 DocumentContentCommand, ProvenanceForCommand, EntityNameBatchCommand, EntityValueBatchCommand,
-                 PredicateNameBatchCommand, ProvenanceForBatchCommand, HypothesesForCommand, NeighborsCommand,
-                 CoOccurringPredicatesCommand, ResolveEntityCommand, QueryCommand, AggregateCommand>;
+// Explaining is a read like any other, so it is reified like any other.
+struct ExplainQueryCommand {
+    Query query;
+};
+
+using KernelCommand = std::variant<
+    CommitCommand, CommitByNameCommand, CommitBatchCommand, CommitBatchByNameCommand, CommitRetractionCommand,
+    CommitSupersedingCommand, WriteSnapshotCommand, InternEntityCommand, InternValueCommand, InternPredicateCommand,
+    InternDocumentCommand, RecordProvenanceCommand, RecordProvenanceBatchCommand, CommitHypothesisCommand,
+    MergeEntitiesCommand, ArchiveSegmentsBeforeCommand, GetCommand, AssertionsForSubjectCommand, CurrentCommand,
+    CurrentByNameCommand, CurrentByObjectCommand, CurrentByPredicateCommand, ValidAtCommand, KnownAtCommand,
+    ValidAtKnownAtCommand, ValidTimeTimelineCommand, ObservedTimeTimelineCommand, CommitHistoryCommand,
+    ChangesSinceCommand, ExplainCommand, FindConflictsCommand, FindEntityCommand, FindValueCommand,
+    FindPredicateCommand, EntityNameCommand, EntityValueCommand, PredicateNameCommand, DocumentContentCommand,
+    ProvenanceForCommand, EntityNameBatchCommand, EntityValueBatchCommand, PredicateNameBatchCommand,
+    ProvenanceForBatchCommand, HypothesesForCommand, NeighborsCommand, CoOccurringPredicatesCommand,
+    ResolveEntityCommand, QueryCommand, AggregateCommand, ExplainQueryCommand>;
 
 } // namespace knk

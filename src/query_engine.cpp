@@ -9,6 +9,7 @@
 #include <unordered_set>
 
 #include "kernel/query_engine.hpp"
+#include "kernel/query_planner.hpp"
 
 namespace knk {
 
@@ -211,60 +212,29 @@ bool is_current_shaped(const Query &query) {
     return query.open_ended_only && query.statuses.size() == 1 && query.statuses.front() == AssertionStatus::Active;
 }
 
-// nullopt means "scan everything"; an empty vector means "this index genuinely holds nothing for these
-// arguments", which is a real (empty) answer rather than a reason to fall back. Phase 10 conflated the
-// two and rescanned the whole log whenever an index came back empty.
-//
-// Every rule here is chosen to be result-preserving by construction rather than by benchmark: an index
-// is used only where it provably contains every row the query could match. Cost-based selection over
-// real statistics is Phase 16.
-std::optional<std::vector<AssertionId>> select_candidates(const Query &query, std::optional<EntityId> subject,
-                                                          std::optional<EntityId> object,
-                                                          const IndexManager &index_manager) {
-    if (query.force_scan) {
-        return std::nullopt;
-    }
-
-    if (subject.has_value()) {
-        // observed_before returns the subject's assertions with observed_at <= t, which is a prefix of
-        // assertions_for_subject -- never larger, often much smaller, and a row outside it could not
-        // have matched observed_to anyway.
-        if (query.observed_to.has_value()) {
-            return index_manager.observed_before(*subject, *query.observed_to);
-        }
-
+// The ids a chosen index source yields. Deliberately separate from planning: a plan can be produced --
+// and explained -- without doing any of the work it describes, which is what makes explain_query cheap
+// enough to call before every query.
+std::vector<AssertionId> candidate_ids(PlanSource source, const Query &query, std::optional<EntityId> subject,
+                                       std::optional<EntityId> object, const IndexManager &index_manager) {
+    switch (source) {
+    case PlanSource::SubjectIndex:
         return index_manager.assertions_for_subject(*subject);
+    case PlanSource::ObservedTimeIndex:
+        return index_manager.observed_before(*subject, *query.observed_to);
+    case PlanSource::ObjectCurrentIndex:
+        return index_manager.current_assertions_by_object(*object);
+    case PlanSource::PredicateCurrentIndex:
+        return index_manager.current_assertions_by_predicate(*query.predicate);
+    case PlanSource::ColumnarScan:
+    case PlanSource::RowScan:
+        break;
     }
 
-    if (is_current_shaped(query)) {
-        std::optional<std::vector<AssertionId>> by_object;
-        std::optional<std::vector<AssertionId>> by_predicate;
-
-        if (object.has_value()) {
-            by_object = index_manager.current_assertions_by_object(*object);
-        }
-
-        if (query.predicate.has_value()) {
-            by_predicate = index_manager.current_assertions_by_predicate(*query.predicate);
-        }
-
-        // Both apply: take the smaller bucket. The other selector still filters every row, so this only
-        // changes how many rows are examined.
-        if (by_object.has_value() && by_predicate.has_value()) {
-            return by_object->size() <= by_predicate->size() ? by_object : by_predicate;
-        }
-
-        if (by_object.has_value()) {
-            return by_object;
-        }
-
-        if (by_predicate.has_value()) {
-            return by_predicate;
-        }
-    }
-
-    return std::nullopt;
+    return {};
 }
+
+bool is_index_source(PlanSource source) { return source != PlanSource::ColumnarScan && source != PlanSource::RowScan; }
 
 bool status_allowed(const Query &query, AssertionStatus status) {
     if (query.statuses.empty()) {
@@ -525,15 +495,19 @@ QueryResult QueryEngine::execute(const Query &query, const QuerySource &source) 
     // what this removes -- late materialization, the other half of the columnar story.
     std::vector<uint32_t> matched;
 
-    auto candidates = select_candidates(query, subject, object, index_manager);
-    if (candidates.has_value()) {
-        for (AssertionId id : *candidates) {
+    // One plan, followed -- not a plan produced for explaining and a separate set of rules for running.
+    // An explanation that can disagree with the execution is worse than none.
+    bool columns_ready = columns_usable(source.columns, source.effective_status, assertions.size());
+    QueryPlan plan = plan_query(query, subject, object, index_manager, columns_ready, assertions.size());
+
+    if (is_index_source(plan.chosen)) {
+        for (AssertionId id : candidate_ids(plan.chosen, query, subject, object, index_manager)) {
             const Assertion *assertion = find_by_id(assertions, id);
             if (assertion != nullptr && matches(query, *assertion, subject, object, catalog)) {
                 matched.push_back(static_cast<uint32_t>(id - 1));
             }
         }
-    } else if (!query.force_row_scan && columns_usable(source.columns, source.effective_status, assertions.size())) {
+    } else if (plan.chosen == PlanSource::ColumnarScan) {
         // The columnar path: the selectors, time windows, open-endedness and status set are answered by
         // passes over single columns, and only the survivors are touched as rows.
         vectorized_select(query, source.columns, source.effective_status, subject, object, matched);
@@ -615,6 +589,31 @@ QueryResult QueryEngine::execute(const Query &query, const QuerySource &source) 
     }
 
     return result;
+}
+
+QueryPlan QueryEngine::explain(const Query &query, const QuerySource &source) const {
+    // Validates exactly as execute() does, so explaining a malformed query reports the same error rather
+    // than describing a plan for something that would never run.
+    if (query.ir_version != QUERY_IR_VERSION) {
+        throw std::runtime_error("unsupported query IR version");
+    }
+
+    if (query.filter.has_value()) {
+        validate(*query.filter, 1);
+    }
+
+    std::optional<EntityId> subject;
+    if (query.subject.has_value()) {
+        subject = source.catalog.resolve(*query.subject);
+    }
+
+    std::optional<EntityId> object;
+    if (query.object.has_value()) {
+        object = source.catalog.resolve(*query.object);
+    }
+
+    bool columns_ready = columns_usable(source.columns, source.effective_status, source.assertions.size());
+    return plan_query(query, subject, object, source.index_manager, columns_ready, source.assertions.size());
 }
 
 AggregateResult QueryEngine::aggregate(const AggregateQuery &query, const QuerySource &source) const {
@@ -714,16 +713,17 @@ AggregateResult QueryEngine::aggregate(const AggregateQuery &query, const QueryS
         }
     };
 
-    auto candidates = select_candidates(selection, subject, object, index_manager);
-    if (candidates.has_value()) {
-        for (AssertionId id : *candidates) {
+    bool columns_ready = columns_usable(source.columns, source.effective_status, assertions.size());
+    QueryPlan plan = plan_query(selection, subject, object, index_manager, columns_ready, assertions.size());
+
+    if (is_index_source(plan.chosen)) {
+        for (AssertionId id : candidate_ids(plan.chosen, selection, subject, object, index_manager)) {
             const Assertion *assertion = find_by_id(assertions, id);
             if (assertion != nullptr && matches(selection, *assertion, subject, object, catalog)) {
                 fold(*assertion);
             }
         }
-    } else if (!selection.force_row_scan &&
-               columns_usable(source.columns, source.effective_status, assertions.size())) {
+    } else if (plan.chosen == PlanSource::ColumnarScan) {
         std::vector<uint32_t> rows;
         vectorized_select(selection, source.columns, source.effective_status, subject, object, rows);
 

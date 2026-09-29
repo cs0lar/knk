@@ -23,6 +23,7 @@
 #include "kernel/catalog.hpp"
 #include "kernel/index_manager.hpp"
 #include "kernel/query.hpp"
+#include "kernel/query_plan.hpp"
 #include "kernel/vectorized_scan.hpp"
 
 namespace knk {
@@ -67,6 +68,11 @@ class QueryEngine {
     // width, a selection carrying row-shaping fields that mean nothing here, and -- at evaluation time
     // -- an aggregate producing more groups than its cap allows.
     AggregateResult aggregate(const AggregateQuery &query, const QuerySource &source) const;
+
+    // The plan execute() would follow for this query, without running it. Produced by the same call the
+    // executor makes, so the two cannot describe different things; cheap because planning reads index
+    // bucket sizes rather than index contents.
+    QueryPlan explain(const Query &query, const QuerySource &source) const;
 };
 
 } // namespace knk

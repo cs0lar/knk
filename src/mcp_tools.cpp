@@ -1052,6 +1052,34 @@ const std::vector<ToolDefinition> &tool_definitions() {
              }});
 
         defs.push_back(
+            {{"explain_query",
+              "Returns the plan `query` would follow for these arguments, without running it: which "
+              "source the rows come from (an index, the columnar scan, or the row scan), how many rows "
+              "that source yields, the modelled cost, and every alternative the planner weighed with the "
+              "reason it was rejected. Takes exactly the same arguments as query. Row counts for index "
+              "sources are exact rather than sampled; costs are in nanoseconds from measured constants "
+              "and are comparable only within one plan.",
+              object_schema(
+                  {{"subject", integer_property("Subject EntityId; omitted means any.")},
+                   {"predicate", integer_property("Predicate PredicateId; omitted means any.")},
+                   {"object", integer_property("Object EntityId; omitted means any.")},
+                   {"valid_at", integer_property("Valid-time point, as in query.")},
+                   {"observed_from", integer_property("Lower inclusive bound on observed_at.")},
+                   {"observed_to", integer_property("Upper inclusive bound on observed_at.")},
+                   {"open_ended_only", boolean_property("Only assertions whose valid_to is 0.")},
+                   {"statuses", array_property("Statuses to include; omitted means every status.", 5,
+                                               enum_property("Assertion status.", {"Active", "Superseded", "Retracted",
+                                                                                   "Retraction", "Hypothesis"}))},
+                   {"filter", object_property("Filter tree, exactly as in query.")},
+                   {"limit", integer_property("Maximum rows; affects the plan only via paging.")},
+                   {"offset", integer_property("Rows to skip after ordering.")},
+                   {"ir_version", integer_property("Query IR version; omitted means the current one.")}},
+                  {})},
+             [](KnowledgeKernel &kernel, const nlohmann::json &args) -> KernelResult {
+                 return kernel.execute(ExplainQueryCommand{require_query(args)});
+             }});
+
+        defs.push_back(
             {{"aggregate",
               "Aggregates matching assertions instead of returning them: count, count_distinct, sum, "
               "min, max and avg, optionally grouped by subject, predicate, object, status, or a "
