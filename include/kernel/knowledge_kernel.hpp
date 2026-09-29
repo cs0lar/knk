@@ -363,6 +363,9 @@ class KnowledgeKernel {
     // an id before it reaches storage, so relying on the storage layer's own guard would leak one.
     void require_writable(const char *operation) const;
 
+    // Bundles the state a query runs against, including the columnar projection when it is usable.
+    QuerySource query_source() const;
+
     void restore_assertion(const Assertion &assertion);
 
     AssertionId next_id_ = 1;
@@ -379,6 +382,12 @@ class KnowledgeKernel {
     std::unordered_map<AssertionId, ProvenanceRecord> provenance_;
 
     std::vector<Assertion> assertions_;
+
+    // Replayed, effective status per row, parallel to assertions_ and to the columnar store's rows. It
+    // exists because the columns are a verbatim projection of the log: their status byte is the one the
+    // record was appended with, so a superseded row still reads Active there (see column_store.hpp). One
+    // byte per row, rebuilt at the end of construction and maintained by apply()/mark_*.
+    std::vector<uint8_t> effective_status_;
 
     // Stateless: the assertions, indexes and catalog a query runs against are passed to execute()
     // rather than held, which is what keeps KnowledgeKernel safe to move (see query_engine.hpp).

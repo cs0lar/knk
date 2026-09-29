@@ -85,7 +85,15 @@ Corpus populate(KnowledgeKernel &kernel) {
         PredicateId predicate = pick(corpus.predicates);
         EntityId object = pick(corpus.objects);
         Timestamp valid_from = pick(corpus.timestamps);
-        Timestamp valid_to = (rng() % 2 == 0) ? OPEN_ENDED : valid_from + static_cast<Timestamp>(1'000 + rng() % 3'000);
+        // Drawn from the same small pool the generated queries use, so that valid_at lands *exactly* on
+        // an interval's end often rather than by luck. Mutation testing caught this: with valid_to as a
+        // random offset, flipping the exclusive end (`point < valid_to`) to inclusive slipped past 2,000
+        // randomized queries untouched, because no query timestamp ever coincided with a row's end.
+        Timestamp valid_to = OPEN_ENDED;
+        if (rng() % 2 != 0) {
+            Timestamp candidate = pick(corpus.timestamps);
+            valid_to = candidate > valid_from ? candidate : valid_from + 1'000;
+        }
         Timestamp observed_at = pick(corpus.timestamps);
         double confidence = static_cast<double>(rng() % 101) / 100.0;
 
@@ -797,19 +805,29 @@ void randomized_queries_agree_across_index_scan_and_reference() {
     for (size_t i = 0; i < QUERY_COUNT; ++i) {
         Query query = generator.random_query();
 
+        // Index selection and vectorized scanning are independent choices about *how* a query runs, so
+        // every generated query is answered every way: through an index, through the columnar scan, and
+        // through the row scan -- then all three against the reference.
         Query scan = query;
         scan.force_scan = true;
 
+        Query rows_only = query;
+        rows_only.force_scan = true;
+        rows_only.force_row_scan = true;
+
         auto indexed_result = kernel.query(query);
         auto scanned_result = kernel.query(scan);
+        auto row_result = kernel.query(rows_only);
 
         bool reference_truncated = false;
         auto expected = reference_answer(query, corpus, kernel, reference_truncated);
 
         auto indexed = ids_of(indexed_result.assertions);
         auto scanned = ids_of(scanned_result.assertions);
+        auto row_scanned = ids_of(row_result.assertions);
 
-        if (indexed != scanned || indexed != expected || indexed_result.truncated != reference_truncated) {
+        if (indexed != scanned || indexed != row_scanned || indexed != expected ||
+            indexed_result.truncated != reference_truncated || row_result.truncated != reference_truncated) {
             // Ids, not just counts: a mutation test showed counts can agree while the rows differ, which
             // made the failure output actively misleading.
             auto show = [](const char *label, const std::vector<AssertionId> &ids, bool truncated) {
@@ -821,9 +839,10 @@ void randomized_queries_agree_across_index_scan_and_reference() {
             };
 
             std::cerr << "differential mismatch at query " << i << " (seed " << SEED << ")\n";
-            show("indexed  ", indexed, indexed_result.truncated);
-            show("scanned  ", scanned, scanned_result.truncated);
-            show("reference", expected, reference_truncated);
+            show("indexed   ", indexed, indexed_result.truncated);
+            show("columnar  ", scanned, scanned_result.truncated);
+            show("row scan  ", row_scanned, row_result.truncated);
+            show("reference ", expected, reference_truncated);
             assert(false && "randomized query disagreed across evaluation paths");
         }
 
@@ -863,8 +882,13 @@ void randomized_aggregates_agree_across_index_scan_and_reference() {
         AggregateQuery scan = query;
         scan.selection.force_scan = true;
 
+        AggregateQuery rows_only = query;
+        rows_only.selection.force_scan = true;
+        rows_only.selection.force_row_scan = true;
+
         auto indexed = kernel.aggregate(query);
         auto scanned = kernel.aggregate(scan);
+        auto row_scanned = kernel.aggregate(rows_only);
         auto expected = reference_aggregate(query, corpus, kernel);
 
         auto same = [](const AggregateResult &left, const AggregateResult &right) {
@@ -893,10 +917,11 @@ void randomized_aggregates_agree_across_index_scan_and_reference() {
             return true;
         };
 
-        if (!same(indexed, scanned) || !same(indexed, expected)) {
+        if (!same(indexed, scanned) || !same(indexed, row_scanned) || !same(indexed, expected)) {
             std::cerr << "aggregate mismatch at query " << i << " (seed " << SEED + 1 << ")\n"
                       << "  indexed   " << indexed.groups.size() << " groups\n"
-                      << "  scanned   " << scanned.groups.size() << " groups\n"
+                      << "  columnar  " << scanned.groups.size() << " groups\n"
+                      << "  row scan  " << row_scanned.groups.size() << " groups\n"
                       << "  reference " << expected.groups.size() << " groups\n";
             assert(false && "randomized aggregate disagreed across evaluation paths");
         }

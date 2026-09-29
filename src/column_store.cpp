@@ -402,7 +402,7 @@ void ColumnStore::overwrite_all(std::span<const Assertion> assertions) {
     append(assertions);
 }
 
-ColumnSpans ColumnStore::map() {
+ColumnSpans ColumnStore::map() const {
     ColumnSpans spans;
 
     if (row_count_ == 0) {
@@ -455,7 +455,7 @@ ColumnSpans ColumnStore::map() {
     return spans;
 }
 
-void ColumnStore::unmap() {
+void ColumnStore::unmap() const {
     for (auto &mapping : mappings_) {
         if (mapping.address != nullptr) {
             ::munmap(mapping.address, mapping.length);

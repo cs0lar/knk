@@ -41,6 +41,11 @@ std::optional<PredicateId> Catalog::find_predicate(const std::string &name) cons
     return it->second;
 }
 
+const Value *Catalog::find_entity_value(EntityId id) const {
+    auto it = entity_values_.find(id);
+    return it == entity_values_.end() ? nullptr : &it->second;
+}
+
 std::optional<Value> Catalog::entity_value(EntityId id) const {
     auto it = entity_values_.find(id);
     if (it == entity_values_.end()) {

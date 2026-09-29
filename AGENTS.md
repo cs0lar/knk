@@ -1365,6 +1365,48 @@ Current implementation status (shipped 2026-09-29):
  compiler did not do it. This is where Phase 9's "SIMD scanning" actually lands, with a number attached.
 * **Exit:** a documented speedup against Phase 14's baseline, correctness gate unchanged.
 
+Current implementation status (shipped 2026-09-29):
+
+* Three changes, each aimed at a cost an earlier phase measured and named, with the sizes they actually
+ delivered (same-session before/after in `docs/benchmarks.md`):
+ 1. **Late materialization -- the largest win by far, and not a SIMD story at all.** Filtering, sorting
+ and paging work on 4-byte row indices; only rows surviving paging are copied; `partial_sort` skips
+ ordering a tail that paging discards. A broad filter went 0.849 -> 0.131 ms (**6.5x**), which is Phase
+ 12's "materialize-and-sort dominates ~12x" being removed.
+ 2. **Vectorized column passes** (`vectorized_scan.hpp/cpp`): one branch-free pass per predicate over
+ one contiguous column, writing a byte mask, then a compaction into a selection vector. Scans 1.7x.
+ Part of that is not layout at all -- the row path re-tests *absent* predicates per row, the columnar
+ path never runs a pass for a predicate the query did not ask for.
+ 3. **No `Value` per row in filter evaluation**, plus `Catalog::find_entity_value` so `ObjectValue`
+ borrows rather than copies a `std::string` per row. ~1.3x on the filter-only path by itself.
+* `QuerySource` replaces the engine's growing parameter list, and carries the columns plus a parallel
+ **effective-status** byte array. That array exists because the columns are a verbatim projection: their
+ status byte is the one the record was appended with, so a superseded row still reads Active there. The
+ kernel builds it once at the end of construction (the snapshot path assigns `assertions_` wholesale and
+ `restore_assertion` bypasses `apply`, so one pass at the end is both cheaper and impossible to get out
+ of step) and maintains it in `apply`/`mark_*`.
+* **`Query::force_row_scan`** joins `force_scan`: index selection and vectorized scanning are independent
+ choices about *how* a query runs, and both must be provably irrelevant to *what* it returns, so each
+ gets a switch and the differential suites run every generated query through all of them.
+* **A latent overflow was fixed while rewriting paging**: `offset + limit` can wrap for a caller-supplied
+ offset, which would have turned "a page far past the end" into "a page from the beginning". It now
+ saturates, with a test at `SIZE_MAX`.
+* **Mutation testing found a blind spot in the differential generator, not just in the code.** Flipping
+ the vectorized valid-time end boundary from exclusive to inclusive passed 2,000 randomized queries
+ untouched, because the corpus drew `valid_to` as a random offset and no query timestamp ever coincided
+ with a row's interval end. The generator now draws `valid_to` from the same small pool the queries use;
+ the same mutation is caught immediately. The parity suite had caught it all along, which is why having
+ both kinds of test matters.
+* **No explicit SIMD intrinsics.** The passes are written branch-free for the compiler to vectorize, and
+ nothing measured yet justifies hand-written intrinsics -- which is what the Performance Rules ask for.
+ Phase 9's "SIMD scanning" lands here as "shaped for auto-vectorization, with numbers", not as
+ intrinsics for their own sake.
+* **Aggregation gained little (0.077 -> 0.066 ms ungrouped) and its widest case is marginally worse**
+ (0.970 -> 1.035 ms at 5,000 groups): its cost is key construction and ordered-map insertion, which
+ vectorized selection does not touch, and a selection vector is pure overhead when nothing narrows it.
+ Recorded rather than smoothed over -- it says the next aggregation work is hashing group keys without a
+ `Value` per row.
+
 #### Phase 16 — Statistics, cost-based planning, and `explain`
 
 * Per-predicate cardinality, distinct subject/object counts, and observed/valid time ranges, derived

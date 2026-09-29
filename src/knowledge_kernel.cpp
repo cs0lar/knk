@@ -165,6 +165,16 @@ KnowledgeKernel::KnowledgeKernel(StorageConfig config, OpenMode mode) : storage_
             storage_.write_checkpoint(max_committed_id);
         }
     }
+
+    // Built once here rather than maintained through every replay path: the snapshot fast path assigns
+    // assertions_ wholesale and restore_assertion() bypasses apply(), so a single pass at the end is both
+    // cheaper to reason about and impossible to get out of step. Commits maintain it incrementally from
+    // here on.
+    effective_status_.clear();
+    effective_status_.reserve(assertions_.size());
+    for (const auto &assertion : assertions_) {
+        effective_status_.push_back(static_cast<uint8_t>(assertion.status));
+    }
 }
 
 void KnowledgeKernel::write_snapshot() {
@@ -182,6 +192,7 @@ void KnowledgeKernel::apply(const Assertion &assertion) {
     }
 
     assertions_.push_back(assertion);
+    effective_status_.push_back(static_cast<uint8_t>(assertion.status));
     index_manager_.add(assertion);
 
     next_id_ = std::max(next_id_, assertion.id + 1);
@@ -203,11 +214,18 @@ void KnowledgeKernel::restore_assertion(const Assertion &assertion) {
 
 void KnowledgeKernel::mark_superseded(AssertionId superseded_id) {
     assertions_[superseded_id - 1].status = AssertionStatus::Superseded;
+    if (superseded_id - 1 < effective_status_.size()) {
+        // Guarded because replay calls this before the array exists; construction rebuilds it wholesale.
+        effective_status_[superseded_id - 1] = static_cast<uint8_t>(AssertionStatus::Superseded);
+    }
     index_manager_.mark_superseded(superseded_id);
 }
 
 void KnowledgeKernel::mark_retracted(AssertionId retracted_id) {
     assertions_[retracted_id - 1].status = AssertionStatus::Retracted;
+    if (retracted_id - 1 < effective_status_.size()) {
+        effective_status_[retracted_id - 1] = static_cast<uint8_t>(AssertionStatus::Retracted);
+    }
     index_manager_.mark_retracted(retracted_id);
 }
 
@@ -1011,12 +1029,16 @@ void KnowledgeKernel::require_writable(const char *operation) const {
     }
 }
 
-QueryResult KnowledgeKernel::query(const Query &query) const {
-    return query_engine_.execute(query, assertions_, index_manager_, catalog_);
+QuerySource KnowledgeKernel::query_source() const {
+    // map_columns() caches its mappings, so this is a pointer hand-off after the first call rather than
+    // an mmap per query; a commit invalidates it, which is exactly when it should be redone.
+    return QuerySource{assertions_, index_manager_, catalog_, storage_.map_columns(), effective_status_};
 }
 
+QueryResult KnowledgeKernel::query(const Query &query) const { return query_engine_.execute(query, query_source()); }
+
 AggregateResult KnowledgeKernel::aggregate(const AggregateQuery &query) const {
-    return query_engine_.aggregate(query, assertions_, index_manager_, catalog_);
+    return query_engine_.aggregate(query, query_source());
 }
 
 void KnowledgeKernel::merge_entities(EntityId keep, EntityId absorb, Timestamp merged_at) {

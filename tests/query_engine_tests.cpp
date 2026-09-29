@@ -18,6 +18,7 @@
 #include <cassert>
 #include <filesystem>
 #include <iostream>
+#include <limits>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -584,6 +585,56 @@ void query_limit_offset_and_truncation() {
     cleanup(root);
 }
 
+void query_paging_saturates_instead_of_wrapping() {
+    auto root = test_root("query_paging_saturates_instead_of_wrapping");
+    KnowledgeKernel kernel(StorageConfig{root});
+    seed(kernel);
+
+    // offset is caller-supplied and unbounded, so offset + limit can overflow. Wrapping would turn "a
+    // page far past the end" into "a page from the beginning" -- a wrong answer that looks plausible.
+    Query beyond;
+    beyond.offset = std::numeric_limits<size_t>::max();
+
+    auto result = kernel.query(beyond);
+    assert(result.assertions.empty());
+    assert(!result.truncated); // nothing was cut short; there was simply nothing at that offset
+
+    Query near_the_top;
+    near_the_top.offset = std::numeric_limits<size_t>::max() - 5;
+    near_the_top.limit = 100;
+    assert(kernel.query(near_the_top).assertions.empty());
+
+    cleanup(root);
+}
+
+void query_limited_pages_match_the_fully_ordered_answer() {
+    auto root = test_root("query_limited_pages_match_the_fully_ordered_answer");
+    KnowledgeKernel kernel(StorageConfig{root});
+    seed(kernel);
+
+    // Only the page is sorted now (partial_sort when paging discards a tail), so a limited query must
+    // still agree with the head of the fully ordered answer -- for every ordering, in both directions.
+    for (QueryOrder order : {QueryOrder::AssertionId, QueryOrder::ValidFrom, QueryOrder::ObservedAt}) {
+        for (bool newest_first : {false, true}) {
+            Query full;
+            full.order = order;
+            full.newest_first = newest_first;
+            auto complete = ids_of(run_both_ways(kernel, full));
+
+            for (size_t limit = 1; limit <= complete.size(); ++limit) {
+                Query paged = full;
+                paged.limit = limit;
+                auto page = ids_of(run_both_ways(kernel, paged));
+
+                assert(page.size() == limit);
+                assert(std::equal(page.begin(), page.end(), complete.begin()));
+            }
+        }
+    }
+
+    cleanup(root);
+}
+
 void query_caps_limit_at_the_result_ceiling() {
     auto root = test_root("query_caps_limit_at_the_result_ceiling");
     KnowledgeKernel kernel(StorageConfig{root});
@@ -688,6 +739,8 @@ int main() {
     query_current_shaped_lookup_with_no_matching_rows_is_empty();
     query_orders_deterministically();
     query_limit_offset_and_truncation();
+    query_paging_saturates_instead_of_wrapping();
+    query_limited_pages_match_the_fully_ordered_answer();
     query_caps_limit_at_the_result_ceiling();
     query_rejects_an_unknown_ir_version();
     query_on_an_empty_kernel_answers_empty();

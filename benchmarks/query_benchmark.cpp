@@ -118,17 +118,27 @@ void ir_current_equivalent_throughput(const KnowledgeKernel &kernel, size_t roun
     report("query{subject,Active,open_ended}", static_cast<double>(rounds * SUBJECT_COUNT) / elapsed, "queries/sec");
 }
 
-// The same queries with index selection disabled, which is what the differential tests compare against
-// for correctness -- here it is the cost side of that same comparison.
+// The same queries with index selection disabled, measured both ways: over the columnar store (Phase
+// 15's vectorized passes) and over the row layout. Both are measured in the same run on purpose --
+// comparing against a number recorded on another day measures the machine as much as the code.
 void ir_forced_scan_latency(const KnowledgeKernel &kernel, size_t queries) {
-    Timer timer;
+    Timer columnar_timer;
     for (size_t i = 0; i < queries; ++i) {
         Query query = current_shaped(static_cast<EntityId>(i % SUBJECT_COUNT + 1));
         query.force_scan = true;
         kernel.query(query);
     }
-    double elapsed = timer.elapsed_seconds();
-    report("query{...} force_scan", elapsed / static_cast<double>(queries) * 1000.0, "ms/query");
+    report("query{...} scan, columnar", columnar_timer.elapsed_seconds() / static_cast<double>(queries) * 1000.0,
+           "ms/query");
+
+    Timer row_timer;
+    for (size_t i = 0; i < queries; ++i) {
+        Query query = current_shaped(static_cast<EntityId>(i % SUBJECT_COUNT + 1));
+        query.force_scan = true;
+        query.force_row_scan = true;
+        kernel.query(query);
+    }
+    report("query{...} scan, rows", row_timer.elapsed_seconds() / static_cast<double>(queries) * 1000.0, "ms/query");
 }
 
 void ir_observed_window_throughput(const KnowledgeKernel &kernel, size_t rounds) {
@@ -170,6 +180,18 @@ void ir_filter_latency(const KnowledgeKernel &kernel, size_t queries) {
     double selective = selective_timer.elapsed_seconds();
     report("query{filter: confidence < 0.5} (matches none)", selective / static_cast<double>(queries) * 1000.0,
            "ms/query");
+
+    // A filter tree is evaluated per surviving row either way, so this pair isolates what the columnar
+    // passes do *not* help with -- the filter here is the whole predicate, and nothing narrows it first.
+    Timer selective_rows_timer;
+    for (size_t i = 0; i < queries; ++i) {
+        Query query;
+        query.force_row_scan = true;
+        query.filter = Filter::compare(FilterField::Confidence, CompareOp::Lt, Value::of_double(0.5));
+        kernel.query(query);
+    }
+    report("query{filter: confidence < 0.5} rows",
+           selective_rows_timer.elapsed_seconds() / static_cast<double>(queries) * 1000.0, "ms/query");
 
     Timer broad_timer;
     for (size_t i = 0; i < queries; ++i) {

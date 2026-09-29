@@ -171,6 +171,12 @@ struct Query {
     // both ways and the results compared, which is how index use is kept from changing results rather
     // than only cost. Phase 11 builds its randomized differential tests on this.
     bool force_scan = false;
+
+    // Also diagnostic, and also absent from the MCP schema: evaluate against the row layout rather than
+    // the columnar store (Phase 15). Index selection and vectorized scanning are two independent choices
+    // about *how* a query runs, and both have to be provably irrelevant to *what* it returns -- so each
+    // gets a switch, and the differential tests run every generated query through all the combinations.
+    bool force_row_scan = false;
 };
 
 struct QueryResult {
