@@ -15,7 +15,7 @@
 
 namespace knk {
 
-KnowledgeKernel::KnowledgeKernel(StorageConfig config) : storage_(config), index_manager_() {
+KnowledgeKernel::KnowledgeKernel(StorageConfig config, OpenMode mode) : storage_(config, mode), index_manager_() {
     // Catalog replay is deliberately not part of the snapshot/checkpoint/tail-vs-full-replay
     // branching below: assertions.log never stores names or values, so there is nothing to
     // rebuild this mapping from if entities.log/predicates.log is missing or corrupt. Unlike that
@@ -140,29 +140,37 @@ KnowledgeKernel::KnowledgeKernel(StorageConfig config) : storage_(config), index
             apply(record);
         }
 
-        std::vector<ObservedTimeIndexRecord> observed_time_records;
-        for (const auto &[subject, observed_at, id] : index_manager_.observed_time_entries()) {
-            observed_time_records.push_back(ObservedTimeIndexRecord{subject, observed_at, id});
-        }
-        storage_.rewrite_observed_time_index(observed_time_records);
+        // Healing the files is a write, so a read-only open stops here: the rebuild above already
+        // happened in memory, which is what makes its answers correct, and the stale or corrupt files on
+        // disk are left exactly as they were for a writer to repair later.
+        if (storage_.mode() == OpenMode::ReadWrite) {
+            std::vector<ObservedTimeIndexRecord> observed_time_records;
+            for (const auto &[subject, observed_at, id] : index_manager_.observed_time_entries()) {
+                observed_time_records.push_back(ObservedTimeIndexRecord{subject, observed_at, id});
+            }
+            storage_.rewrite_observed_time_index(observed_time_records);
 
-        std::vector<SubjectIndexRecord> subject_records;
-        for (const auto &[subject, id] : index_manager_.subject_index_entries()) {
-            subject_records.push_back(SubjectIndexRecord{subject, id});
-        }
-        storage_.rewrite_subject_index(subject_records);
+            std::vector<SubjectIndexRecord> subject_records;
+            for (const auto &[subject, id] : index_manager_.subject_index_entries()) {
+                subject_records.push_back(SubjectIndexRecord{subject, id});
+            }
+            storage_.rewrite_subject_index(subject_records);
 
-        std::vector<CurrentIndexRecord> current_records;
-        for (const auto &[subject, predicate, id] : index_manager_.current_index_entries()) {
-            current_records.push_back(CurrentIndexRecord{subject, predicate, id, true});
-        }
-        storage_.rewrite_current_index(current_records);
+            std::vector<CurrentIndexRecord> current_records;
+            for (const auto &[subject, predicate, id] : index_manager_.current_index_entries()) {
+                current_records.push_back(CurrentIndexRecord{subject, predicate, id, true});
+            }
+            storage_.rewrite_current_index(current_records);
 
-        storage_.write_checkpoint(max_committed_id);
+            storage_.write_checkpoint(max_committed_id);
+        }
     }
 }
 
-void KnowledgeKernel::write_snapshot() { storage_.write_snapshot(next_id_ - 1, assertions_); }
+void KnowledgeKernel::write_snapshot() {
+    require_writable("write_snapshot");
+    storage_.write_snapshot(next_id_ - 1, assertions_);
+}
 
 void KnowledgeKernel::apply(const Assertion &assertion) {
     if (assertion.supersedes_id != 0) {
@@ -205,6 +213,8 @@ void KnowledgeKernel::mark_retracted(AssertionId retracted_id) {
 
 AssertionId KnowledgeKernel::commit(EntityId subject, PredicateId predicate, EntityId object, Timestamp valid_from,
                                     Timestamp valid_to, Timestamp observed_at, double confidence) {
+    require_writable("commit");
+
     AssertionId id = next_id_;
 
     Assertion assertion{
@@ -222,6 +232,8 @@ AssertionId KnowledgeKernel::commit(EntityId subject, PredicateId predicate, Ent
 }
 
 std::vector<AssertionId> KnowledgeKernel::commit_batch(const std::vector<PendingAssertion> &entries) {
+    require_writable("commit_batch");
+
     // Checked before anything is built or appended, so an over-sized batch leaves next_id_ and every
     // log untouched -- the same "a failed call burns no id" property commit_superseding/
     // commit_retraction get from validating their target first.
@@ -289,6 +301,8 @@ std::vector<AssertionId> KnowledgeKernel::commit_batch(const std::vector<Pending
 }
 
 std::vector<AssertionId> KnowledgeKernel::commit_batch_by_name(const std::vector<PendingNamedAssertion> &entries) {
+    require_writable("commit_batch_by_name");
+
     // Checked here as well as in commit_batch below, so an over-sized batch is rejected before any of
     // its names are interned rather than after -- a rejected call must leave no trace at all.
     if (entries.size() > MAX_BATCH_SIZE) {
@@ -310,6 +324,8 @@ std::vector<AssertionId> KnowledgeKernel::commit_batch_by_name(const std::vector
 AssertionId KnowledgeKernel::commit_by_name(std::string_view subject_name, std::string_view predicate_name,
                                             const Value &object, Timestamp valid_from, Timestamp valid_to,
                                             Timestamp observed_at, double confidence) {
+    require_writable("commit_by_name");
+
     EntityId subject = intern_entity(subject_name);
     PredicateId predicate = intern_predicate(predicate_name);
     EntityId object_id = intern_value(object);
@@ -320,6 +336,8 @@ AssertionId KnowledgeKernel::commit_by_name(std::string_view subject_name, std::
 AssertionId KnowledgeKernel::commit_retraction(EntityId subject, PredicateId predicate, EntityId object,
                                                Timestamp valid_from, Timestamp valid_to, Timestamp observed_at,
                                                double confidence, AssertionId retracts_id) {
+    require_writable("commit_retraction");
+
     auto target = get(retracts_id);
     if (retracts_id == 0 || !target.has_value()) {
         throw std::runtime_error("invalid retraction target");
@@ -346,6 +364,8 @@ AssertionId KnowledgeKernel::commit_retraction(EntityId subject, PredicateId pre
 AssertionId KnowledgeKernel::commit_superseding(EntityId subject, PredicateId predicate, EntityId object,
                                                 Timestamp valid_from, Timestamp valid_to, Timestamp observed_at,
                                                 double confidence, AssertionId supersedes_id) {
+    require_writable("commit_superseding");
+
     auto target = get(supersedes_id);
     if (supersedes_id == 0 || !target.has_value()) {
         throw std::runtime_error("invalid superseding target");
@@ -374,6 +394,8 @@ AssertionId KnowledgeKernel::commit_hypothesis(EntityId subject, PredicateId pre
                                                Timestamp valid_from, Timestamp valid_to, Timestamp observed_at,
                                                double confidence, EntityId source, Timestamp recorded_at,
                                                std::string method) {
+    require_writable("commit_hypothesis");
+
     AssertionId id = next_id_;
 
     Assertion assertion{
@@ -787,10 +809,14 @@ std::vector<std::pair<Assertion, Assertion>> KnowledgeKernel::find_conflicts(Ent
 }
 
 EntityId KnowledgeKernel::intern_entity(std::string_view name) {
+    require_writable("intern_entity");
+
     return intern_value(Value::of_text(std::string(name)));
 }
 
 EntityId KnowledgeKernel::intern_value(const Value &value) {
+    require_writable("intern_value");
+
     if (auto existing = catalog_.find_entity(value)) {
         return *existing;
     }
@@ -804,6 +830,8 @@ EntityId KnowledgeKernel::intern_value(const Value &value) {
 }
 
 PredicateId KnowledgeKernel::intern_predicate(std::string_view name) {
+    require_writable("intern_predicate");
+
     std::string key(name);
 
     if (auto existing = catalog_.find_predicate(key)) {
@@ -842,6 +870,8 @@ std::optional<Value> KnowledgeKernel::entity_value(EntityId id) const { return c
 std::optional<std::string> KnowledgeKernel::predicate_name(PredicateId id) const { return catalog_.predicate_name(id); }
 
 EntityId KnowledgeKernel::intern_document(std::span<const std::byte> content) {
+    require_writable("intern_document");
+
     EntityId id = catalog_.allocate_entity_id();
 
     storage_.write_payload(id, content);
@@ -855,6 +885,8 @@ std::optional<std::vector<std::byte>> KnowledgeKernel::document_content(EntityId
 
 void KnowledgeKernel::record_provenance(AssertionId assertion_id, EntityId source, Timestamp recorded_at,
                                         std::string method) {
+    require_writable("record_provenance");
+
     if (assertion_id == 0 || !get(assertion_id).has_value()) {
         throw std::runtime_error("invalid provenance target");
     }
@@ -866,6 +898,8 @@ void KnowledgeKernel::record_provenance(AssertionId assertion_id, EntityId sourc
 }
 
 void KnowledgeKernel::record_provenance_batch(const std::vector<ProvenanceRecord> &records) {
+    require_writable("record_provenance_batch");
+
     if (records.size() > MAX_BATCH_SIZE) {
         throw std::runtime_error("batch exceeds maximum size");
     }
@@ -969,6 +1003,14 @@ KnowledgeKernel::provenance_for_batch(const std::vector<AssertionId> &ids) const
 // A thin forward to QueryEngine, deliberately: the kernel owns no query logic of its own, so there is
 // exactly one place where the bitemporal/status rules compose. The state is passed rather than held,
 // so the engine keeps no references into this object.
+OpenMode KnowledgeKernel::mode() const { return storage_.mode(); }
+
+void KnowledgeKernel::require_writable(const char *operation) const {
+    if (storage_.mode() == OpenMode::ReadOnly) {
+        throw std::runtime_error(std::string("kernel is open read-only; ") + operation + " is not allowed");
+    }
+}
+
 QueryResult KnowledgeKernel::query(const Query &query) const {
     return query_engine_.execute(query, assertions_, index_manager_, catalog_);
 }
@@ -978,6 +1020,8 @@ AggregateResult KnowledgeKernel::aggregate(const AggregateQuery &query) const {
 }
 
 void KnowledgeKernel::merge_entities(EntityId keep, EntityId absorb, Timestamp merged_at) {
+    require_writable("merge_entities");
+
     // Durable-before-visible: append to the log first, then apply to the in-memory Catalog, exactly
     // like commit's append-then-apply ordering.
     storage_.append_entity_merge_entry(absorb, keep, merged_at);
@@ -987,6 +1031,8 @@ void KnowledgeKernel::merge_entities(EntityId keep, EntityId absorb, Timestamp m
 EntityId KnowledgeKernel::resolve_entity(EntityId id) const { return catalog_.resolve(id); }
 
 void KnowledgeKernel::archive_segments_before(AssertionId assertion_id) {
+    require_writable("archive_segments_before");
+
     storage_.archive_segments_before(assertion_id);
 }
 

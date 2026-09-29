@@ -30,6 +30,22 @@ stray stdout write would corrupt the stream for whatever process has this as a s
 you generally don't run it interactively by hand; the examples below pipe requests in via a shell
 one-liner, which works for testing but isn't how a real MCP client talks to it.
 
+### Read-only mode
+
+```bash
+./build/mcp_server <storage-root> --read-only
+```
+
+Opens the root without the writer lock, so this server coexists with whatever process is writing —
+which is how an external analytics client reads a live store. Every read tool works; every mutating
+tool answers with an ordinary tool error (`isError: true`, "kernel is open read-only"), not a crash.
+A read-only server is a snapshot as of its own startup: it replays once at open, so commits made
+after that need a restart to be seen. See `docs/storage_format.md`'s "Storage root lock" section for
+what a read-only open does and does not guarantee.
+
+Without the flag, the server takes the exclusive writer lock as before, and a second writer on the
+same root fails fast with a single-writer violation.
+
 ## Protocol support
 
 * `initialize` — returns `protocolVersion`, `capabilities.tools`, and `serverInfo`.

@@ -17,9 +17,11 @@ namespace knk {
 // hand-rolled lock file, there is no stale-lock state a crashed holder can leave behind for the
 // next opener to reason about.
 //
-// This is `LOCK_EX` unconditionally: the declared model has no readers yet, so every open -- read
-// or write -- takes the exclusive lock. When "many readers later" is implemented, a read-only open
-// can switch to `LOCK_SH` as an additive change here.
+// This is `LOCK_EX` unconditionally, and stays that way: it is the *writer* lock. Phase 13 added
+// read-only opens, and they do not take this lock at all -- the `LOCK_SH` plan this comment used to
+// predict cannot work, because a writer holding `LOCK_EX` for its lifetime excludes `LOCK_SH`, so a
+// shared-lock reader could never open alongside the writer it exists to coexist with. A reader that
+// writes nothing needs no lock; see OpenMode in storage_config.hpp.
 //
 // Linux/POSIX-only, matching kernel/durability.hpp.
 class StorageLock {

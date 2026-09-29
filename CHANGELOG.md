@@ -87,6 +87,18 @@ the PR that makes it — see `CONTRIBUTING.md`.
   `MAX_BATCH_SIZE`; available as a `RecordProvenanceBatchCommand` and the `record_provenance_batch`
   MCP tool.
 
+- **Phase 13 — read-only concurrent opens:** `KnowledgeKernel` and `StorageEngine` take an `OpenMode`,
+  and `mcp_server <root> --read-only` exposes it, so an external process can query a storage root while
+  another process is writing it — previously impossible, since every open took the exclusive writer
+  lock. A read-only open takes **no** lock (a shared lock on the writer's own lock file can never be
+  acquired while the writer holds it), creates nothing (not even the root: a read-only open of a missing
+  root throws rather than conjuring one), and writes nothing — every mutating method throws, guarded at
+  both the kernel and storage layers, and over MCP a refused write is an ordinary tool error rather than
+  a crash. Two limits worth knowing: a read-only kernel is a **snapshot as of its own construction**,
+  not a live view, so later commits need a reopen; and it cannot repair derived state, so a root with a
+  stale or corrupt index is rebuilt in memory and answered correctly from the log while the files are
+  left for a writer to heal. Single-writer enforcement is unchanged: a second writer still fails fast.
+
 - **Phase 12 — aggregation and grouping:** `aggregate` answers `count`, `count_distinct`, `sum`,
   `min`, `max` and `avg` over matching assertions, optionally grouped by subject, predicate, object,
   status, or a fixed-width valid-time or observed-time bucket. Targets include the object's *interned

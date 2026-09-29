@@ -31,6 +31,33 @@ acquire/conflict/release directly, including a fork+`SIGKILL` test proving the l
 the kernel on an ungraceful holder exit with no manual cleanup; `tests/knowledge_kernel_tests.cpp`
 covers the same behavior through the public `KnowledgeKernel` API.
 
+**Read-only opens take no lock at all (Phase 13).** `OpenMode::ReadOnly` opens a root for querying
+alongside a live writer, and it neither creates nor locks anything. The obvious alternative — readers
+take `flock(LOCK_SH)` on this same file — cannot work: the writer holds `LOCK_EX` on it for its whole
+lifetime, and `LOCK_EX` excludes `LOCK_SH`, so a shared-lock reader could never open alongside the
+writer it exists to coexist with. `LOCK` therefore stays purely the single-writer guard, and a reader
+(which writes nothing, so can corrupt nothing) does not participate in it. If a future destructive
+operation — a compaction, say — needs to wait for readers to drain, that wants its own reader-presence
+lock, added then rather than pretended now.
+
+What a read-only open guarantees, and what it does not:
+
+* **It creates nothing.** Not the root, not a subdirectory, not `LOCK`. A read-only open of a
+  non-existent root throws rather than bringing one into being.
+* **It writes nothing.** Every mutating method on `StorageEngine` and `KnowledgeKernel` throws, guarded
+  at both layers, and `tests/read_only_open_tests.cpp` fingerprints every byte under the root before and
+  after a reader opens, queries and aggregates, requiring them identical.
+* **It cannot repair derived state.** A stale checkpoint or a corrupt index log is rebuilt *in memory*
+  and answered correctly from the log — which is the source of truth — but the files are left exactly as
+  found. The consequence worth knowing operationally: such a root makes every read-only open pay a full
+  replay, until a writer opens it once and heals it.
+* **It sees a committed prefix, not a torn record.** Tail-tolerant reads drop a half-written trailing
+  frame exactly as crash recovery does. A batch commit in flight may be *partially* visible, for the same
+  reason a crash can leave a prefix of one durable (see "Durability" above) — a reader is not a
+  transaction boundary.
+* **It is a snapshot as of its own construction,** not a live view: replay happens once, in the
+  constructor, so commits made afterwards need a reopen to be seen.
+
 This file is not covered by the shared header/record-frame format below — it holds no records, so
 there is no format to version.
 
