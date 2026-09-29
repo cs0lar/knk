@@ -234,17 +234,27 @@ void ColumnStore::write_manifest(const std::vector<uint32_t> &checksums) {
     running = crc32_update(running, stored.data(), sizeof(stored));
     uint32_t crc = crc32_finalize(running);
 
-    // Atomic replace, so a crash mid-rewrite leaves the previous complete manifest rather than a torn
-    // one. A manifest that disagrees with the columns is recoverable; one that cannot be parsed at all
-    // would force a rebuild for no reason.
-    write_file_atomically(directory_ / "manifest", [&](std::ostream &out) {
-        out.write(MANIFEST_MAGIC.data(), static_cast<std::streamsize>(MANIFEST_MAGIC.size()));
-        uint32_t version = FORMAT_VERSION;
-        out.write(reinterpret_cast<const char *>(&version), sizeof(version));
-        out.write(reinterpret_cast<const char *>(&rows), sizeof(rows));
-        out.write(reinterpret_cast<const char *>(stored.data()), sizeof(stored));
-        out.write(reinterpret_cast<const char *>(&crc), sizeof(crc));
-    });
+    // Written in place, neither atomically nor fsynced -- and for the same reason the columns themselves
+    // are not: every byte of this is derived. A crash mid-rewrite can leave a mixture of old and new
+    // bytes, which the self-checksum above rejects, and a rejected manifest means "rebuild from the log".
+    // The atomic-rename form costs two more fsyncs per commit (temp file, then parent directory) to
+    // protect state that is reconstructible, which measured as a large share of this phase's commit-path
+    // regression; see docs/benchmarks.md.
+    std::ofstream out(directory_ / "manifest", std::ios::binary | std::ios::trunc);
+    if (!out) {
+        throw std::runtime_error("failed to write column manifest");
+    }
+
+    out.write(MANIFEST_MAGIC.data(), static_cast<std::streamsize>(MANIFEST_MAGIC.size()));
+    uint32_t version = FORMAT_VERSION;
+    out.write(reinterpret_cast<const char *>(&version), sizeof(version));
+    out.write(reinterpret_cast<const char *>(&rows), sizeof(rows));
+    out.write(reinterpret_cast<const char *>(stored.data()), sizeof(stored));
+    out.write(reinterpret_cast<const char *>(&crc), sizeof(crc));
+
+    if (!out) {
+        throw std::runtime_error("failed to write column manifest");
+    }
 
     manifest_checksums_.assign(stored.begin(), stored.end());
 }
@@ -341,8 +351,12 @@ void ColumnStore::append(std::span<const Assertion> assertions) {
         auto bytes = encode(column, assertions);
         write_or_throw(out, bytes.data(), static_cast<std::streamsize>(bytes.size()));
 
+        // Deliberately **not** fsynced, unlike every log in the storage root. Columns are derived: losing
+        // unflushed bytes to a crash costs a rebuild, never data, and the recovery path already handles
+        // both a short column (size mismatch -> rebuild) and one that lags the log (tail append). Paying
+        // ten fsyncs per commit for state that is reconstructible measured at ~2.9x on single-commit
+        // throughput -- see docs/benchmarks.md -- which is a real price for no durability gain.
         out.close();
-        fsync_file(path);
 
         running[column] = crc32_update(running[column], bytes.data(), bytes.size());
     }
@@ -381,7 +395,6 @@ void ColumnStore::overwrite_all(std::span<const Assertion> assertions) {
             std::ofstream out(path, std::ios::binary | std::ios::trunc);
             write_column_header(out, COLUMNS.at(column).element_size);
             out.close();
-            fsync_file(path);
         }
         return;
     }

@@ -1342,6 +1342,14 @@ Current implementation status (shipped 2026-09-29):
  one; the move; every commit path in lockstep compared field-by-field against the log's raw records;
  restart; corruption rebuilt on the next read-write open; a lagging store getting only its tail; migration
  of a column-less root; and a read-only open neither building nor repairing.
+* **The commit path got measurably slower, and was tuned twice rather than shipped as a note.** Ten more
+ arrays per commit initially cost 2.9x on single-commit throughput; columns are now not fsynced (derived
+ state: a crash costs a rebuild, never data) and the manifest is written in place rather than atomically
+ (a torn manifest fails its own checksum, which means rebuild), bringing it to 2.2x -- about 0.06 ms of
+ file opens and small writes per commit. That residual is largely an artifact of this machine's ~10 µs
+ fsync; where fsync costs milliseconds the same overhead is a fraction of a percent. `commit_batch` is
+ ~1.3x and still ~1M commits/sec. Holding descriptors open across appends is the next lever and was
+ deliberately not taken: ~15 µs against ten open fds per store and a stale-handle case after each rebuild.
 * **Baseline** in `docs/benchmarks.md`: the same predicate is 2.5x faster over one mapped column than over
  the row layout (0.002 vs 0.005 ms per 10,000 rows) -- an understatement at this size, since both fit in
  cache, and not where most of Phase 15's win should come from anyway (Phase 11 measured ~7 ns per row of

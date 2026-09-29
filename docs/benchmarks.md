@@ -191,6 +191,39 @@ Cost scales with *groups*, not rows: one group is 0.077 ms, two groups with a se
 constructing a key `Value` per row and inserting into the ordered group map — the natural Phase 15
 target, where a columnar pass can compute keys without materializing a `Value`.
 
+### `commit_benchmark` — the cost of maintaining columns (2026-09-29)
+
+Phase 14 adds ten arrays to every commit, so the commit path had to be re-measured rather than assumed
+unaffected. Same machine as the 2026-09-06 batch numbers above, so directly comparable to them.
+
+```
+                              before Phase 14        after
+commit()                      20,071/sec             8,944/sec     (0.050 -> 0.112 ms)
+commit_superseding()          17,382/sec             8,448/sec
+commit_batch(10,000)          7.44 ms/batch          10.11 ms/batch
+```
+
+**Single commits cost ~2.2x more; batches ~1.3x.** That is the honest headline, and two rounds of tuning
+got it there from an initial **2.9x**:
+
+* **Columns are not fsynced.** They are derived, so losing unflushed bytes to a crash costs a rebuild and
+  never data — and the recovery path already handles both a short column and one lagging the log. Ten
+  fsyncs per commit bought nothing. (2.9x -> 2.5x.)
+* **The manifest is written in place rather than atomically.** `write_file_atomically` costs two further
+  fsyncs (temp file, then parent directory) to protect state that is equally reconstructible; a torn
+  manifest is caught by its own checksum, which means "rebuild". (2.5x -> 2.2x.)
+
+**The remaining 2.2x is almost entirely an artifact of this machine's unusually fast `fsync` (~10 µs),
+and would be near-invisible where fsync is slow.** What is left is eleven file opens and small writes per
+commit, about 0.06 ms here. On the 2026-07-20 container, where a single commit took ~15 ms because fsync
+cost ~15 ms, the same 0.06 ms of syscalls would be a **0.4%** regression rather than 120%. Relative costs
+on this page only compare within a run, and this is the clearest example of why.
+
+The next lever, if it ever matters, is holding the ten file descriptors open across appends instead of
+reopening per commit — deliberately not done here, because it trades ten open file descriptors per store
+and a stale-handle case after every rebuild for ~15 µs on a path whose recommended bulk form
+(`commit_batch`, still ~1M commits/sec) barely notices.
+
 ### `query_benchmark` — the columnar substrate (2026-09-29)
 
 Recorded with Phase 14, same 10,000-assertion corpus and machine as the sections above. Nothing queries
