@@ -8,6 +8,7 @@
 
 #include "kernel/assertion.hpp"
 #include "kernel/assertion_log.hpp"
+#include "kernel/column_store.hpp"
 #include "kernel/current_index_log.hpp"
 #include "kernel/entity_catalog_log.hpp"
 #include "kernel/entity_merge_log.hpp"
@@ -43,6 +44,16 @@ class StorageEngine {
     // KnowledgeKernel::commit_batch). Coordination only -- like every other method here, these know
     // nothing about what the records mean.
     void append_assertions(std::span<const Assertion> assertions);
+
+    // The columnar projection of the assertion log (Phase 14). Maintained in lockstep by
+    // append_assertion/append_assertions above, which is why no commit path has to remember to do it,
+    // and rebuilt from the log on open when it cannot be trusted. Purely derived: a caller that gets
+    // empty spans back reads the log instead.
+    size_t column_row_count() const;
+
+    bool verify_columns() const;
+
+    ColumnSpans map_columns();
 
     std::vector<Assertion> load_assertions() const;
 
@@ -117,6 +128,11 @@ class StorageEngine {
     // so a rejected call never half-mutates in-memory state first.
     void require_writable(const char *operation) const;
 
+    // Brings the columnar store in line with the assertion log: rebuild when it cannot be verified,
+    // append the missing tail when it merely lags. Never called for a ReadOnly open, because both of
+    // those are writes.
+    void ensure_columns_current();
+
     StorageConfig config_;
     OpenMode mode_;
     // Declared before every log member so it is constructed first and released last, enforcing the
@@ -134,6 +150,10 @@ class StorageEngine {
     EntityMergeLog entity_merge_log_;
     PayloadStore payload_store_;
     ProvenanceLog provenance_log_;
+
+    // Declared last among the durable members: it is rebuilt from assertion_log_ during construction, so
+    // that one must already exist.
+    ColumnStore column_store_;
 };
 
 } // namespace knk

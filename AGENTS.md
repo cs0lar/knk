@@ -1299,6 +1299,56 @@ The substrate for speed, and the first phase that adds files.
  commit appends every column in lockstep; restart parity.
 * **Exit:** scan baselines recorded before the next phase optimizes them.
 
+Current implementation status (shipped 2026-09-29):
+
+* `columns/` holds **ten** fixed-width arrays (`include/kernel/column_store.hpp`,
+ `src/column_store.cpp`): the eight the plan listed, plus `supersedes_id` and `retracts_id` -- see the
+ finding below for why those are not optional. Row *i* is assertion id *i+1*; mmap'd for reading.
+* **Maintained inside `StorageEngine::append_assertion`/`append_assertions`**, so every commit path --
+ single, superseding, retraction, hypothesis, batch -- stays in lockstep without any of them having to
+ remember. The log is written first and the columns second, on purpose: a crash between them leaves
+ columns lagging, which the next open heals.
+* **The finding that reshaped the phase: a verbatim projection cannot mirror effective status.** The
+ first implementation stored the eight planned columns and a test compared them against the kernel's
+ replayed view -- which failed, correctly. A superseded row's *log record* still says `Active`, because
+ append-only storage never rewrote it; `Superseded` exists only in replayed memory. Mirroring effective
+ status would mean rewriting an arbitrary earlier row on every supersession: an in-place write into a
+ fixed-stride file plus a full checksum recomputation. So the projection stays verbatim and the two link
+ columns join it, which makes effective status derivable from the columns alone (a row is superseded or
+ retracted exactly when a later row points at it) -- the same derivation replay performs, and precisely
+ the mechanism Phase 19 needs. A test now pins the distinction rather than a comment.
+* **Integrity works differently here than anywhere else**, and deliberately: fixed-stride columns cannot
+ carry a CRC per record without giving up the stride that makes them worth having. `columns/manifest`
+ holds the row count and one CRC-32 per column, atomically replaced and self-checksummed, and appends
+ continue each checksum incrementally via a new `crc32_update`/`crc32_finalize` in `checksum.hpp` --
+ recomputing over every row per append would be O(store) per append, quadratic over the store's life.
+ Finalization is a plain XOR and therefore invertible, which is what lets a reopened store resume its
+ running state from the manifest.
+* **Recovery is the Phase 3 index treatment, never fatal:** a store that fails verification is rebuilt
+ wholesale, a store that merely lags gets the missing tail, and a root written before this phase (no
+ `columns/` at all) is migrated on its next read-write open. A read-only open does neither, since both
+ are writes; it serves from the log and leaves a missing or damaged store as found.
+* `AssertionStatus` gained explicit enumerator values, because `status.col` makes them on-disk format.
+* `ColumnStore` is movable. It was initially non-movable, which deleted `KnowledgeKernel`'s move
+ constructor transitively and broke `benchmarks/query_benchmark.cpp`'s `return kernel;` -- the same
+ by-value return that surfaced the Phase 11 lifetime bug. A move transfers the descriptors and mappings
+ and leaves the source owning nothing.
+* **Nothing queries columns yet**, which is the phase boundary: this phase proves the store is maintained
+ correctly, Phase 15 changes execution to use it.
+* **Tested** in `tests/column_store_tests.cpp` (12 functions): field-by-field round trip; three appends of
+ one row leaving byte-identical files to one append of three (the incremental-checksum equivalence); six
+ kinds of damage each rejected (flipped payload byte, truncation, partial element, missing manifest,
+ scribbled manifest, missing column); `overwrite_all` replacing, and an empty store being a *known* empty
+ one; the move; every commit path in lockstep compared field-by-field against the log's raw records;
+ restart; corruption rebuilt on the next read-write open; a lagging store getting only its tail; migration
+ of a column-less root; and a read-only open neither building nor repairing.
+* **Baseline** in `docs/benchmarks.md`: the same predicate is 2.5x faster over one mapped column than over
+ the row layout (0.002 vs 0.005 ms per 10,000 rows) -- an understatement at this size, since both fit in
+ cache, and not where most of Phase 15's win should come from anyway (Phase 11 measured ~7 ns per row of
+ filter evaluation, mostly `Value` construction; Phase 12 measured materialize-and-sort as ~12x). Open-time
+ verification costs ~1.4 ms per 10,000 rows, CRC-throughput-bound at ~360 MB/s, with two documented ways
+ out if it ever matters.
+
 #### Phase 15 — Vectorized execution
 
 * Batch-at-a-time operators over column spans: filter to a selection vector, then project or

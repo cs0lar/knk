@@ -31,7 +31,8 @@ cmake --build build-release --target commit_benchmark query_benchmark replay_ben
   attaches provenance to a committed batch both ways (`record_provenance` per assertion vs. one
   `record_provenance_batch`) against the same batch, isolating the provenance log's fsync count.
 * **`query_benchmark`** — read-path throughput (`current`, `valid_at`, `known_at`, `neighbors`) plus the
-  query IR's own paths (index-selected, forced-scan, filtered, and name-resolving) over a
+  query IR's own paths (index-selected, forced-scan, filtered, and name-resolving), aggregation, and the
+  columnar substrate's scan and verification costs, over a
   kernel pre-populated with 5,000 subjects, each with a `WORKS_AT` and a `LIVES_IN` assertion (the
   latter chained subject-to-subject so `neighbors` has real edges to walk).
 * **`replay_benchmark`** — startup/reopen cost under three scenarios against the same populated log:
@@ -189,6 +190,36 @@ Cost scales with *groups*, not rows: one group is 0.077 ms, two groups with a se
 0.192 ms, and 5,000 groups from the same 10,000 rows is 0.970 ms. At that width the work is dominated by
 constructing a key `Value` per row and inserting into the ordered group map — the natural Phase 15
 target, where a columnar pass can compute keys without materializing a `Value`.
+
+### `query_benchmark` — the columnar substrate (2026-09-29)
+
+Recorded with Phase 14, same 10,000-assertion corpus and machine as the sections above. Nothing queries
+columns yet, so these exist to be beaten by Phase 15 rather than to show a win now.
+
+```
+== columnar substrate over the same corpus ==
+columns: count(confidence >= 0.5)                        0.002 ms/scan
+rows:    count(confidence >= 0.5)                        0.005 ms/scan
+columns: verify (manifest checksums)                     1.404 ms/open
+```
+
+**2.5x for the same predicate, and that understates it at scale.** Both layouts fit in cache at this
+size — 10,000 rows is 80 KB of one column against 880 KB of records — so this measures instruction count
+more than memory bandwidth. The layout advantage grows precisely where it matters, on corpora too large
+to cache, because the column scan touches 8 bytes per row where the row scan pulls an 88-byte record
+through cache to read one field of it.
+
+It also is not where most of Phase 15's win should come from. Phase 11 measured per-row filter evaluation
+at ~7 ns, most of it constructing a `Value` to compare against, and Phase 12 measured a broad filter as
+~12x dominated by materializing and sorting matches. Those costs are in the engine, not the layout;
+columns are what make removing them possible.
+
+**Verification costs ~1.4 ms per 10,000 rows**, which is the price of columns having no per-row checksum
+— an O(rows) read whenever a root is opened read-write. That is ~140 ms at a million rows and ~1.4 s at
+ten million, and it is CRC throughput rather than I/O: the table-driven byte-at-a-time CRC-32 runs at
+roughly 360 MB/s here. Two ways out if it ever matters, neither needed yet: a faster CRC (slice-by-8, or
+hardware CRC32C), or exploiting the fact that an append-only column's already-verified prefix stays
+verified, so only the tail past the last verified point needs rechecking.
 
 ### `replay_benchmark`
 

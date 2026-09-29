@@ -26,6 +26,7 @@ add_library(kernel
     src/entity_merge_log.cpp
     src/json_codec.cpp
     src/mcp_tools.cpp
+    src/column_store.cpp
     src/query_engine.cpp
     src/storage_lock.cpp
 )
@@ -199,6 +200,10 @@ add_executable(read_only_open_tests
     tests/read_only_open_tests.cpp
 )
 
+add_executable(column_store_tests
+    tests/column_store_tests.cpp
+)
+
 target_link_libraries(knowledge_kernel_tests
     PRIVATE kernel
 )
@@ -296,6 +301,10 @@ target_link_libraries(query_aggregate_tests
 )
 
 target_link_libraries(read_only_open_tests
+    PRIVATE kernel
+)
+
+target_link_libraries(column_store_tests
     PRIVATE kernel
 )
 
@@ -422,4 +431,9 @@ add_test(
 add_test(
     NAME read_only_open_tests
     COMMAND read_only_open_tests
+)
+
+add_test(
+    NAME column_store_tests
+    COMMAND column_store_tests
 )

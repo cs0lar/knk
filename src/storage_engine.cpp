@@ -13,7 +13,8 @@ StorageEngine::StorageEngine(StorageConfig config, OpenMode mode)
       current_index_log_(config_.current_index_path()), checkpoint_(config_.checkpoint_path()),
       snapshot_store_(config_.snapshot_path()), entity_catalog_log_(config_.entity_catalog_path()),
       predicate_catalog_log_(config_.predicate_catalog_path()), payload_store_(config_.payload_directory()),
-      provenance_log_(config_.provenance_log_path()), entity_merge_log_(config_.entity_merge_log_path()) {
+      provenance_log_(config_.provenance_log_path()), entity_merge_log_(config_.entity_merge_log_path()),
+      column_store_(config_.column_directory()) {
     if (mode_ == OpenMode::ReadOnly) {
         // Nothing is created and no lock is taken: a reader that conjured the layout into existence
         // would be writing, and a root that does not exist has nothing to read.
@@ -34,7 +35,32 @@ StorageEngine::StorageEngine(StorageConfig config, OpenMode mode)
     std::filesystem::create_directories(config_.payload_directory());
     std::filesystem::create_directories(config_.catalog_directory());
     std::filesystem::create_directories(config_.provenance_directory());
+
+    ensure_columns_current();
 }
+
+void StorageEngine::ensure_columns_current() {
+    // Derived state, so the recovery rules are the Phase 3 index rules rather than the log's: never
+    // fatal, always rebuildable. A store that cannot be verified is rebuilt wholesale, which is far
+    // easier to reason about than repairing columns that disagree with each other; a store that merely
+    // lags the log (the crash-between-appends case) just gets the missing tail.
+    if (!column_store_.verify()) {
+        column_store_.overwrite_all(assertion_log_.read_all());
+        return;
+    }
+
+    // row_count is also the last assertion id, since rows are dense in id order.
+    auto tail = assertion_log_.read_after(static_cast<AssertionId>(column_store_.row_count()));
+    if (!tail.empty()) {
+        column_store_.append(tail);
+    }
+}
+
+size_t StorageEngine::column_row_count() const { return column_store_.row_count(); }
+
+bool StorageEngine::verify_columns() const { return column_store_.verify(); }
+
+ColumnSpans StorageEngine::map_columns() { return column_store_.map(); }
 
 OpenMode StorageEngine::mode() const { return mode_; }
 
@@ -48,12 +74,17 @@ void StorageEngine::require_writable(const char *operation) const {
 void StorageEngine::append_assertion(const Assertion &assertion) {
     require_writable("append_assertion");
     assertion_log_.append(assertion);
+
+    // After the log, always: the log is the source of truth, and a crash between the two leaves columns
+    // lagging, which the next open heals. The reverse order would put derived state ahead of it.
+    column_store_.append(std::span<const Assertion>(&assertion, 1));
 }
 
 void StorageEngine::append_assertions(std::span<const Assertion> assertions) {
     require_writable("append_assertions");
 
     assertion_log_.append_batch(assertions);
+    column_store_.append(assertions);
 }
 
 std::vector<Assertion> StorageEngine::load_assertions() const { return assertion_log_.read_all(); }

@@ -44,6 +44,10 @@ struct StorageConfig {
 
     std::filesystem::path index_directory() const { return root / "indexes"; }
 
+    // The columnar projection (Phase 14). Derived state, like indexes/, and rebuildable from the
+    // assertion log -- see column_store.hpp.
+    std::filesystem::path column_directory() const { return root / "columns"; }
+
     std::filesystem::path observed_time_index_path() const { return index_directory() / "observed_time.idx"; }
 
     std::filesystem::path subject_index_path() const { return index_directory() / "subject.idx"; }

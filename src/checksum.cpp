@@ -29,16 +29,21 @@ const std::array<uint32_t, 256> &crc32_table() {
 
 } // namespace
 
-uint32_t crc32(const void *data, size_t size) {
+uint32_t crc32_update(uint32_t crc, const void *data, size_t size) {
     const auto &table = crc32_table();
     const auto *bytes = static_cast<const unsigned char *>(data);
 
-    uint32_t crc = 0xFFFFFFFF;
     for (size_t i = 0; i < size; ++i) {
         crc = table[(crc ^ bytes[i]) & 0xFF] ^ (crc >> 8);
     }
 
-    return crc ^ 0xFFFFFFFF;
+    return crc;
 }
+
+uint32_t crc32_finalize(uint32_t crc) { return crc ^ 0xFFFFFFFF; }
+
+// The one-shot form, expressed through the incremental one so there is a single implementation of the
+// loop rather than two that could drift.
+uint32_t crc32(const void *data, size_t size) { return crc32_finalize(crc32_update(CRC32_INIT, data, size)); }
 
 } // namespace knk
