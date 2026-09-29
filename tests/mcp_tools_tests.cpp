@@ -76,7 +76,8 @@ void tool_specs_cover_every_kernel_command_with_a_well_formed_schema() {
                                          "co_occurring_predicates",
                                          "resolve_entity",
                                          "query",
-                                         "aggregate"};
+                                         "aggregate",
+                                         "explain_query"};
 
     const auto &specs = tool_specs();
     assert(specs.size() == expected_names.size());
@@ -533,6 +534,62 @@ void aggregate_tool_groups_rows_and_reports_absent_numbers_as_null() {
     cleanup(root);
 }
 
+void explain_query_tool_reports_the_plan_and_its_alternatives() {
+    auto root = test_root("explain_query_tool_reports_the_plan");
+    KnowledgeKernel kernel(StorageConfig{root});
+
+    PredicateId works_at = kernel.intern_predicate("works_at");
+    EntityId acme = kernel.intern_entity("Acme");
+
+    std::vector<PendingAssertion> rows;
+    for (size_t i = 0; i < 300; ++i) {
+        rows.push_back({static_cast<EntityId>(i + 10), works_at, acme, 0, OPEN_ENDED, static_cast<Timestamp>(i), 0.9});
+    }
+    kernel.commit_batch(rows);
+
+    // A selective subject: the index wins, and the plan says so with an exact row count.
+    auto selective = nlohmann::json::parse(
+        handle_tool_call(kernel, "explain_query",
+                         nlohmann::json{{"subject", 10}, {"statuses", {"Active"}}, {"open_ended_only", true}})
+            .content_text);
+    assert(selective.at("chosen") == "subject_index");
+    assert(selective.at("estimated_rows") == 1);
+    assert(selective.at("total_rows") == 300);
+
+    // A predicate covering the whole corpus: scanned, with the index still listed and costed so a caller
+    // can see it was considered rather than forgotten.
+    auto common = nlohmann::json::parse(
+        handle_tool_call(kernel, "explain_query",
+                         nlohmann::json{{"predicate", works_at}, {"statuses", {"Active"}}, {"open_ended_only", true}})
+            .content_text);
+    assert(common.at("chosen") == "columnar_scan");
+
+    bool saw_predicate_index = false;
+    for (const auto &option : common.at("considered")) {
+        if (option.at("source") == "predicate_current_index") {
+            saw_predicate_index = true;
+            assert(option.at("rows") == 300);
+            assert(option.at("cost") > common.at("estimated_cost").get<double>());
+        }
+    }
+    assert(saw_predicate_index);
+
+    // Rejections carry a reason instead of numbers.
+    auto audit = nlohmann::json::parse(
+        handle_tool_call(kernel, "explain_query", nlohmann::json{{"predicate", works_at}}).content_text);
+    for (const auto &option : audit.at("considered")) {
+        if (option.at("source") == "predicate_current_index") {
+            assert(option.contains("rejected_because"));
+            assert(!option.contains("rows"));
+        }
+    }
+
+    // Explaining validates exactly as running does.
+    assert(handle_tool_call(kernel, "explain_query", nlohmann::json{{"ir_version", 99}}).is_error);
+
+    cleanup(root);
+}
+
 void batch_tool_schemas_state_their_bound() {
     // The issue these tools answer asks for the batch bound to be discoverable from the tool itself,
     // not just enforced at call time -- so both the description and the schema must carry it, for
@@ -798,6 +855,7 @@ int main() {
     query_tool_runs_a_shaped_read_and_reports_truncation();
     query_tool_accepts_filters_and_name_resolution();
     aggregate_tool_groups_rows_and_reports_absent_numbers_as_null();
+    explain_query_tool_reports_the_plan_and_its_alternatives();
     batch_tool_schemas_state_their_bound();
     intern_entity_tool_round_trips_a_string_argument();
     intern_value_tool_round_trips_a_tagged_value_argument();

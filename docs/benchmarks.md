@@ -224,6 +224,52 @@ reopening per commit — deliberately not done here, because it trades ten open 
 and a stale-handle case after every rebuild for ~15 µs on a path whose recommended bulk form
 (`commit_batch`, still ~1M commits/sec) barely notices.
 
+### `query_benchmark` — the cost model and a corpus too large to cache (2026-09-29)
+
+Phase 16. The planner compares candidate sources on modelled cost, so the constants in that model are
+measured rather than guessed. Two index lookups differing only in candidate count separate the fixed
+lookup from the per-candidate cost; the two scans give the rest:
+
+```
+== cost model inputs ==
+index path, ~2 candidates                                0.842 us/query
+index path, ~5000 candidates                            26.583 us/query
+  => per candidate row                                   5.150 ns
+  => per row, columnar scan                              0.910 ns
+  => per row, row scan                                   1.540 ns
+```
+
+**The ratio is what decides anything: an index row costs ~5.7x a scanned column row**, because it is a
+random access into an 88-byte record while the scan streams one contiguous column. So an index wins only
+while it yields fewer than roughly one row in six — which is why "use an index whenever one applies" (the
+Phase 11 heuristic) is wrong for a common predicate.
+
+Every number above this section was measured on 10,000 assertions, which is cache-resident. Phase 15
+flagged that as a reason its 1.7x figure understated the layout, and as a risk for calibrating a planner
+against. So Phase 16 added a corpus that does not fit — 250,000 assertions, ~22 MB of records against
+~2 MB of one column (three runs, showing the spread):
+
+```
+== a corpus too large to cache (250000 assertions) ==
+large: scan, columnar            0.376 - 0.458 ms/query      (1.5 - 1.8 ns/row)
+large: scan, rows                0.922 - 1.042 ms/query      (3.7 - 4.2 ns/row)
+large: the declined index path   1.196 - 1.469 ms/query
+```
+
+Three things follow, and the third is the one that matters:
+
+* **The columnar advantage grows with size, as predicted**: ~2.5x here against 1.7x on the small corpus.
+  Both per-row costs rise once memory traffic stops being free (0.91 -> ~1.6 ns columnar, 1.54 -> ~4.0 ns
+  rows), and the row layout rises faster because it drags 88 bytes through cache to read one field.
+* **The constants are calibrated at 10,000 rows and are not portable to this size.** The model would
+  now understate both scans, and understate the index path by more, since a random access at 250,000
+  rows misses cache where at 10,000 it did not. Directionally the decisions stay right; the absolute
+  numbers in a plan are comparable only against each other, which is what `explain_query` documents.
+* **The planner's decision was validated rather than asserted.** At this size it chooses the columnar
+  scan for a predicate covering a quarter of the corpus, and the index it declined — timed directly via
+  `current_by_predicate`, which always uses that index — costs **~1.3 ms against the chosen scan's
+  ~0.4 ms**. It was right by roughly 3x.
+
 ### `query_benchmark` — vectorized execution (2026-09-29)
 
 Phase 15. Before/after measured **in the same session on the same machine**, which matters: an earlier

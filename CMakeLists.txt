@@ -29,6 +29,7 @@ add_library(kernel
     src/column_store.cpp
     src/vectorized_scan.cpp
     src/query_engine.cpp
+    src/query_plan.cpp
     src/storage_lock.cpp
 )
 
@@ -205,6 +206,10 @@ add_executable(column_store_tests
     tests/column_store_tests.cpp
 )
 
+add_executable(query_plan_tests
+    tests/query_plan_tests.cpp
+)
+
 target_link_libraries(knowledge_kernel_tests
     PRIVATE kernel
 )
@@ -306,6 +311,10 @@ target_link_libraries(read_only_open_tests
 )
 
 target_link_libraries(column_store_tests
+    PRIVATE kernel
+)
+
+target_link_libraries(query_plan_tests
     PRIVATE kernel
 )
 
@@ -437,4 +446,9 @@ add_test(
 add_test(
     NAME column_store_tests
     COMMAND column_store_tests
+)
+
+add_test(
+    NAME query_plan_tests
+    COMMAND query_plan_tests
 )

@@ -246,6 +246,36 @@ quietly ignored.
 Groups come back ordered deterministically by key (kind first, then the kind's value), so repeated runs
 and index-selected versus scanned evaluation agree on order as well as content.
 
+## Planning and `explain_query` (Phase 16)
+
+Which rows a query reads is a *cost* decision, never a semantic one: a source is only offered to the
+planner when it provably contains every row the query could match, so the answer is the same whichever
+is chosen. `explain_query` returns the plan `query` would follow without running it.
+
+```
+chosen: columnar_scan       estimated_rows: 250000    estimated_cost: 227500
+considered:
+  subject_index             rejected: query names no subject
+  predicate_current_index   rows: 62500   cost: 321925
+  columnar_scan             rows: 250000  cost: 227500
+  row_scan                  rows: 250000  cost: 385000
+```
+
+* **Index row counts are exact**, not sampled: the planner reads a bucket's size or performs a binary
+  search, which is why it needs no persisted cardinality statistics.
+* **Costs are modelled from measured constants** (`docs/benchmarks.md`) and are comparable *only* against
+  the other options in the same plan — they are nanosecond-shaped, not nanosecond-accurate, and are
+  calibrated at one corpus size.
+* **An index is not taken merely because it applies.** An index row costs several times a scanned column
+  row, so a predicate matching most of the corpus is cheaper to scan. On a very small corpus, scanning
+  beats any index, because a hash probe plus building a vector of ids costs more than streaming a few
+  rows.
+* **Rejections carry a reason**, and the ones worth reading are the correctness rejections: the
+  current-state indexes hold only Active open-ended rows, so a query that is not current-shaped cannot
+  use them at all.
+* The plan `explain_query` returns is produced by the same call the executor makes, so it cannot describe
+  something other than what will run.
+
 ---
 
 ## Quick reference

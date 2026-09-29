@@ -6,6 +6,7 @@
 #include "kernel/column_store.hpp"
 #include "kernel/knowledge_kernel.hpp"
 #include "kernel/query.hpp"
+#include "kernel/query_plan.hpp"
 #include "kernel/storage_config.hpp"
 #include "kernel/storage_engine.hpp"
 #include "kernel/time.hpp"
@@ -301,6 +302,126 @@ void columnar_substrate(const std::filesystem::path &root, size_t rounds) {
            verify_timer.elapsed_seconds() / static_cast<double>(rounds) * 1000.0, "ms/open");
 }
 
+// --- inputs to the cost model (Phase 16) -----------------------------------------
+//
+// The planner compares candidate sources on modelled cost, and the constants in that model have to come
+// from somewhere. These four measurements are that somewhere: two index lookups differing only in how
+// many candidate rows they yield (which separates fixed lookup overhead from per-candidate cost), and
+// the two scans.
+void planner_cost_inputs(const KnowledgeKernel &kernel, size_t queries) {
+    // ~2 candidate rows: one subject, both of its assertions.
+    Timer small_timer;
+    for (size_t i = 0; i < queries; ++i) {
+        kernel.query(current_shaped(static_cast<EntityId>(i % SUBJECT_COUNT + 1)));
+    }
+    double small = small_timer.elapsed_seconds() / static_cast<double>(queries);
+    report("index path, ~2 candidates", small * 1e6, "us/query");
+
+    // ~SUBJECT_COUNT candidate rows: every WORKS_AT assertion, through the predicate current index.
+    Timer large_timer;
+    for (size_t i = 0; i < queries; ++i) {
+        Query query;
+        query.predicate = WORKS_AT;
+        query.statuses = {AssertionStatus::Active};
+        query.open_ended_only = true;
+        query.limit = 1; // page one row, so materialization is not what is being measured
+        kernel.query(query);
+    }
+    double large = large_timer.elapsed_seconds() / static_cast<double>(queries);
+    report("index path, ~5000 candidates", large * 1e6, "us/query");
+
+    double per_candidate = (large - small) / static_cast<double>(SUBJECT_COUNT - 2);
+    report("  => per candidate row", per_candidate * 1e9, "ns");
+
+    Timer columnar_timer;
+    for (size_t i = 0; i < queries; ++i) {
+        Query query = current_shaped(static_cast<EntityId>(i % SUBJECT_COUNT + 1));
+        query.force_scan = true;
+        kernel.query(query);
+    }
+    double columnar = columnar_timer.elapsed_seconds() / static_cast<double>(queries);
+    report("  => per row, columnar scan", columnar / (2.0 * static_cast<double>(SUBJECT_COUNT)) * 1e9, "ns");
+
+    Timer row_timer;
+    for (size_t i = 0; i < queries; ++i) {
+        Query query = current_shaped(static_cast<EntityId>(i % SUBJECT_COUNT + 1));
+        query.force_scan = true;
+        query.force_row_scan = true;
+        kernel.query(query);
+    }
+    double rows = row_timer.elapsed_seconds() / static_cast<double>(queries);
+    report("  => per row, row scan", rows / (2.0 * static_cast<double>(SUBJECT_COUNT)) * 1e9, "ns");
+}
+
+// --- a corpus too large to cache (Phase 16) --------------------------------------
+//
+// Every number above this point is measured on 10,000 assertions, which is ~880 KB of records and ~80 KB
+// of one column -- both cache-resident, so they measure instruction count rather than memory traffic.
+// Phase 15 flagged that as the reason its 1.7x scan figure understated the layout, and as a risk for
+// calibrating a planner. This section exists to answer that: 250,000 assertions is ~22 MB of records
+// against ~2 MB of one column, which no longer fits.
+constexpr size_t LARGE_CORPUS = 250'000;
+
+void large_corpus_scans(size_t queries) {
+    auto root = fresh_root("large_corpus");
+    KnowledgeKernel kernel(StorageConfig{root});
+
+    for (size_t written = 0; written < LARGE_CORPUS; written += 10'000) {
+        std::vector<PendingAssertion> batch;
+        batch.reserve(10'000);
+        for (size_t i = 0; i < 10'000; ++i) {
+            size_t row = written + i;
+            batch.push_back({static_cast<EntityId>(row % 50'000 + 1), static_cast<PredicateId>(row % 4 + 1),
+                             static_cast<EntityId>(1'000'000 + row % 100), 0, OPEN_ENDED, static_cast<Timestamp>(row),
+                             1.0});
+        }
+        kernel.commit_batch(batch);
+    }
+
+    Query columnar;
+    columnar.statuses = {AssertionStatus::Active};
+    columnar.open_ended_only = true;
+    columnar.predicate = 1;
+    columnar.force_scan = true;
+    columnar.limit = 1;
+
+    Timer columnar_timer;
+    for (size_t i = 0; i < queries; ++i) {
+        kernel.query(columnar);
+    }
+    double columnar_elapsed = columnar_timer.elapsed_seconds() / static_cast<double>(queries);
+    report("large: scan, columnar", columnar_elapsed * 1000.0, "ms/query");
+    report("  => per row", columnar_elapsed / static_cast<double>(LARGE_CORPUS) * 1e9, "ns");
+
+    Query rows = columnar;
+    rows.force_row_scan = true;
+
+    Timer row_timer;
+    for (size_t i = 0; i < queries; ++i) {
+        kernel.query(rows);
+    }
+    double row_elapsed = row_timer.elapsed_seconds() / static_cast<double>(queries);
+    report("large: scan, rows", row_elapsed * 1000.0, "ms/query");
+    report("  => per row", row_elapsed / static_cast<double>(LARGE_CORPUS) * 1e9, "ns");
+
+    // What the planner decides at this size -- and then the index it declined, actually timed, so the
+    // decision is validated rather than asserted. current_by_predicate always uses that index, which
+    // makes it a direct measurement of the path the planner rejected.
+    Query planned = columnar;
+    planned.force_scan = false;
+    auto plan = kernel.explain_query(planned);
+    report(std::string("large: planner chose ") + plan_source_name(plan.chosen), plan.estimated_cost, "cost units");
+
+    Timer index_timer;
+    for (size_t i = 0; i < queries; ++i) {
+        kernel.current_by_predicate(1);
+    }
+    double index_elapsed = index_timer.elapsed_seconds() / static_cast<double>(queries);
+    report("large: the declined index path", index_elapsed * 1000.0, "ms/query");
+
+    std::filesystem::remove_all(root);
+}
+
 } // namespace
 
 int main() {
@@ -326,6 +447,12 @@ int main() {
 
     section("columnar substrate over the same corpus");
     columnar_substrate(root, 20);
+
+    section("cost model inputs (Phase 16)");
+    planner_cost_inputs(kernel, 500);
+
+    section("a corpus too large to cache (" + std::to_string(LARGE_CORPUS) + " assertions)");
+    large_corpus_scans(20);
 
     std::filesystem::remove_all(root);
     return 0;

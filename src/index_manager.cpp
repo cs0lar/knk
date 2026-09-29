@@ -185,6 +185,38 @@ std::vector<AssertionId> IndexManager::current_assertions_by_predicate(Predicate
     return result;
 }
 
+size_t IndexManager::row_count_for_subject(EntityId subject) const {
+    auto it = subject_index_.find(subject);
+    return it == subject_index_.end() ? 0 : it->second.size();
+}
+
+size_t IndexManager::observed_before_count(EntityId subject, Timestamp t) const {
+    auto it = observed_time_index_.find(subject);
+    if (it == observed_time_index_.end()) {
+        return 0;
+    }
+
+    // The same binary search observed_before does, without materializing the ids -- the point of having
+    // a count: planning must not cost as much as the work it is choosing between.
+    auto end = std::upper_bound(it->second.begin(), it->second.end(), t,
+                                [](Timestamp value, const auto &entry) { return value < entry.first; });
+    return static_cast<size_t>(std::distance(it->second.begin(), end));
+}
+
+size_t IndexManager::current_row_count_by_object(EntityId object) const {
+    auto it = object_index_.find(object);
+    return it == object_index_.end() ? 0 : it->second.size();
+}
+
+size_t IndexManager::current_row_count_by_predicate(PredicateId predicate) const {
+    auto it = predicate_current_index_.find(predicate);
+    return it == predicate_current_index_.end() ? 0 : it->second.size();
+}
+
+size_t IndexManager::distinct_subjects() const { return subject_index_.size(); }
+
+size_t IndexManager::distinct_current_objects() const { return object_index_.size(); }
+
 std::vector<AssertionId> IndexManager::observed_before(EntityId subject, Timestamp t) const {
     std::vector<AssertionId> result;
 

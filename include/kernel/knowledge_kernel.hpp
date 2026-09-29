@@ -19,6 +19,7 @@
 #include "kernel/provenance_log.hpp"
 #include "kernel/query.hpp"
 #include "kernel/query_engine.hpp"
+#include "kernel/query_plan.hpp"
 #include "kernel/status.hpp"
 #include "kernel/storage_engine.hpp"
 #include "kernel/time.hpp"
@@ -322,6 +323,12 @@ class KnowledgeKernel {
     // std::runtime_error for an unknown Query::ir_version; every other malformed-looking query is just a
     // filter that matches nothing.
     QueryResult query(const Query &query) const;
+
+    // The plan query() would follow, without running it (Phase 16). Produced by the same call the
+    // executor makes, so an explanation cannot describe something other than what will happen. An
+    // analytics caller needs this to predict what a query costs, and to notice when a change in the
+    // corpus has silently changed the plan underneath them.
+    QueryPlan explain_query(const Query &query) const;
 
     // Aggregates rows in a single streaming pass (Phase 12): counts, sums and extrema over groups, with
     // the same selection surface a row query uses, so "how many" and "which" can never disagree about

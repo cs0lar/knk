@@ -1416,6 +1416,37 @@ Current implementation status (shipped 2026-09-29):
 * **Tests:** plan choices asserted on shaped data; results identical under the chosen plan and a forced
  scan (decision 2, again); `explain` output stable enough to assert on.
 
+Current implementation status (shipped 2026-09-29):
+
+* **The planned persisted statistics turned out to be unnecessary, and were not built.** `IndexManager`
+ can report an exact candidate count in constant time -- a bucket's `size()`, or an `upper_bound` on the
+ observed-time index -- so the planner compares *exact* row counts and only has to model cost per row.
+ Persisted cardinality estimates would have added a new on-disk artifact with its own staleness,
+ corruption and migration story (Phase 14 showed how much machinery that is) to replace numbers that are
+ already exact and free. `row_count_for_subject`, `observed_before_count`,
+ `current_row_count_by_object`, `current_row_count_by_predicate`, `distinct_subjects` and
+ `distinct_current_objects` are the whole of it.
+* **The cost constants are measured, not guessed** (`query_benchmark`'s "cost model inputs" section, in
+ `docs/benchmarks.md`): 5.15 ns per index candidate row, 0.91 ns per columnar row, 1.54 ns per row-scan
+ row. The ratio is what decides anything -- an index row costs ~5.7x a scanned column row -- and it is
+ the reason Phase 11's "use an index whenever one applies" is wrong for a common predicate.
+* **Two consequences worth knowing, both surprising at first and both now pinned by tests:** a predicate
+ covering most of the corpus is *scanned* rather than looked up, and a **tiny corpus is scanned rather
+ than indexed at all**, because a hash probe plus building a vector of ids costs more than streaming a
+ handful of column rows. The second one caught the author expecting the opposite.
+* **One plan, produced once and followed** -- `explain` and `execute` call the same `plan_query`, so an
+ explanation cannot describe something other than what runs. Planning reads bucket sizes rather than
+ bucket contents, which is what makes explaining cheap enough to do before every query.
+* Rejected sources carry *why*: "not current-shaped", "query names no subject", "force_scan". The
+ correctness rejections matter most -- the current-state indexes hold only Active open-ended rows, so
+ offering one to a query wanting any other status would silently lose rows.
+* `explain_query` is exposed on the kernel, as `ExplainQueryCommand`, and as the 50th MCP tool.
+* **The benchmark corpus grew to 250,000 assertions**, acting on Phase 15's own warning about calibrating
+ a planner against cache-resident data. The columnar advantage grows to ~2.5x there (from 1.7x), and the
+ planner's choice was *validated by timing the index it declined*: ~1.3 ms against the chosen scan's
+ ~0.4 ms. The constants remain calibrated at 10,000 rows and are not portable to that size -- documented
+ rather than papered over, since plan costs are comparable only within one plan anyway.
+
 #### Phase 17 — Columnar result handoff
 
 A million-row answer must not travel as JSON-RPC text.

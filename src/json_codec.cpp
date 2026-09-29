@@ -241,6 +241,28 @@ nlohmann::json kernel_result_to_json(const KernelResult &result) {
                     array.push_back(id);
                 }
                 return array;
+            } else if constexpr (std::is_same_v<T, QueryPlan>) {
+                nlohmann::json considered = nlohmann::json::array();
+                for (const auto &option : value.considered) {
+                    nlohmann::json entry{{"source", plan_source_name(option.source)}};
+                    if (option.rejected_because.empty()) {
+                        entry["rows"] = option.rows;
+                        entry["cost"] = option.cost;
+                    } else {
+                        // Rejected options carry the reason instead of numbers: "why not" is the half of
+                        // an explanation that tells a caller what to change about the query.
+                        entry["rejected_because"] = option.rejected_because;
+                    }
+                    considered.push_back(entry);
+                }
+
+                return nlohmann::json{{"chosen", plan_source_name(value.chosen)},
+                                      {"estimated_rows", value.estimated_rows},
+                                      {"estimated_cost", value.estimated_cost},
+                                      {"filter_evaluated_per_row", value.filter_evaluated_per_row},
+                                      {"total_rows", value.total_rows},
+                                      {"distinct_subjects", value.distinct_subjects},
+                                      {"considered", considered}};
             } else if constexpr (std::is_same_v<T, AggregateResult>) {
                 nlohmann::json groups = nlohmann::json::array();
                 for (const auto &group : value.groups) {

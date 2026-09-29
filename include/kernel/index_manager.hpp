@@ -52,6 +52,22 @@ class IndexManager {
     std::vector<AssertionId> current_assertions_by_predicate(PredicateId predicate) const;
 
     std::vector<AssertionId> observed_before(EntityId subject, Timestamp t) const;
+
+    // --- counts, for planning (Phase 16) -----------------------------------------
+    //
+    // How many ids each lookup above *would* return, without building the vector. These are exact, not
+    // estimates: every one is a bucket size or a binary search, so the planner can compare candidate
+    // sources on real numbers and only has to model cost per row. That is why this phase needs no
+    // persisted cardinality statistics.
+    size_t row_count_for_subject(EntityId subject) const;
+    size_t observed_before_count(EntityId subject, Timestamp t) const;
+    size_t current_row_count_by_object(EntityId object) const;
+    size_t current_row_count_by_predicate(PredicateId predicate) const;
+
+    // Distinct subjects/objects the indexes know about -- corpus shape, used for explain output and for
+    // sanity-checking selectivity rather than for the choice itself.
+    size_t distinct_subjects() const;
+    size_t distinct_current_objects() const;
     std::vector<std::tuple<EntityId, Timestamp, AssertionId>> observed_time_entries() const;
     std::vector<std::pair<EntityId, AssertionId>> subject_index_entries() const;
     std::vector<std::tuple<EntityId, PredicateId, AssertionId>> current_index_entries() const;
