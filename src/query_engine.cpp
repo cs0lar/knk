@@ -465,7 +465,8 @@ void validate_aggregate(const AggregateQuery &query) {
 
 } // namespace
 
-QueryResult QueryEngine::execute(const Query &query, const QuerySource &source) const {
+std::vector<uint32_t> QueryEngine::select_rows(const Query &query, const QuerySource &source,
+                                               size_t ordered_prefix) const {
     const auto &assertions = source.assertions;
     const auto &index_manager = source.index_manager;
     const auto &catalog = source.catalog;
@@ -489,14 +490,12 @@ QueryResult QueryEngine::execute(const Query &query, const QuerySource &source) 
         object = catalog.resolve(*query.object);
     }
 
-    // Row indices, not rows. Everything up to the page boundary works on 4-byte indices: filtering
-    // pushes them, sorting swaps them, and only the rows that survive paging are ever copied. Phase 12
-    // measured a broad query as ~12x dominated by building and sorting 10,000 Assertion copies, which is
-    // what this removes -- late materialization, the other half of the columnar story.
+    // Row indices, not rows. Everything here works on 4-byte indices: filtering pushes them, sorting
+    // swaps them, and materializing rows is the caller's business -- which is what lets a page copy a
+    // handful of rows and a spill stream millions without either holding the other's cost.
     std::vector<uint32_t> matched;
 
     // One plan, followed -- not a plan produced for explaining and a separate set of rules for running.
-    // An explanation that can disagree with the execution is worse than none.
     bool columns_ready = columns_usable(source.columns, source.effective_status, assertions.size());
     QueryPlan plan = plan_query(query, subject, object, index_manager, columns_ready, assertions.size());
 
@@ -536,9 +535,23 @@ QueryResult QueryEngine::execute(const Query &query, const QuerySource &source) 
                                   : ordered_before(assertions[left], assertions[right], query.order);
     };
 
-    size_t limit = query.limit == 0 ? MAX_QUERY_RESULT : std::min(query.limit, MAX_QUERY_RESULT);
+    // Only as much order as the caller will use: a page discards the tail, so sorting it is work whose
+    // result is thrown away. A spill asks for the whole thing ordered and gets a full sort.
+    if (ordered_prefix < matched.size()) {
+        std::partial_sort(matched.begin(), matched.begin() + static_cast<std::ptrdiff_t>(ordered_prefix), matched.end(),
+                          ordered);
+    } else {
+        std::sort(matched.begin(), matched.end(), ordered);
+    }
 
-    QueryResult result;
+    return matched;
+}
+
+QueryResult QueryEngine::execute(const Query &query, const QuerySource &source) const {
+    const auto &assertions = source.assertions;
+    const auto &catalog = source.catalog;
+
+    size_t limit = query.limit == 0 ? MAX_QUERY_RESULT : std::min(query.limit, MAX_QUERY_RESULT);
 
     // Saturating rather than wrapping: offset is caller-supplied and unbounded, so a wrapped offset+limit
     // would turn "a page past the end" into "a page from the beginning".
@@ -546,23 +559,16 @@ QueryResult QueryEngine::execute(const Query &query, const QuerySource &source) 
                                ? std::numeric_limits<size_t>::max()
                                : query.offset + limit;
 
+    std::vector<uint32_t> matched = select_rows(query, source, requested_end);
+
+    QueryResult result;
     result.truncated = matched.size() > requested_end;
-
-    size_t page_end = std::min(matched.size(), requested_end);
-
-    // Only the page has to be in order: sorting the tail that paging discards is work whose result is
-    // thrown away, and a limit is the common case rather than the exception.
-    if (page_end < matched.size()) {
-        std::partial_sort(matched.begin(), matched.begin() + static_cast<std::ptrdiff_t>(page_end), matched.end(),
-                          ordered);
-    } else {
-        std::sort(matched.begin(), matched.end(), ordered);
-    }
 
     if (query.offset >= matched.size()) {
         return result; // offset past the end is an empty page, not an error
     }
 
+    size_t page_end = std::min(matched.size(), requested_end);
     result.assertions.reserve(page_end - query.offset);
     for (size_t i = query.offset; i < page_end; ++i) {
         result.assertions.push_back(assertions[matched[i]]);

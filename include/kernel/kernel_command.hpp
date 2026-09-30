@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <filesystem>
 #include <string>
 #include <variant>
 #include <vector>
@@ -288,6 +289,15 @@ struct ExplainQueryCommand {
     Query query;
 };
 
+// Mirrors spill_query, directory and all. The MCP tool fills `directory` from the server's own
+// configuration rather than from a client argument, so reifying it faithfully does not hand a client the
+// ability to name a path for the process to write to.
+struct SpillQueryCommand {
+    Query query;
+    std::filesystem::path directory;
+    std::string token;
+};
+
 using KernelCommand = std::variant<
     CommitCommand, CommitByNameCommand, CommitBatchCommand, CommitBatchByNameCommand, CommitRetractionCommand,
     CommitSupersedingCommand, WriteSnapshotCommand, InternEntityCommand, InternValueCommand, InternPredicateCommand,
@@ -299,6 +309,6 @@ using KernelCommand = std::variant<
     FindPredicateCommand, EntityNameCommand, EntityValueCommand, PredicateNameCommand, DocumentContentCommand,
     ProvenanceForCommand, EntityNameBatchCommand, EntityValueBatchCommand, PredicateNameBatchCommand,
     ProvenanceForBatchCommand, HypothesesForCommand, NeighborsCommand, CoOccurringPredicatesCommand,
-    ResolveEntityCommand, QueryCommand, AggregateCommand, ExplainQueryCommand>;
+    ResolveEntityCommand, QueryCommand, AggregateCommand, ExplainQueryCommand, SpillQueryCommand>;
 
 } // namespace knk

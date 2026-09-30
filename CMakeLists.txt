@@ -30,6 +30,7 @@ add_library(kernel
     src/vectorized_scan.cpp
     src/query_engine.cpp
     src/query_plan.cpp
+    src/spill.cpp
     src/storage_lock.cpp
 )
 
@@ -210,6 +211,10 @@ add_executable(query_plan_tests
     tests/query_plan_tests.cpp
 )
 
+add_executable(spill_tests
+    tests/spill_tests.cpp
+)
+
 target_link_libraries(knowledge_kernel_tests
     PRIVATE kernel
 )
@@ -315,6 +320,10 @@ target_link_libraries(column_store_tests
 )
 
 target_link_libraries(query_plan_tests
+    PRIVATE kernel
+)
+
+target_link_libraries(spill_tests
     PRIVATE kernel
 )
 
@@ -451,4 +460,9 @@ add_test(
 add_test(
     NAME query_plan_tests
     COMMAND query_plan_tests
+)
+
+add_test(
+    NAME spill_tests
+    COMMAND spill_tests
 )

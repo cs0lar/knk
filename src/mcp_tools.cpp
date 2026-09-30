@@ -511,7 +511,7 @@ std::vector<std::byte> require_bytes(const nlohmann::json &args, const char *key
 
 struct ToolDefinition {
     ToolSpec spec;
-    std::function<KernelResult(KnowledgeKernel &, const nlohmann::json &)> invoke;
+    std::function<KernelResult(KnowledgeKernel &, const nlohmann::json &, const ToolContext &)> invoke;
 };
 
 const std::vector<ToolDefinition> &tool_definitions() {
@@ -528,7 +528,7 @@ const std::vector<ToolDefinition> &tool_definitions() {
                              {"observed_at", integer_property("Observed-at timestamp.")},
                              {"confidence", number_property("Confidence in [0,1].")}},
                             {"subject", "predicate", "object", "valid_from", "valid_to", "observed_at", "confidence"})},
-             [](KnowledgeKernel &kernel, const nlohmann::json &args) -> KernelResult {
+             [](KnowledgeKernel &kernel, const nlohmann::json &args, const ToolContext &context) -> KernelResult {
                  return kernel.execute(CommitCommand{
                      require_id(args, "subject"), require_id(args, "predicate"), require_id(args, "object"),
                      require_timestamp(args, "valid_from"), require_timestamp(args, "valid_to"),
@@ -549,7 +549,7 @@ const std::vector<ToolDefinition> &tool_definitions() {
                    {"observed_at", integer_property("Observed-at timestamp.")},
                    {"confidence", number_property("Confidence in [0,1].")}},
                   {"subject_name", "predicate_name", "object", "valid_from", "valid_to", "observed_at", "confidence"})},
-             [](KnowledgeKernel &kernel, const nlohmann::json &args) -> KernelResult {
+             [](KnowledgeKernel &kernel, const nlohmann::json &args, const ToolContext &context) -> KernelResult {
                  return kernel.execute(
                      CommitByNameCommand{require_string(args, "subject_name"), require_string(args, "predicate_name"),
                                          require_value(args, "object"), require_timestamp(args, "valid_from"),
@@ -581,7 +581,7 @@ const std::vector<ToolDefinition> &tool_definitions() {
                                       {"subject", "predicate", "object", "valid_from", "valid_to", "observed_at",
                                        "confidence"}))}},
                   {"entries"})},
-             [](KnowledgeKernel &kernel, const nlohmann::json &args) -> KernelResult {
+             [](KnowledgeKernel &kernel, const nlohmann::json &args, const ToolContext &context) -> KernelResult {
                  return kernel.execute(CommitBatchCommand{require_pending_assertions(args, "entries")});
              }});
 
@@ -610,89 +610,96 @@ const std::vector<ToolDefinition> &tool_definitions() {
                                       {"subject_name", "predicate_name", "object", "valid_from", "valid_to",
                                        "observed_at", "confidence"}))}},
                   {"entries"})},
-             [](KnowledgeKernel &kernel, const nlohmann::json &args) -> KernelResult {
+             [](KnowledgeKernel &kernel, const nlohmann::json &args, const ToolContext &context) -> KernelResult {
                  return kernel.execute(CommitBatchByNameCommand{require_pending_named_assertions(args, "entries")});
              }});
 
-        defs.push_back({{"commit_retraction", "Commits a retraction record for an existing assertion.",
-                         object_schema({{"subject", integer_property("Subject EntityId.")},
-                                        {"predicate", integer_property("Predicate PredicateId.")},
-                                        {"object", integer_property("Object EntityId.")},
-                                        {"valid_from", integer_property("Valid-from timestamp.")},
-                                        {"valid_to", integer_property("Valid-to timestamp; 0 means open-ended.")},
-                                        {"observed_at", integer_property("Observed-at timestamp.")},
-                                        {"confidence", number_property("Confidence in [0,1].")},
-                                        {"retracts_id", integer_property("AssertionId being retracted.")}},
-                                       {"subject", "predicate", "object", "valid_from", "valid_to", "observed_at",
-                                        "confidence", "retracts_id"})},
-                        [](KnowledgeKernel &kernel, const nlohmann::json &args) -> KernelResult {
-                            return kernel.execute(CommitRetractionCommand{
-                                require_id(args, "subject"), require_id(args, "predicate"), require_id(args, "object"),
-                                require_timestamp(args, "valid_from"), require_timestamp(args, "valid_to"),
-                                require_timestamp(args, "observed_at"), require_double(args, "confidence"),
-                                require_id(args, "retracts_id")});
-                        }});
+        defs.push_back(
+            {{"commit_retraction", "Commits a retraction record for an existing assertion.",
+              object_schema({{"subject", integer_property("Subject EntityId.")},
+                             {"predicate", integer_property("Predicate PredicateId.")},
+                             {"object", integer_property("Object EntityId.")},
+                             {"valid_from", integer_property("Valid-from timestamp.")},
+                             {"valid_to", integer_property("Valid-to timestamp; 0 means open-ended.")},
+                             {"observed_at", integer_property("Observed-at timestamp.")},
+                             {"confidence", number_property("Confidence in [0,1].")},
+                             {"retracts_id", integer_property("AssertionId being retracted.")}},
+                            {"subject", "predicate", "object", "valid_from", "valid_to", "observed_at", "confidence",
+                             "retracts_id"})},
+             [](KnowledgeKernel &kernel, const nlohmann::json &args, const ToolContext &context) -> KernelResult {
+                 return kernel.execute(CommitRetractionCommand{
+                     require_id(args, "subject"), require_id(args, "predicate"), require_id(args, "object"),
+                     require_timestamp(args, "valid_from"), require_timestamp(args, "valid_to"),
+                     require_timestamp(args, "observed_at"), require_double(args, "confidence"),
+                     require_id(args, "retracts_id")});
+             }});
 
-        defs.push_back({{"commit_superseding", "Commits a replacement assertion, marking the superseded one as such.",
-                         object_schema({{"subject", integer_property("Subject EntityId.")},
-                                        {"predicate", integer_property("Predicate PredicateId.")},
-                                        {"object", integer_property("Object EntityId.")},
-                                        {"valid_from", integer_property("Valid-from timestamp.")},
-                                        {"valid_to", integer_property("Valid-to timestamp; 0 means open-ended.")},
-                                        {"observed_at", integer_property("Observed-at timestamp.")},
-                                        {"confidence", number_property("Confidence in [0,1].")},
-                                        {"supersedes_id", integer_property("AssertionId being superseded.")}},
-                                       {"subject", "predicate", "object", "valid_from", "valid_to", "observed_at",
-                                        "confidence", "supersedes_id"})},
-                        [](KnowledgeKernel &kernel, const nlohmann::json &args) -> KernelResult {
-                            return kernel.execute(CommitSupersedingCommand{
-                                require_id(args, "subject"), require_id(args, "predicate"), require_id(args, "object"),
-                                require_timestamp(args, "valid_from"), require_timestamp(args, "valid_to"),
-                                require_timestamp(args, "observed_at"), require_double(args, "confidence"),
-                                require_id(args, "supersedes_id")});
-                        }});
+        defs.push_back(
+            {{"commit_superseding", "Commits a replacement assertion, marking the superseded one as such.",
+              object_schema({{"subject", integer_property("Subject EntityId.")},
+                             {"predicate", integer_property("Predicate PredicateId.")},
+                             {"object", integer_property("Object EntityId.")},
+                             {"valid_from", integer_property("Valid-from timestamp.")},
+                             {"valid_to", integer_property("Valid-to timestamp; 0 means open-ended.")},
+                             {"observed_at", integer_property("Observed-at timestamp.")},
+                             {"confidence", number_property("Confidence in [0,1].")},
+                             {"supersedes_id", integer_property("AssertionId being superseded.")}},
+                            {"subject", "predicate", "object", "valid_from", "valid_to", "observed_at", "confidence",
+                             "supersedes_id"})},
+             [](KnowledgeKernel &kernel, const nlohmann::json &args, const ToolContext &context) -> KernelResult {
+                 return kernel.execute(CommitSupersedingCommand{
+                     require_id(args, "subject"), require_id(args, "predicate"), require_id(args, "object"),
+                     require_timestamp(args, "valid_from"), require_timestamp(args, "valid_to"),
+                     require_timestamp(args, "observed_at"), require_double(args, "confidence"),
+                     require_id(args, "supersedes_id")});
+             }});
 
         defs.push_back(
             {{"write_snapshot", "Persists a full snapshot of current in-memory assertions.", object_schema({}, {})},
-             [](KnowledgeKernel &kernel, const nlohmann::json &) -> KernelResult {
+             [](KnowledgeKernel &kernel, const nlohmann::json &, const ToolContext &context) -> KernelResult {
                  return kernel.execute(WriteSnapshotCommand{});
              }});
 
-        defs.push_back({{"intern_entity", "Interns a named entity, returning its EntityId (idempotent).",
-                         object_schema({{"name", string_property("Entity name.")}}, {"name"})},
-                        [](KnowledgeKernel &kernel, const nlohmann::json &args) -> KernelResult {
-                            return kernel.execute(InternEntityCommand{require_string(args, "name")});
-                        }});
+        defs.push_back(
+            {{"intern_entity", "Interns a named entity, returning its EntityId (idempotent).",
+              object_schema({{"name", string_property("Entity name.")}}, {"name"})},
+             [](KnowledgeKernel &kernel, const nlohmann::json &args, const ToolContext &context) -> KernelResult {
+                 return kernel.execute(InternEntityCommand{require_string(args, "name")});
+             }});
 
-        defs.push_back({{"intern_value", "Interns a typed literal value, returning its EntityId (idempotent).",
-                         object_schema({{"value", value_property("The literal to intern.")}}, {"value"})},
-                        [](KnowledgeKernel &kernel, const nlohmann::json &args) -> KernelResult {
-                            return kernel.execute(InternValueCommand{require_value(args, "value")});
-                        }});
+        defs.push_back(
+            {{"intern_value", "Interns a typed literal value, returning its EntityId (idempotent).",
+              object_schema({{"value", value_property("The literal to intern.")}}, {"value"})},
+             [](KnowledgeKernel &kernel, const nlohmann::json &args, const ToolContext &context) -> KernelResult {
+                 return kernel.execute(InternValueCommand{require_value(args, "value")});
+             }});
 
-        defs.push_back({{"intern_predicate", "Interns a named predicate, returning its PredicateId (idempotent).",
-                         object_schema({{"name", string_property("Predicate name.")}}, {"name"})},
-                        [](KnowledgeKernel &kernel, const nlohmann::json &args) -> KernelResult {
-                            return kernel.execute(InternPredicateCommand{require_string(args, "name")});
-                        }});
+        defs.push_back(
+            {{"intern_predicate", "Interns a named predicate, returning its PredicateId (idempotent).",
+              object_schema({{"name", string_property("Predicate name.")}}, {"name"})},
+             [](KnowledgeKernel &kernel, const nlohmann::json &args, const ToolContext &context) -> KernelResult {
+                 return kernel.execute(InternPredicateCommand{require_string(args, "name")});
+             }});
 
-        defs.push_back({{"intern_document", "Interns raw document bytes, returning an EntityId.",
-                         object_schema({{"content", base64_string_property("Document content.")}}, {"content"})},
-                        [](KnowledgeKernel &kernel, const nlohmann::json &args) -> KernelResult {
-                            return kernel.execute(InternDocumentCommand{require_bytes(args, "content")});
-                        }});
+        defs.push_back(
+            {{"intern_document", "Interns raw document bytes, returning an EntityId.",
+              object_schema({{"content", base64_string_property("Document content.")}}, {"content"})},
+             [](KnowledgeKernel &kernel, const nlohmann::json &args, const ToolContext &context) -> KernelResult {
+                 return kernel.execute(InternDocumentCommand{require_bytes(args, "content")});
+             }});
 
-        defs.push_back({{"record_provenance", "Records which source produced a given assertion, and by what method.",
-                         object_schema({{"assertion_id", integer_property("Target AssertionId.")},
-                                        {"source", integer_property("Source EntityId.")},
-                                        {"recorded_at", integer_property("Timestamp the provenance was recorded.")},
-                                        {"method", string_property("Free-text method description.")}},
-                                       {"assertion_id", "source", "recorded_at", "method"})},
-                        [](KnowledgeKernel &kernel, const nlohmann::json &args) -> KernelResult {
-                            return kernel.execute(RecordProvenanceCommand{
-                                require_id(args, "assertion_id"), require_id(args, "source"),
-                                require_timestamp(args, "recorded_at"), require_string(args, "method")});
-                        }});
+        defs.push_back(
+            {{"record_provenance", "Records which source produced a given assertion, and by what method.",
+              object_schema({{"assertion_id", integer_property("Target AssertionId.")},
+                             {"source", integer_property("Source EntityId.")},
+                             {"recorded_at", integer_property("Timestamp the provenance was recorded.")},
+                             {"method", string_property("Free-text method description.")}},
+                            {"assertion_id", "source", "recorded_at", "method"})},
+             [](KnowledgeKernel &kernel, const nlohmann::json &args, const ToolContext &context) -> KernelResult {
+                 return kernel.execute(
+                     RecordProvenanceCommand{require_id(args, "assertion_id"), require_id(args, "source"),
+                                             require_timestamp(args, "recorded_at"), require_string(args, "method")});
+             }});
 
         defs.push_back(
             {{"record_provenance_batch",
@@ -712,134 +719,144 @@ const std::vector<ToolDefinition> &tool_definitions() {
                                        {"method", string_property("Free-text method description.")}},
                                       {"assertion_id", "source", "recorded_at", "method"}))}},
                   {"records"})},
-             [](KnowledgeKernel &kernel, const nlohmann::json &args) -> KernelResult {
+             [](KnowledgeKernel &kernel, const nlohmann::json &args, const ToolContext &context) -> KernelResult {
                  return kernel.execute(RecordProvenanceBatchCommand{require_provenance_records(args, "records")});
              }});
 
-        defs.push_back({{"commit_hypothesis", "Commits a labeled, machine-suggested (Hypothesis-status) assertion.",
-                         object_schema({{"subject", integer_property("Subject EntityId.")},
-                                        {"predicate", integer_property("Predicate PredicateId.")},
-                                        {"object", integer_property("Object EntityId.")},
-                                        {"valid_from", integer_property("Valid-from timestamp.")},
-                                        {"valid_to", integer_property("Valid-to timestamp; 0 means open-ended.")},
-                                        {"observed_at", integer_property("Observed-at timestamp.")},
-                                        {"confidence", number_property("Confidence in [0,1].")},
-                                        {"source", integer_property("Source EntityId (required for hypotheses).")},
-                                        {"recorded_at", integer_property("Timestamp the provenance was recorded.")},
-                                        {"method", string_property("Free-text method description.")}},
-                                       {"subject", "predicate", "object", "valid_from", "valid_to", "observed_at",
-                                        "confidence", "source", "recorded_at", "method"})},
-                        [](KnowledgeKernel &kernel, const nlohmann::json &args) -> KernelResult {
-                            return kernel.execute(CommitHypothesisCommand{
-                                require_id(args, "subject"), require_id(args, "predicate"), require_id(args, "object"),
-                                require_timestamp(args, "valid_from"), require_timestamp(args, "valid_to"),
-                                require_timestamp(args, "observed_at"), require_double(args, "confidence"),
-                                require_id(args, "source"), require_timestamp(args, "recorded_at"),
-                                require_string(args, "method")});
-                        }});
+        defs.push_back(
+            {{"commit_hypothesis", "Commits a labeled, machine-suggested (Hypothesis-status) assertion.",
+              object_schema({{"subject", integer_property("Subject EntityId.")},
+                             {"predicate", integer_property("Predicate PredicateId.")},
+                             {"object", integer_property("Object EntityId.")},
+                             {"valid_from", integer_property("Valid-from timestamp.")},
+                             {"valid_to", integer_property("Valid-to timestamp; 0 means open-ended.")},
+                             {"observed_at", integer_property("Observed-at timestamp.")},
+                             {"confidence", number_property("Confidence in [0,1].")},
+                             {"source", integer_property("Source EntityId (required for hypotheses).")},
+                             {"recorded_at", integer_property("Timestamp the provenance was recorded.")},
+                             {"method", string_property("Free-text method description.")}},
+                            {"subject", "predicate", "object", "valid_from", "valid_to", "observed_at", "confidence",
+                             "source", "recorded_at", "method"})},
+             [](KnowledgeKernel &kernel, const nlohmann::json &args, const ToolContext &context) -> KernelResult {
+                 return kernel.execute(CommitHypothesisCommand{
+                     require_id(args, "subject"), require_id(args, "predicate"), require_id(args, "object"),
+                     require_timestamp(args, "valid_from"), require_timestamp(args, "valid_to"),
+                     require_timestamp(args, "observed_at"), require_double(args, "confidence"),
+                     require_id(args, "source"), require_timestamp(args, "recorded_at"),
+                     require_string(args, "method")});
+             }});
 
-        defs.push_back({{"merge_entities", "Merges absorb into keep: a one-way, append-only redirect.",
-                         object_schema({{"keep", integer_property("Surviving EntityId.")},
-                                        {"absorb", integer_property("Absorbed EntityId.")},
-                                        {"merged_at", integer_property("Timestamp of the merge decision.")}},
-                                       {"keep", "absorb", "merged_at"})},
-                        [](KnowledgeKernel &kernel, const nlohmann::json &args) -> KernelResult {
-                            return kernel.execute(MergeEntitiesCommand{require_id(args, "keep"),
-                                                                       require_id(args, "absorb"),
-                                                                       require_timestamp(args, "merged_at")});
-                        }});
+        defs.push_back(
+            {{"merge_entities", "Merges absorb into keep: a one-way, append-only redirect.",
+              object_schema({{"keep", integer_property("Surviving EntityId.")},
+                             {"absorb", integer_property("Absorbed EntityId.")},
+                             {"merged_at", integer_property("Timestamp of the merge decision.")}},
+                            {"keep", "absorb", "merged_at"})},
+             [](KnowledgeKernel &kernel, const nlohmann::json &args, const ToolContext &context) -> KernelResult {
+                 return kernel.execute(MergeEntitiesCommand{require_id(args, "keep"), require_id(args, "absorb"),
+                                                            require_timestamp(args, "merged_at")});
+             }});
 
-        defs.push_back({{"archive_segments_before",
-                         "Archives (compacts, does not delete) log segments entirely before an "
-                         "AssertionId.",
-                         object_schema({{"assertion_id", integer_property("Archive-before boundary AssertionId.")}},
-                                       {"assertion_id"})},
-                        [](KnowledgeKernel &kernel, const nlohmann::json &args) -> KernelResult {
-                            kernel.execute(ArchiveSegmentsBeforeCommand{require_id(args, "assertion_id")});
-                            return std::monostate{};
-                        }});
+        defs.push_back(
+            {{"archive_segments_before",
+              "Archives (compacts, does not delete) log segments entirely before an "
+              "AssertionId.",
+              object_schema({{"assertion_id", integer_property("Archive-before boundary AssertionId.")}},
+                            {"assertion_id"})},
+             [](KnowledgeKernel &kernel, const nlohmann::json &args, const ToolContext &context) -> KernelResult {
+                 kernel.execute(ArchiveSegmentsBeforeCommand{require_id(args, "assertion_id")});
+                 return std::monostate{};
+             }});
 
-        defs.push_back({{"get", "Fetches a single assertion by id.",
-                         object_schema({{"id", integer_property("AssertionId.")}}, {"id"})},
-                        [](KnowledgeKernel &kernel, const nlohmann::json &args) -> KernelResult {
-                            return kernel.execute(GetCommand{require_id(args, "id")});
-                        }});
+        defs.push_back(
+            {{"get", "Fetches a single assertion by id.",
+              object_schema({{"id", integer_property("AssertionId.")}}, {"id"})},
+             [](KnowledgeKernel &kernel, const nlohmann::json &args, const ToolContext &context) -> KernelResult {
+                 return kernel.execute(GetCommand{require_id(args, "id")});
+             }});
 
         defs.push_back(
             {{"assertions_for_subject", "Returns every recorded assertion (any status) for a subject.",
               object_schema({{"subject", integer_property("Subject EntityId.")},
                              {"limit", integer_property("Maximum number of results (omit or 0 for no limit).")}},
                             {"subject"})},
-             [](KnowledgeKernel &kernel, const nlohmann::json &args) -> KernelResult {
+             [](KnowledgeKernel &kernel, const nlohmann::json &args, const ToolContext &context) -> KernelResult {
                  return kernel.execute(
                      AssertionsForSubjectCommand{require_id(args, "subject"), optional_size(args, "limit", 0)});
              }});
 
-        defs.push_back({{"current", "Returns every currently active, open-ended assertion for a subject.",
-                         object_schema({{"subject", integer_property("Subject EntityId.")}}, {"subject"})},
-                        [](KnowledgeKernel &kernel, const nlohmann::json &args) -> KernelResult {
-                            return kernel.execute(CurrentCommand{require_id(args, "subject")});
-                        }});
+        defs.push_back(
+            {{"current", "Returns every currently active, open-ended assertion for a subject.",
+              object_schema({{"subject", integer_property("Subject EntityId.")}}, {"subject"})},
+             [](KnowledgeKernel &kernel, const nlohmann::json &args, const ToolContext &context) -> KernelResult {
+                 return kernel.execute(CurrentCommand{require_id(args, "subject")});
+             }});
 
-        defs.push_back({{"current_by_name",
-                         "Returns every currently active, open-ended assertion for a subject looked up by name; "
-                         "empty (not an error) if the name was never interned.",
-                         object_schema({{"subject_name", string_property("Subject entity name.")}}, {"subject_name"})},
-                        [](KnowledgeKernel &kernel, const nlohmann::json &args) -> KernelResult {
-                            return kernel.execute(CurrentByNameCommand{require_string(args, "subject_name")});
-                        }});
+        defs.push_back(
+            {{"current_by_name",
+              "Returns every currently active, open-ended assertion for a subject looked up by name; "
+              "empty (not an error) if the name was never interned.",
+              object_schema({{"subject_name", string_property("Subject entity name.")}}, {"subject_name"})},
+             [](KnowledgeKernel &kernel, const nlohmann::json &args, const ToolContext &context) -> KernelResult {
+                 return kernel.execute(CurrentByNameCommand{require_string(args, "subject_name")});
+             }});
 
-        defs.push_back({{"current_by_object", "Reverse-direction lookup: who currently has the given entity as object.",
-                         object_schema({{"object", integer_property("Object EntityId.")}}, {"object"})},
-                        [](KnowledgeKernel &kernel, const nlohmann::json &args) -> KernelResult {
-                            return kernel.execute(CurrentByObjectCommand{require_id(args, "object")});
-                        }});
+        defs.push_back(
+            {{"current_by_object", "Reverse-direction lookup: who currently has the given entity as object.",
+              object_schema({{"object", integer_property("Object EntityId.")}}, {"object"})},
+             [](KnowledgeKernel &kernel, const nlohmann::json &args, const ToolContext &context) -> KernelResult {
+                 return kernel.execute(CurrentByObjectCommand{require_id(args, "object")});
+             }});
 
-        defs.push_back({{"current_by_predicate",
-                         "Kernel-wide lookup: every currently active assertion for a predicate, any "
-                         "subject.",
-                         object_schema({{"predicate", integer_property("Predicate PredicateId.")}}, {"predicate"})},
-                        [](KnowledgeKernel &kernel, const nlohmann::json &args) -> KernelResult {
-                            return kernel.execute(CurrentByPredicateCommand{require_id(args, "predicate")});
-                        }});
+        defs.push_back(
+            {{"current_by_predicate",
+              "Kernel-wide lookup: every currently active assertion for a predicate, any "
+              "subject.",
+              object_schema({{"predicate", integer_property("Predicate PredicateId.")}}, {"predicate"})},
+             [](KnowledgeKernel &kernel, const nlohmann::json &args, const ToolContext &context) -> KernelResult {
+                 return kernel.execute(CurrentByPredicateCommand{require_id(args, "predicate")});
+             }});
 
-        defs.push_back({{"valid_at", "Returns assertions valid at a given point in valid time.",
-                         object_schema({{"subject", integer_property("Subject EntityId.")},
-                                        {"valid_time", integer_property("Valid-time cutoff.")}},
-                                       {"subject", "valid_time"})},
-                        [](KnowledgeKernel &kernel, const nlohmann::json &args) -> KernelResult {
-                            return kernel.execute(
-                                ValidAtCommand{require_id(args, "subject"), require_timestamp(args, "valid_time")});
-                        }});
+        defs.push_back(
+            {{"valid_at", "Returns assertions valid at a given point in valid time.",
+              object_schema({{"subject", integer_property("Subject EntityId.")},
+                             {"valid_time", integer_property("Valid-time cutoff.")}},
+                            {"subject", "valid_time"})},
+             [](KnowledgeKernel &kernel, const nlohmann::json &args, const ToolContext &context) -> KernelResult {
+                 return kernel.execute(
+                     ValidAtCommand{require_id(args, "subject"), require_timestamp(args, "valid_time")});
+             }});
 
-        defs.push_back({{"known_at",
-                         "Returns assertions observed by a given point in observed time and still currently "
-                         "Active.",
-                         object_schema({{"subject", integer_property("Subject EntityId.")},
-                                        {"observed_time", integer_property("Observed-time cutoff.")}},
-                                       {"subject", "observed_time"})},
-                        [](KnowledgeKernel &kernel, const nlohmann::json &args) -> KernelResult {
-                            return kernel.execute(
-                                KnownAtCommand{require_id(args, "subject"), require_timestamp(args, "observed_time")});
-                        }});
+        defs.push_back(
+            {{"known_at",
+              "Returns assertions observed by a given point in observed time and still currently "
+              "Active.",
+              object_schema({{"subject", integer_property("Subject EntityId.")},
+                             {"observed_time", integer_property("Observed-time cutoff.")}},
+                            {"subject", "observed_time"})},
+             [](KnowledgeKernel &kernel, const nlohmann::json &args, const ToolContext &context) -> KernelResult {
+                 return kernel.execute(
+                     KnownAtCommand{require_id(args, "subject"), require_timestamp(args, "observed_time")});
+             }});
 
-        defs.push_back({{"valid_at_known_at", "Combines valid_at and known_at cutoffs.",
-                         object_schema({{"subject", integer_property("Subject EntityId.")},
-                                        {"valid_time", integer_property("Valid-time cutoff.")},
-                                        {"observed_time", integer_property("Observed-time cutoff.")}},
-                                       {"subject", "valid_time", "observed_time"})},
-                        [](KnowledgeKernel &kernel, const nlohmann::json &args) -> KernelResult {
-                            return kernel.execute(ValidAtKnownAtCommand{require_id(args, "subject"),
-                                                                        require_timestamp(args, "valid_time"),
-                                                                        require_timestamp(args, "observed_time")});
-                        }});
+        defs.push_back(
+            {{"valid_at_known_at", "Combines valid_at and known_at cutoffs.",
+              object_schema({{"subject", integer_property("Subject EntityId.")},
+                             {"valid_time", integer_property("Valid-time cutoff.")},
+                             {"observed_time", integer_property("Observed-time cutoff.")}},
+                            {"subject", "valid_time", "observed_time"})},
+             [](KnowledgeKernel &kernel, const nlohmann::json &args, const ToolContext &context) -> KernelResult {
+                 return kernel.execute(ValidAtKnownAtCommand{require_id(args, "subject"),
+                                                             require_timestamp(args, "valid_time"),
+                                                             require_timestamp(args, "observed_time")});
+             }});
 
         defs.push_back(
             {{"valid_time_timeline", "Returns active assertions for a subject/predicate sorted by valid_from.",
               object_schema({{"subject", integer_property("Subject EntityId.")},
                              {"predicate", integer_property("Predicate PredicateId.")}},
                             {"subject", "predicate"})},
-             [](KnowledgeKernel &kernel, const nlohmann::json &args) -> KernelResult {
+             [](KnowledgeKernel &kernel, const nlohmann::json &args, const ToolContext &context) -> KernelResult {
                  return kernel.execute(
                      ValidTimeTimelineCommand{require_id(args, "subject"), require_id(args, "predicate")});
              }});
@@ -849,7 +866,7 @@ const std::vector<ToolDefinition> &tool_definitions() {
               object_schema({{"subject", integer_property("Subject EntityId.")},
                              {"predicate", integer_property("Predicate PredicateId.")}},
                             {"subject", "predicate"})},
-             [](KnowledgeKernel &kernel, const nlohmann::json &args) -> KernelResult {
+             [](KnowledgeKernel &kernel, const nlohmann::json &args, const ToolContext &context) -> KernelResult {
                  return kernel.execute(
                      ObservedTimeTimelineCommand{require_id(args, "subject"), require_id(args, "predicate")});
              }});
@@ -862,7 +879,7 @@ const std::vector<ToolDefinition> &tool_definitions() {
                              {"predicate", integer_property("Predicate PredicateId.")},
                              {"limit", integer_property("Maximum number of results (omit or 0 for no limit).")}},
                             {"subject", "predicate"})},
-             [](KnowledgeKernel &kernel, const nlohmann::json &args) -> KernelResult {
+             [](KnowledgeKernel &kernel, const nlohmann::json &args, const ToolContext &context) -> KernelResult {
                  return kernel.execute(CommitHistoryCommand{require_id(args, "subject"), require_id(args, "predicate"),
                                                             optional_size(args, "limit", 0)});
              }});
@@ -878,76 +895,86 @@ const std::vector<ToolDefinition> &tool_definitions() {
                                                      "(default false); combine with limit to fetch just the latest "
                                                      "change(s) without reading the whole log.")}},
                   {"observed_since"})},
-             [](KnowledgeKernel &kernel, const nlohmann::json &args) -> KernelResult {
+             [](KnowledgeKernel &kernel, const nlohmann::json &args, const ToolContext &context) -> KernelResult {
                  return kernel.execute(ChangesSinceCommand{require_timestamp(args, "observed_since"),
                                                            optional_size(args, "limit", 0),
                                                            optional_bool(args, "newest_first", false)});
              }});
 
-        defs.push_back({{"explain", "Walks the supersession/retraction chain from an assertion back to its root.",
-                         object_schema({{"id", integer_property("AssertionId to explain.")}}, {"id"})},
-                        [](KnowledgeKernel &kernel, const nlohmann::json &args) -> KernelResult {
-                            return kernel.execute(ExplainCommand{require_id(args, "id")});
-                        }});
+        defs.push_back(
+            {{"explain", "Walks the supersession/retraction chain from an assertion back to its root.",
+              object_schema({{"id", integer_property("AssertionId to explain.")}}, {"id"})},
+             [](KnowledgeKernel &kernel, const nlohmann::json &args, const ToolContext &context) -> KernelResult {
+                 return kernel.execute(ExplainCommand{require_id(args, "id")});
+             }});
 
-        defs.push_back({{"find_conflicts",
-                         "Finds overlapping active assertions for a subject/predicate with different "
-                         "objects.",
-                         object_schema({{"subject", integer_property("Subject EntityId.")},
-                                        {"predicate", integer_property("Predicate PredicateId.")}},
-                                       {"subject", "predicate"})},
-                        [](KnowledgeKernel &kernel, const nlohmann::json &args) -> KernelResult {
-                            return kernel.execute(
-                                FindConflictsCommand{require_id(args, "subject"), require_id(args, "predicate")});
-                        }});
+        defs.push_back(
+            {{"find_conflicts",
+              "Finds overlapping active assertions for a subject/predicate with different "
+              "objects.",
+              object_schema({{"subject", integer_property("Subject EntityId.")},
+                             {"predicate", integer_property("Predicate PredicateId.")}},
+                            {"subject", "predicate"})},
+             [](KnowledgeKernel &kernel, const nlohmann::json &args, const ToolContext &context) -> KernelResult {
+                 return kernel.execute(
+                     FindConflictsCommand{require_id(args, "subject"), require_id(args, "predicate")});
+             }});
 
-        defs.push_back({{"find_entity", "Looks up a previously interned entity's id by name.",
-                         object_schema({{"name", string_property("Entity name.")}}, {"name"})},
-                        [](KnowledgeKernel &kernel, const nlohmann::json &args) -> KernelResult {
-                            return kernel.execute(FindEntityCommand{require_string(args, "name")});
-                        }});
+        defs.push_back(
+            {{"find_entity", "Looks up a previously interned entity's id by name.",
+              object_schema({{"name", string_property("Entity name.")}}, {"name"})},
+             [](KnowledgeKernel &kernel, const nlohmann::json &args, const ToolContext &context) -> KernelResult {
+                 return kernel.execute(FindEntityCommand{require_string(args, "name")});
+             }});
 
-        defs.push_back({{"find_value", "Looks up a previously interned literal value's id.",
-                         object_schema({{"value", value_property("The literal to look up.")}}, {"value"})},
-                        [](KnowledgeKernel &kernel, const nlohmann::json &args) -> KernelResult {
-                            return kernel.execute(FindValueCommand{require_value(args, "value")});
-                        }});
+        defs.push_back(
+            {{"find_value", "Looks up a previously interned literal value's id.",
+              object_schema({{"value", value_property("The literal to look up.")}}, {"value"})},
+             [](KnowledgeKernel &kernel, const nlohmann::json &args, const ToolContext &context) -> KernelResult {
+                 return kernel.execute(FindValueCommand{require_value(args, "value")});
+             }});
 
-        defs.push_back({{"find_predicate", "Looks up a previously interned predicate's id by name.",
-                         object_schema({{"name", string_property("Predicate name.")}}, {"name"})},
-                        [](KnowledgeKernel &kernel, const nlohmann::json &args) -> KernelResult {
-                            return kernel.execute(FindPredicateCommand{require_string(args, "name")});
-                        }});
+        defs.push_back(
+            {{"find_predicate", "Looks up a previously interned predicate's id by name.",
+              object_schema({{"name", string_property("Predicate name.")}}, {"name"})},
+             [](KnowledgeKernel &kernel, const nlohmann::json &args, const ToolContext &context) -> KernelResult {
+                 return kernel.execute(FindPredicateCommand{require_string(args, "name")});
+             }});
 
-        defs.push_back({{"entity_name", "Resolves a previously interned entity's name.",
-                         object_schema({{"id", integer_property("EntityId.")}}, {"id"})},
-                        [](KnowledgeKernel &kernel, const nlohmann::json &args) -> KernelResult {
-                            return kernel.execute(EntityNameCommand{require_id(args, "id")});
-                        }});
+        defs.push_back(
+            {{"entity_name", "Resolves a previously interned entity's name.",
+              object_schema({{"id", integer_property("EntityId.")}}, {"id"})},
+             [](KnowledgeKernel &kernel, const nlohmann::json &args, const ToolContext &context) -> KernelResult {
+                 return kernel.execute(EntityNameCommand{require_id(args, "id")});
+             }});
 
-        defs.push_back({{"entity_value", "Resolves a previously interned entity's literal value.",
-                         object_schema({{"id", integer_property("EntityId.")}}, {"id"})},
-                        [](KnowledgeKernel &kernel, const nlohmann::json &args) -> KernelResult {
-                            return kernel.execute(EntityValueCommand{require_id(args, "id")});
-                        }});
+        defs.push_back(
+            {{"entity_value", "Resolves a previously interned entity's literal value.",
+              object_schema({{"id", integer_property("EntityId.")}}, {"id"})},
+             [](KnowledgeKernel &kernel, const nlohmann::json &args, const ToolContext &context) -> KernelResult {
+                 return kernel.execute(EntityValueCommand{require_id(args, "id")});
+             }});
 
-        defs.push_back({{"predicate_name", "Resolves a previously interned predicate's name.",
-                         object_schema({{"id", integer_property("PredicateId.")}}, {"id"})},
-                        [](KnowledgeKernel &kernel, const nlohmann::json &args) -> KernelResult {
-                            return kernel.execute(PredicateNameCommand{require_id(args, "id")});
-                        }});
+        defs.push_back(
+            {{"predicate_name", "Resolves a previously interned predicate's name.",
+              object_schema({{"id", integer_property("PredicateId.")}}, {"id"})},
+             [](KnowledgeKernel &kernel, const nlohmann::json &args, const ToolContext &context) -> KernelResult {
+                 return kernel.execute(PredicateNameCommand{require_id(args, "id")});
+             }});
 
-        defs.push_back({{"document_content", "Fetches previously interned document bytes.",
-                         object_schema({{"id", integer_property("Document EntityId.")}}, {"id"})},
-                        [](KnowledgeKernel &kernel, const nlohmann::json &args) -> KernelResult {
-                            return kernel.execute(DocumentContentCommand{require_id(args, "id")});
-                        }});
+        defs.push_back(
+            {{"document_content", "Fetches previously interned document bytes.",
+              object_schema({{"id", integer_property("Document EntityId.")}}, {"id"})},
+             [](KnowledgeKernel &kernel, const nlohmann::json &args, const ToolContext &context) -> KernelResult {
+                 return kernel.execute(DocumentContentCommand{require_id(args, "id")});
+             }});
 
-        defs.push_back({{"provenance_for", "Resolves recorded provenance for an assertion.",
-                         object_schema({{"assertion_id", integer_property("AssertionId.")}}, {"assertion_id"})},
-                        [](KnowledgeKernel &kernel, const nlohmann::json &args) -> KernelResult {
-                            return kernel.execute(ProvenanceForCommand{require_id(args, "assertion_id")});
-                        }});
+        defs.push_back(
+            {{"provenance_for", "Resolves recorded provenance for an assertion.",
+              object_schema({{"assertion_id", integer_property("AssertionId.")}}, {"assertion_id"})},
+             [](KnowledgeKernel &kernel, const nlohmann::json &args, const ToolContext &context) -> KernelResult {
+                 return kernel.execute(ProvenanceForCommand{require_id(args, "assertion_id")});
+             }});
 
         // Batch reads (#55): one tool per single-id resolver above, same answer per slot. The shared
         // wording keeps the four descriptions from drifting apart on the contract a caller zips against.
@@ -963,7 +990,7 @@ const std::vector<ToolDefinition> &tool_definitions() {
               object_schema({{"ids", array_property("EntityIds to resolve, in order.", KnowledgeKernel::MAX_BATCH_SIZE,
                                                     integer_property("EntityId."))}},
                             {"ids"})},
-             [](KnowledgeKernel &kernel, const nlohmann::json &args) -> KernelResult {
+             [](KnowledgeKernel &kernel, const nlohmann::json &args, const ToolContext &context) -> KernelResult {
                  return kernel.execute(EntityNameBatchCommand{require_ids(args, "ids")});
              }});
 
@@ -973,29 +1000,31 @@ const std::vector<ToolDefinition> &tool_definitions() {
               object_schema({{"ids", array_property("EntityIds to resolve, in order.", KnowledgeKernel::MAX_BATCH_SIZE,
                                                     integer_property("EntityId."))}},
                             {"ids"})},
-             [](KnowledgeKernel &kernel, const nlohmann::json &args) -> KernelResult {
+             [](KnowledgeKernel &kernel, const nlohmann::json &args, const ToolContext &context) -> KernelResult {
                  return kernel.execute(EntityValueBatchCommand{require_ids(args, "ids")});
              }});
 
-        defs.push_back({{"predicate_name_batch",
-                         "Resolves many previously interned predicates' names in one call." + batch_read_contract,
-                         object_schema({{"ids", array_property("PredicateIds to resolve, in order.",
-                                                               KnowledgeKernel::MAX_BATCH_SIZE,
-                                                               integer_property("PredicateId."))}},
-                                       {"ids"})},
-                        [](KnowledgeKernel &kernel, const nlohmann::json &args) -> KernelResult {
-                            return kernel.execute(PredicateNameBatchCommand{require_ids(args, "ids")});
-                        }});
+        defs.push_back(
+            {{"predicate_name_batch",
+              "Resolves many previously interned predicates' names in one call." + batch_read_contract,
+              object_schema(
+                  {{"ids", array_property("PredicateIds to resolve, in order.", KnowledgeKernel::MAX_BATCH_SIZE,
+                                          integer_property("PredicateId."))}},
+                  {"ids"})},
+             [](KnowledgeKernel &kernel, const nlohmann::json &args, const ToolContext &context) -> KernelResult {
+                 return kernel.execute(PredicateNameBatchCommand{require_ids(args, "ids")});
+             }});
 
-        defs.push_back({{"provenance_for_batch",
-                         "Resolves recorded provenance for many assertions in one call." + batch_read_contract,
-                         object_schema({{"assertion_ids", array_property("AssertionIds to resolve, in order.",
-                                                                         KnowledgeKernel::MAX_BATCH_SIZE,
-                                                                         integer_property("AssertionId."))}},
-                                       {"assertion_ids"})},
-                        [](KnowledgeKernel &kernel, const nlohmann::json &args) -> KernelResult {
-                            return kernel.execute(ProvenanceForBatchCommand{require_ids(args, "assertion_ids")});
-                        }});
+        defs.push_back(
+            {{"provenance_for_batch",
+              "Resolves recorded provenance for many assertions in one call." + batch_read_contract,
+              object_schema({{"assertion_ids",
+                              array_property("AssertionIds to resolve, in order.", KnowledgeKernel::MAX_BATCH_SIZE,
+                                             integer_property("AssertionId."))}},
+                            {"assertion_ids"})},
+             [](KnowledgeKernel &kernel, const nlohmann::json &args, const ToolContext &context) -> KernelResult {
+                 return kernel.execute(ProvenanceForBatchCommand{require_ids(args, "assertion_ids")});
+             }});
 
         defs.push_back(
             {{"query",
@@ -1047,8 +1076,53 @@ const std::vector<ToolDefinition> &tool_definitions() {
                    {"offset", integer_property("Rows to skip after ordering.")},
                    {"ir_version", integer_property("Query IR version; omitted means the current one.")}},
                   {})},
-             [](KnowledgeKernel &kernel, const nlohmann::json &args) -> KernelResult {
+             [](KnowledgeKernel &kernel, const nlohmann::json &args, const ToolContext &context) -> KernelResult {
                  return kernel.execute(QueryCommand{require_query(args)});
+             }});
+
+        defs.push_back(
+            {{"query_spill",
+              "Writes a query's rows to disk as columns and returns a descriptor instead of the rows: the "
+              "way to take a result too large to travel as JSON-RPC text. Takes the same arguments as "
+              "query, plus an optional token naming the result. limit 0 means everything up to " +
+                  std::to_string(MAX_SPILL_ROWS) +
+                  " rows rather than the JSON ceiling. The response gives the directory, the row count, "
+                  "and one fixed-width native-endian file per column, plus a dictionary mapping the ids "
+                  "present to their catalog names and values -- a reader is about twenty lines (see "
+                  "tools/read_spill.py). Requires the server to have been started with --spill-dir; the "
+                  "directory is the server's, and deleting finished results is the operator's business.",
+              object_schema(
+                  {{"subject", integer_property("Subject EntityId; omitted means any.")},
+                   {"predicate", integer_property("Predicate PredicateId; omitted means any.")},
+                   {"object", integer_property("Object EntityId; omitted means any.")},
+                   {"valid_at", integer_property("Valid-time point, as in query.")},
+                   {"observed_from", integer_property("Lower inclusive bound on observed_at.")},
+                   {"observed_to", integer_property("Upper inclusive bound on observed_at.")},
+                   {"open_ended_only", boolean_property("Only assertions whose valid_to is 0.")},
+                   {"statuses", array_property("Statuses to include; omitted means every status.", 5,
+                                               enum_property("Assertion status.", {"Active", "Superseded", "Retracted",
+                                                                                   "Retraction", "Hypothesis"}))},
+                   {"filter", object_property("Filter tree, exactly as in query.")},
+                   {"order", enum_property("Ordering key; ties always break on AssertionId.",
+                                           {"assertion_id", "valid_from", "observed_at"})},
+                   {"newest_first", boolean_property("Reverse the ordering.")},
+                   {"limit", integer_property("Maximum rows; 0 or omitted means the spill ceiling.")},
+                   {"offset", integer_property("Rows to skip after ordering.")},
+                   {"token", string_property("Name for the result directory; generated if omitted. "
+                                             "Refused if it already exists.")},
+                   {"ir_version", integer_property("Query IR version; omitted means the current one.")}},
+                  {})},
+             [](KnowledgeKernel &kernel, const nlohmann::json &args, const ToolContext &context) -> KernelResult {
+                 if (context.spill_directory.empty()) {
+                     throw std::runtime_error("spilling is not configured; start mcp_server with --spill-dir DIR");
+                 }
+
+                 std::string token;
+                 if (args.contains("token") && !args.at("token").is_null()) {
+                     token = args.at("token").get<std::string>();
+                 }
+
+                 return kernel.execute(SpillQueryCommand{require_query(args), context.spill_directory, token});
              }});
 
         defs.push_back(
@@ -1075,7 +1149,7 @@ const std::vector<ToolDefinition> &tool_definitions() {
                    {"offset", integer_property("Rows to skip after ordering.")},
                    {"ir_version", integer_property("Query IR version; omitted means the current one.")}},
                   {})},
-             [](KnowledgeKernel &kernel, const nlohmann::json &args) -> KernelResult {
+             [](KnowledgeKernel &kernel, const nlohmann::json &args, const ToolContext &context) -> KernelResult {
                  return kernel.execute(ExplainQueryCommand{require_query(args)});
              }});
 
@@ -1118,7 +1192,7 @@ const std::vector<ToolDefinition> &tool_definitions() {
                                                    "value is capped to it.")},
                    {"ir_version", integer_property("Query IR version; omitted means the current one.")}},
                   {"aggregations"})},
-             [](KnowledgeKernel &kernel, const nlohmann::json &args) -> KernelResult {
+             [](KnowledgeKernel &kernel, const nlohmann::json &args, const ToolContext &context) -> KernelResult {
                  AggregateQuery aggregate;
                  aggregate.selection = require_query(args);
                  aggregate.aggregations = require_aggregations(args, "aggregations");
@@ -1128,32 +1202,35 @@ const std::vector<ToolDefinition> &tool_definitions() {
                  return kernel.execute(AggregateCommand{std::move(aggregate)});
              }});
 
-        defs.push_back({{"hypotheses_for", "Returns open (Hypothesis-status) predictions for a subject.",
-                         object_schema({{"subject", integer_property("Subject EntityId.")}}, {"subject"})},
-                        [](KnowledgeKernel &kernel, const nlohmann::json &args) -> KernelResult {
-                            return kernel.execute(HypothesesForCommand{require_id(args, "subject")});
-                        }});
+        defs.push_back(
+            {{"hypotheses_for", "Returns open (Hypothesis-status) predictions for a subject.",
+              object_schema({{"subject", integer_property("Subject EntityId.")}}, {"subject"})},
+             [](KnowledgeKernel &kernel, const nlohmann::json &args, const ToolContext &context) -> KernelResult {
+                 return kernel.execute(HypothesesForCommand{require_id(args, "subject")});
+             }});
 
-        defs.push_back({{"neighbors", "Bounded breadth-first traversal of current-edge neighbors, both directions.",
-                         object_schema({{"subject", integer_property("Subject EntityId.")},
-                                        {"max_hops", integer_property("Maximum hop count.")}},
-                                       {"subject", "max_hops"})},
-                        [](KnowledgeKernel &kernel, const nlohmann::json &args) -> KernelResult {
-                            return kernel.execute(
-                                NeighborsCommand{require_id(args, "subject"), require_size(args, "max_hops")});
-                        }});
+        defs.push_back(
+            {{"neighbors", "Bounded breadth-first traversal of current-edge neighbors, both directions.",
+              object_schema({{"subject", integer_property("Subject EntityId.")},
+                             {"max_hops", integer_property("Maximum hop count.")}},
+                            {"subject", "max_hops"})},
+             [](KnowledgeKernel &kernel, const nlohmann::json &args, const ToolContext &context) -> KernelResult {
+                 return kernel.execute(NeighborsCommand{require_id(args, "subject"), require_size(args, "max_hops")});
+             }});
 
-        defs.push_back({{"co_occurring_predicates", "Currently active predicates for a subject.",
-                         object_schema({{"subject", integer_property("Subject EntityId.")}}, {"subject"})},
-                        [](KnowledgeKernel &kernel, const nlohmann::json &args) -> KernelResult {
-                            return kernel.execute(CoOccurringPredicatesCommand{require_id(args, "subject")});
-                        }});
+        defs.push_back(
+            {{"co_occurring_predicates", "Currently active predicates for a subject.",
+              object_schema({{"subject", integer_property("Subject EntityId.")}}, {"subject"})},
+             [](KnowledgeKernel &kernel, const nlohmann::json &args, const ToolContext &context) -> KernelResult {
+                 return kernel.execute(CoOccurringPredicatesCommand{require_id(args, "subject")});
+             }});
 
-        defs.push_back({{"resolve_entity", "Resolves an id through recorded merge redirects to its canonical id.",
-                         object_schema({{"id", integer_property("EntityId.")}}, {"id"})},
-                        [](KnowledgeKernel &kernel, const nlohmann::json &args) -> KernelResult {
-                            return kernel.execute(ResolveEntityCommand{require_id(args, "id")});
-                        }});
+        defs.push_back(
+            {{"resolve_entity", "Resolves an id through recorded merge redirects to its canonical id.",
+              object_schema({{"id", integer_property("EntityId.")}}, {"id"})},
+             [](KnowledgeKernel &kernel, const nlohmann::json &args, const ToolContext &context) -> KernelResult {
+                 return kernel.execute(ResolveEntityCommand{require_id(args, "id")});
+             }});
 
         return defs;
     }();
@@ -1175,12 +1252,12 @@ const std::vector<ToolSpec> &tool_specs() {
     return specs;
 }
 
-ToolCallResult handle_tool_call(KnowledgeKernel &kernel, const std::string &tool_name,
-                                const nlohmann::json &arguments) {
+ToolCallResult handle_tool_call(KnowledgeKernel &kernel, const std::string &tool_name, const nlohmann::json &arguments,
+                                const ToolContext &context) {
     try {
         for (const auto &definition : tool_definitions()) {
             if (definition.spec.name == tool_name) {
-                KernelResult result = definition.invoke(kernel, arguments);
+                KernelResult result = definition.invoke(kernel, arguments, context);
                 return ToolCallResult{kernel_result_to_json(result).dump(), false};
             }
         }

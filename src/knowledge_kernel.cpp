@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <iostream>
+#include <limits>
 #include <optional>
 #include <stdexcept>
 #include <unordered_map>
@@ -1036,6 +1037,31 @@ QuerySource KnowledgeKernel::query_source() const {
 }
 
 QueryResult KnowledgeKernel::query(const Query &query) const { return query_engine_.execute(query, query_source()); }
+
+SpillDescriptor KnowledgeKernel::spill_query(const Query &query, const std::filesystem::path &directory,
+                                             const std::string &token) const {
+    // The whole selection, in order: a spill exists to hand over a result too large to page, so the JSON
+    // ceiling does not apply here -- MAX_SPILL_ROWS does.
+    auto selection = query_engine_.select_rows(query, query_source(), std::numeric_limits<size_t>::max());
+
+    size_t limit = query.limit == 0 ? MAX_SPILL_ROWS : std::min(query.limit, MAX_SPILL_ROWS);
+    size_t begin = std::min(query.offset, selection.size());
+    size_t end = query.offset > std::numeric_limits<size_t>::max() - limit
+                     ? selection.size()
+                     : std::min(selection.size(), query.offset + limit);
+
+    std::span<const uint32_t> page(selection.data() + begin, end > begin ? end - begin : 0);
+
+    std::string chosen = token;
+    if (chosen.empty()) {
+        // Skips what is already there, so a restarted process does not collide with a previous result.
+        do {
+            chosen = "result-" + std::to_string(next_spill_++);
+        } while (std::filesystem::exists(directory / chosen));
+    }
+
+    return write_spill(directory, chosen, page, assertions_, catalog_);
+}
 
 QueryPlan KnowledgeKernel::explain_query(const Query &query) const {
     return query_engine_.explain(query, query_source());

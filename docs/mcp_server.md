@@ -30,6 +30,21 @@ stray stdout write would corrupt the stream for whatever process has this as a s
 you generally don't run it interactively by hand; the examples below pipe requests in via a shell
 one-liner, which works for testing but isn't how a real MCP client talks to it.
 
+### Spilling large results
+
+```bash
+./build/mcp_server <storage-root> --spill-dir /path/to/results
+```
+
+`query_spill` writes its columns under that directory and returns a descriptor naming them. The directory
+comes from the command line rather than from a tool argument deliberately: a client naming the path would
+be naming somewhere for this process to write. Without the flag, `query_spill` reports that spilling is not
+configured.
+
+The files are plain fixed-width columns with no headers — `tools/read_spill.py` is a twenty-line reference
+reader, and `docs/storage_format.md` documents the layout and why it is not Arrow IPC. Deleting finished
+results is the operator's business; nothing sweeps them.
+
 ### Read-only mode
 
 ```bash
@@ -62,7 +77,7 @@ same root fails fast with a single-writer violation.
 
 ## Tools
 
-One tool per `KnowledgeKernel` method, 50 total — the exact set `KernelCommand` reifies (see
+One tool per `KnowledgeKernel` method, 51 total — the exact set `KernelCommand` reifies (see
 `include/kernel/kernel_command.hpp`). Argument and return types follow the method signatures directly:
 `EntityId`/`PredicateId`/`AssertionId` are JSON integers, `Timestamp` is a JSON integer (Unix seconds),
 `confidence` is a JSON number, raw bytes (`intern_document`'s `content`, `document_content`'s return
@@ -129,6 +144,7 @@ against a running server for the full JSON Schema of each.
 | `query` | Runs a shaped read against the query IR: subject/predicate/object, a valid-time point, an observed-time window, open-endedness, an explicit status set, a `filter` tree (ordered comparisons, comparisons against the object's value, and and/or/not up to 8 deep), ordering and paging — any combination, all arguments optional. `resolve_names` adds a parallel `names` array so rendering needs no second round trip. Returns `{assertions, truncated}` plus `names` when asked. Capped at 10,000 rows; an unknown `ir_version` or a malformed filter is rejected. |
 | `aggregate` | Aggregates matching assertions instead of returning them: `count`, `count_distinct`, `sum`, `min`, `max`, `avg`, optionally grouped by subject, predicate, object, status, or a fixed-width time bucket. Selection uses the same arguments as `query`. Returns `{groups: [{key, row_count, values}]}`; rows with no number are skipped rather than counted as zero, and exceeding the 10,000-group cap is an error rather than a truncated answer. |
 | `explain_query` | Returns the plan `query` would follow for the same arguments, without running it: the chosen source (an index, the columnar scan, or the row scan), how many rows it yields, the modelled cost, and every alternative weighed with the reason it was rejected. Index row counts are exact, not sampled; costs are comparable only within one plan. |
+| `query_spill` | Writes a query's rows to disk as columns and returns a descriptor instead of the rows — the way to take a result too large for JSON-RPC. Same arguments as `query` plus an optional `token`; `limit` 0 means everything up to 10,000,000 rows. Requires `--spill-dir`. |
 
 ## Example session
 

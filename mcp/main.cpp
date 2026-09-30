@@ -17,6 +17,7 @@
 #include "kernel/knowledge_kernel.hpp"
 #include "kernel/mcp_tools.hpp"
 #include "kernel/storage_config.hpp"
+#include <system_error>
 
 #include <nlohmann/json.hpp>
 
@@ -63,11 +64,12 @@ nlohmann::ordered_json handle_tools_list() {
     return nlohmann::ordered_json{{"tools", tools}};
 }
 
-nlohmann::ordered_json handle_tools_call(KnowledgeKernel &kernel, const nlohmann::json &params) {
+nlohmann::ordered_json handle_tools_call(KnowledgeKernel &kernel, const nlohmann::json &params,
+                                         const mcp::ToolContext &context) {
     std::string name = params.at("name").get<std::string>();
     nlohmann::json arguments = params.value("arguments", nlohmann::json::object());
 
-    mcp::ToolCallResult call_result = mcp::handle_tool_call(kernel, name, arguments);
+    mcp::ToolCallResult call_result = mcp::handle_tool_call(kernel, name, arguments, context);
 
     return nlohmann::ordered_json{
         {"content", nlohmann::ordered_json::array({{{"type", "text"}, {"text", call_result.content_text}}})},
@@ -76,7 +78,8 @@ nlohmann::ordered_json handle_tools_call(KnowledgeKernel &kernel, const nlohmann
 
 // Dispatches one JSON-RPC request/notification. Returns std::nullopt for notifications (no "id"
 // field), since JSON-RPC notifications never get a response, by spec.
-std::optional<nlohmann::ordered_json> handle_request(KnowledgeKernel &kernel, const nlohmann::json &request) {
+std::optional<nlohmann::ordered_json> handle_request(KnowledgeKernel &kernel, const nlohmann::json &request,
+                                                     const mcp::ToolContext &context) {
     bool is_notification = !request.contains("id");
     nlohmann::json id = is_notification ? nlohmann::json(nullptr) : request.at("id");
 
@@ -100,7 +103,7 @@ std::optional<nlohmann::ordered_json> handle_request(KnowledgeKernel &kernel, co
             return rpc_result(id, handle_tools_list());
         }
         if (method == "tools/call") {
-            return rpc_result(id, handle_tools_call(kernel, request.at("params")));
+            return rpc_result(id, handle_tools_call(kernel, request.at("params"), context));
         }
 
         return is_notification
@@ -121,12 +124,21 @@ int main(int argc, char **argv) {
     // replays once at open, so commits made afterwards need a restart to be seen.
     std::filesystem::path root;
     OpenMode mode = OpenMode::ReadWrite;
+    mcp::ToolContext context;
     bool usage_error = false;
 
     for (int i = 1; i < argc; ++i) {
         std::string argument(argv[i]);
         if (argument == "--read-only") {
             mode = OpenMode::ReadOnly;
+        } else if (argument == "--spill-dir") {
+            // Taken from the command line rather than from a tool argument on purpose: a client naming the
+            // path would be naming somewhere for this process to write.
+            if (i + 1 >= argc) {
+                usage_error = true;
+            } else {
+                context.spill_directory = std::filesystem::path(argv[++i]);
+            }
         } else if (!argument.empty() && argument[0] == '-') {
             usage_error = true;
         } else if (root.empty()) {
@@ -137,7 +149,8 @@ int main(int argc, char **argv) {
     }
 
     if (usage_error || root.empty()) {
-        std::cerr << "usage: " << (argc > 0 ? argv[0] : "mcp_server") << " <storage-root> [--read-only]\n";
+        std::cerr << "usage: " << (argc > 0 ? argv[0] : "mcp_server")
+                  << " <storage-root> [--read-only] [--spill-dir DIR]\n";
         return 1;
     }
 
@@ -147,6 +160,19 @@ int main(int argc, char **argv) {
     } catch (const std::exception &error) {
         std::cerr << "mcp_server: failed to open storage root: " << error.what() << "\n";
         return 1;
+    }
+
+    if (!context.spill_directory.empty()) {
+        // Created up front so query_spill does not fail on its first call, and so a misconfigured path
+        // fails at startup where an operator will see it.
+        std::error_code error;
+        std::filesystem::create_directories(context.spill_directory, error);
+        if (error) {
+            std::cerr << "mcp_server: cannot create spill directory '" << context.spill_directory.string()
+                      << "': " << error.message() << "\n";
+            return 1;
+        }
+        std::cerr << "mcp_server: spilling results to '" << context.spill_directory.string() << "'\n";
     }
 
     if (mode == OpenMode::ReadOnly) {
@@ -168,7 +194,7 @@ int main(int argc, char **argv) {
             continue;
         }
 
-        auto response = handle_request(kernel, request);
+        auto response = handle_request(kernel, request, context);
         if (response.has_value()) {
             write_message(*response);
         }
