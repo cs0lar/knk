@@ -241,6 +241,22 @@ nlohmann::json kernel_result_to_json(const KernelResult &result) {
                     array.push_back(id);
                 }
                 return array;
+            } else if constexpr (std::is_same_v<T, SpillDescriptor>) {
+                nlohmann::json columns = nlohmann::json::array();
+                for (const auto &column : value.columns) {
+                    columns.push_back(nlohmann::json{{"name", column.name},
+                                                     {"file", column.file},
+                                                     {"type", column.type},
+                                                     {"bytes_per_value", column.bytes_per_value}});
+                }
+
+                // The same shape written to descriptor.json in the spill directory, so a caller can work
+                // from either the tool response or the file on disk without a second vocabulary.
+                return nlohmann::json{{"token", value.token},
+                                      {"directory", value.directory.string()},
+                                      {"rows", value.rows},
+                                      {"columns", columns},
+                                      {"dictionary", value.dictionary_file}};
             } else if constexpr (std::is_same_v<T, QueryPlan>) {
                 nlohmann::json considered = nlohmann::json::array();
                 for (const auto &option : value.considered) {

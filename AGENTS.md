@@ -1461,6 +1461,49 @@ A million-row answer must not travel as JSON-RPC text.
 * **Tests:** written files round-trip through a hand-written reader in the test suite; every `Value`
  kind maps to a documented column type; descriptor lifecycle including cleanup.
 
+Current implementation status (shipped 2026-09-30):
+
+* **The format decision went the other way, and the reason is worth recording.** This plan recommended
+ hand-written Arrow IPC. Implementing it surfaced what the recommendation had glossed over: Arrow IPC's
+ metadata is a **FlatBuffer**, not a header, so writing the spec by hand means implementing FlatBuffer
+ encoding -- vtables, offsets, alignment -- with no Arrow implementation available to verify against.
+ Neither this environment nor CI (ubuntu-latest, C++ only) can install pyarrow, so the only possible test
+ was a hand-written reader agreeing with the hand-written writer, which says nothing about whether DuckDB
+ or Polars can read the file. **An interoperability claim that cannot be tested is one a user discovers is
+ false**, so knk writes its own documented format instead: one file per column, fixed-width, native-endian,
+ no headers, everything in `descriptor.json`. `tools/read_spill.py` is a reference reader of about twenty
+ lines, and converting to Arrow is a few lines on the consumer's side where a real Arrow implementation
+ exists. Vendoring Arrow C++ stays rejected on size.
+* **Spills are never written under the storage root.** A read-only kernel is exactly the analytics case and
+ must write nothing to the root it opened, so the spill directory is the caller's. `spill_query` is
+ therefore deliberately *not* guarded by `require_writable` -- a test fingerprints every byte of a store
+ while a read-only kernel spills from it.
+* A **dictionary** accompanies each spill: the distinct ids the result mentions, mapped to catalog
+ names/values. O(distinct) rather than O(rows), and it exists because a column of ids is useless to a
+ consumer without the catalog -- the alternative was making them join back through `entity_name_batch` a
+ page at a time.
+* **The spilled status is the effective one**, unlike `columns/`, which is verbatim: a spill is a query
+ result and must say what a query says. A test pins the pair (`Superseded` in a spill, `Active` in the
+ store) so the distinction cannot quietly collapse.
+* `QueryEngine::select_rows` was factored out of `execute` so a page and a spill share one selection path
+ and differ only in what they materialize -- a page copies a handful of rows, a spill streams millions in
+ chunks, neither paying the other's cost.
+* **No `drop_spill` MCP tool**, on purpose: it would be the only tool not backed by a `KernelCommand`, and
+ the spill directory belongs to whoever configured `--spill-dir`, who can delete files in it. The free
+ function exists for library callers.
+* The MCP surface gained a `ToolContext` carrying the spill directory **from the server's command line
+ rather than from a tool argument** -- a client naming the path would be naming somewhere for the process
+ to write. `SpillQueryCommand` still carries the directory, so the command layer mirrors the method
+ faithfully; the tool is what refuses to take it from the client.
+* **Tested** in `tests/spill_tests.cpp`, which reads the files the way a consumer would (open, step by
+ fixed width, consult the descriptor) rather than through the writer's own code: column-for-column
+ agreement with the same query in memory, effective status, a dictionary covering all five `Value` kinds,
+ token generation and collision refusal, invalid tokens (including the deliberate exception that an empty
+ token means "generate one" at the kernel layer while the writer still refuses it), order/limit/offset,
+ an empty result being a valid empty spill, a read-only kernel leaving the root byte-identical, and a
+ result larger than the JSON ceiling. Verified end to end too: spilled through the real `mcp_server` and
+ rendered with `tools/read_spill.py`.
+
 #### Phase 18 — Query surface hardening
 
 * Cursors/pagination for JSON-sized results, resource budgets (rows scanned, wall-clock, group count)

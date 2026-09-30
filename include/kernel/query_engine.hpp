@@ -73,6 +73,12 @@ class QueryEngine {
     // executor makes, so the two cannot describe different things; cheap because planning reads index
     // bucket sizes rather than index contents.
     QueryPlan explain(const Query &query, const QuerySource &source) const;
+
+    // The ordered row indices a query matches, before paging -- what execute() pages from and what a
+    // spill streams. `ordered_prefix` says how many leading rows must actually be in order, so a page
+    // costs a partial sort and a spill a full one. Exposed because materializing rows is the caller's
+    // decision: a page copies a handful, a spill writes millions without either paying the other's cost.
+    std::vector<uint32_t> select_rows(const Query &query, const QuerySource &source, size_t ordered_prefix) const;
 };
 
 } // namespace knk

@@ -116,6 +116,8 @@ KernelResult KnowledgeKernel::execute(const KernelCommand &command) {
                 return aggregate(cmd.query);
             } else if constexpr (std::is_same_v<T, ExplainQueryCommand>) {
                 return explain_query(cmd.query);
+            } else if constexpr (std::is_same_v<T, SpillQueryCommand>) {
+                return spill_query(cmd.query, cmd.directory, cmd.token);
             } else if constexpr (std::is_same_v<T, EntityNameBatchCommand>) {
                 return entity_name_batch(cmd.ids);
             } else if constexpr (std::is_same_v<T, EntityValueBatchCommand>) {

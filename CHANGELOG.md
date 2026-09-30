@@ -87,6 +87,20 @@ the PR that makes it — see `CONTRIBUTING.md`.
   `MAX_BATCH_SIZE`; available as a `RecordProvenanceBatchCommand` and the `record_provenance_batch`
   MCP tool.
 
+- **Phase 17 — columnar result handoff:** `spill_query` (and the `query_spill` MCP tool) writes a query's
+  rows to disk as columns and returns a descriptor instead of the rows, which is how a result too large to
+  travel as JSON-RPC text gets handed to an analytics consumer — `limit 0` means everything up to
+  10,000,000 rows rather than the 10,000-row JSON ceiling. The files are one fixed-width native-endian
+  column each with no headers, fully described by `descriptor.json`, plus a dictionary mapping the ids
+  present to their catalog names and values so the columns are usable without a second round trip.
+  `tools/read_spill.py` is a reference reader of about twenty lines. **Not Arrow IPC**, reversing the
+  recommendation in the plan: Arrow's metadata is a FlatBuffer, and neither the build nor CI can install
+  an Arrow implementation to verify a hand-written encoder against — an untestable interoperability claim
+  is worse than a documented format plus a few lines of conversion on the consumer's side. Spills are
+  never written under the storage root, so a **read-only** kernel can produce them while writing nothing
+  to the store it opened; the directory is the caller's, comes from the server's `--spill-dir` rather than
+  from a client argument, and nothing sweeps it automatically.
+
 - **Phase 16 — cost-based planning and `explain_query`:** the engine now costs every usable source for a
   query — the subject, observed-time, object and predicate indexes, the columnar scan and the row scan —
   and takes the cheapest, replacing Phase 11's fixed heuristics. Candidate row counts are *exact* (an

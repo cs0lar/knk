@@ -20,6 +20,7 @@
 #include "kernel/query.hpp"
 #include "kernel/query_engine.hpp"
 #include "kernel/query_plan.hpp"
+#include "kernel/spill.hpp"
 #include "kernel/status.hpp"
 #include "kernel/storage_engine.hpp"
 #include "kernel/time.hpp"
@@ -330,6 +331,19 @@ class KnowledgeKernel {
     // corpus has silently changed the plan underneath them.
     QueryPlan explain_query(const Query &query) const;
 
+    // Writes a query's rows to `directory / token` as columns and returns the descriptor (Phase 17): the
+    // way out of the JSON row ceiling for a result an analytics consumer wants whole. `token` empty means
+    // one is generated.
+    //
+    // Deliberately **not** guarded by require_writable: a read-only kernel is exactly the analytics case,
+    // and the spill directory is the caller's, never under the storage root -- so a reader can produce
+    // results while still writing nothing to the root it opened.
+    //
+    // limit == 0 means MAX_SPILL_ROWS rather than the JSON ceiling; an explicit limit is honoured and
+    // capped to it. offset applies as it does for a page.
+    SpillDescriptor spill_query(const Query &query, const std::filesystem::path &directory,
+                                const std::string &token = {}) const;
+
     // Aggregates rows in a single streaming pass (Phase 12): counts, sums and extrema over groups, with
     // the same selection surface a row query uses, so "how many" and "which" can never disagree about
     // what is current. Memory is bounded by the number of groups, not the number of matching rows.
@@ -395,6 +409,10 @@ class KnowledgeKernel {
     // record was appended with, so a superseded row still reads Active there (see column_store.hpp). One
     // byte per row, rebuilt at the end of construction and maintained by apply()/mark_*.
     std::vector<uint8_t> effective_status_;
+
+    // Names generated spills. A counter rather than a clock, because the kernel never reads one; the
+    // generator also skips tokens already on disk, so a fresh process cannot collide with an old result.
+    mutable size_t next_spill_ = 1;
 
     // Stateless: the assertions, indexes and catalog a query runs against are passed to execute()
     // rather than held, which is what keeps KnowledgeKernel safe to move (see query_engine.hpp).

@@ -449,6 +449,61 @@ which is always authoritative, and leaves a missing or damaged `columns/` exactl
 Like the raw-struct serialization noted below, these files are native-endian and native-layout: portable
 only between builds that agree on those.
 
+## Spilled query results (Phase 17)
+
+A result too large to travel as JSON-RPC text is written to disk as columns and handed over as a
+descriptor. These files are **not** part of a storage root: they live in a directory the caller owns,
+which is what lets a read-only kernel — the analytics case — produce them while writing nothing to the
+store it opened.
+
+```text
+<spill-dir>/<token>/
+├── descriptor.json       format, version, row count, byte order, one entry per column
+├── dictionary.json       the ids present, mapped to catalog names/values
+├── id.col                uint64 per row
+├── subject.col           uint64
+├── predicate.col         uint64
+├── object.col            uint64
+├── valid_from.col        int64
+├── valid_to.col          int64
+├── observed_at.col       int64
+├── confidence.col        double
+├── status.col            uint8   (the *effective* status; see below)
+├── supersedes_id.col     uint64
+└── retracts_id.col       uint64
+```
+
+Column files have **no headers** — they are nothing but fixed-width native-endian values, because
+`descriptor.json` already says how many rows there are and how wide each value is. A reader is about
+twenty lines in any language; `tools/read_spill.py` is the reference one, and converting to Arrow is a
+few lines on top of it.
+
+**Why not Arrow IPC.** The plan in #57 recommended hand-writing Arrow IPC: interoperability without a
+dependency. Implementing it surfaced what that recommendation had glossed over — Arrow IPC's metadata is a
+**FlatBuffer**, not a header, so "write the spec by hand" means implementing FlatBuffer encoding (vtables,
+offsets, alignment) with no Arrow implementation available to check the result against. Neither the
+kernel's development environment nor its CI (ubuntu-latest, C++ only) can install pyarrow, so the only
+test possible would be a hand-written reader agreeing with the hand-written writer — which proves nothing
+about whether DuckDB or Polars can read the file. An interoperability claim that cannot be tested is one a
+*user* discovers is false. Vendoring Arrow C++ stays rejected on size. The trade accepted instead: a
+consumer writes a few lines of conversion, on their side, where a real Arrow implementation exists.
+
+Three details worth knowing:
+
+* **The status column holds effective status**, unlike `columns/` in the storage root, which is a verbatim
+  projection of the log and records the status each row was *appended* with. A spill is a query result, so
+  it must say what a query says: a superseded row reads `Superseded` here and `Active` there.
+* **The dictionary is O(distinct ids), not O(rows).** A column of ids is useless to a consumer without the
+  catalog, and exporting it per row would be enormous; exporting only the ids the result mentions is
+  small, and lets the consumer join locally.
+* **Lifecycle is the caller's.** Nothing sweeps spills automatically: the kernel never reads a wall clock,
+  so a TTL is not available to it, and deleting a result someone is still reading would be worse than
+  leaving a file behind. `drop_spill` removes one; an existing token is refused rather than overwritten.
+
+Row count is bounded by `MAX_SPILL_ROWS` (10,000,000) — generously, since escaping the 10,000-row JSON
+ceiling is the point, but bounded all the same because an accidentally unbounded spill filling a disk is a
+real failure mode.
+
 ## Durability
 
 Every `append()` closes its `std::ofstream` and then fsyncs the file (`knk::fsync_file`,

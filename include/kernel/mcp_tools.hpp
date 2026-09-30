@@ -7,6 +7,7 @@
 // pure, I/O-free half of the server: no stdin/stdout, no JSON-RPC framing, so it is directly unit
 // testable. mcp/main.cpp is the thin stdio loop built on top of it.
 
+#include <filesystem>
 #include <string>
 
 #include "kernel/knowledge_kernel.hpp"
@@ -32,6 +33,13 @@ const std::vector<ToolSpec> &tool_specs();
 // serialized KernelResult, or an error message). is_error mirrors MCP's convention of reporting a
 // tool-level failure as a normal JSON-RPC success with isError=true rather than a JSON-RPC-level
 // error -- see mcp/main.cpp.
+// Server-supplied context a tool may need beyond its arguments. Today that is only where spilled
+// results may be written: taking it from the server's own configuration rather than from a tool argument
+// means a client cannot name an arbitrary path for the process to write to.
+struct ToolContext {
+    std::filesystem::path spill_directory; // empty means spilling is not configured
+};
+
 struct ToolCallResult {
     std::string content_text;
     bool is_error = false;
@@ -42,6 +50,7 @@ struct ToolCallResult {
 // argument (nlohmann::json throws on both), or an exception from kernel.execute() itself (e.g.
 // commit_retraction against an unknown id) all come back as is_error=true rather than throwing --
 // mcp/main.cpp never needs its own exception guard around this call.
-ToolCallResult handle_tool_call(KnowledgeKernel &kernel, const std::string &tool_name, const nlohmann::json &arguments);
+ToolCallResult handle_tool_call(KnowledgeKernel &kernel, const std::string &tool_name, const nlohmann::json &arguments,
+                                const ToolContext &context = {});
 
 } // namespace knk::mcp

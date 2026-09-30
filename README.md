@@ -58,6 +58,9 @@ never loses the history of how its knowledge changed.
 - **Cost-based planning** — every usable source is costed on exact row counts and the cheapest is taken,
   so an index is used when it is selective and skipped when it is not; `explain_query` returns the plan,
   its alternatives, and why each was rejected, without running the query.
+- **Columnar result handoff** — `query_spill` writes a large result to disk as plain fixed-width columns
+  plus a dictionary of the ids it mentions, and returns a descriptor; a reader is about twenty lines
+  (`tools/read_spill.py`), and a read-only kernel can produce one without writing to the store.
 - **Entity/predicate catalog** — idempotent name and typed-literal interning
   (`intern_entity`/`intern_value`/`intern_predicate`), plus a payload store for large content
   (documents) addressed by id.
