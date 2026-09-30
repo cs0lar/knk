@@ -28,6 +28,7 @@ add_library(kernel
     src/mcp_tools.cpp
     src/column_store.cpp
     src/vectorized_scan.cpp
+    src/query_cursor.cpp
     src/query_engine.cpp
     src/query_plan.cpp
     src/spill.cpp
@@ -211,6 +212,10 @@ add_executable(query_plan_tests
     tests/query_plan_tests.cpp
 )
 
+add_executable(query_surface_tests
+    tests/query_surface_tests.cpp
+)
+
 add_executable(spill_tests
     tests/spill_tests.cpp
 )
@@ -320,6 +325,10 @@ target_link_libraries(column_store_tests
 )
 
 target_link_libraries(query_plan_tests
+    PRIVATE kernel
+)
+
+target_link_libraries(query_surface_tests
     PRIVATE kernel
 )
 
@@ -460,6 +469,11 @@ add_test(
 add_test(
     NAME query_plan_tests
     COMMAND query_plan_tests
+)
+
+add_test(
+    NAME query_surface_tests
+    COMMAND query_surface_tests
 )
 
 add_test(

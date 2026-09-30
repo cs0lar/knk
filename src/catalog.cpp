@@ -62,6 +62,18 @@ std::optional<std::string> Catalog::predicate_name(PredicateId id) const {
     return it->second;
 }
 
+std::vector<std::pair<PredicateId, std::string>> Catalog::predicates() const {
+    std::vector<std::pair<PredicateId, std::string>> result;
+    result.reserve(predicate_names_.size());
+    for (const auto &[id, name] : predicate_names_) {
+        result.emplace_back(id, name);
+    }
+
+    std::sort(result.begin(), result.end(),
+              [](const auto &left, const auto &right) { return left.first < right.first; });
+    return result;
+}
+
 EntityId Catalog::next_entity_id() const { return next_entity_id_; }
 
 PredicateId Catalog::next_predicate_id() const { return next_predicate_id_; }

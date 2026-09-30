@@ -77,7 +77,7 @@ same root fails fast with a single-writer violation.
 
 ## Tools
 
-One tool per `KnowledgeKernel` method, 51 total — the exact set `KernelCommand` reifies (see
+One tool per `KnowledgeKernel` method, 53 total — the exact set `KernelCommand` reifies (see
 `include/kernel/kernel_command.hpp`). Argument and return types follow the method signatures directly:
 `EntityId`/`PredicateId`/`AssertionId` are JSON integers, `Timestamp` is a JSON integer (Unix seconds),
 `confidence` is a JSON number, raw bytes (`intern_document`'s `content`, `document_content`'s return
@@ -141,10 +141,32 @@ against a running server for the full JSON Schema of each.
 | `neighbors` | Bounded breadth-first traversal of current-edge neighbors, both directions. |
 | `co_occurring_predicates` | Currently active predicates for a subject. |
 | `resolve_entity` | Resolves an id through recorded merge redirects to its canonical id. |
-| `query` | Runs a shaped read against the query IR: subject/predicate/object, a valid-time point, an observed-time window, open-endedness, an explicit status set, a `filter` tree (ordered comparisons, comparisons against the object's value, and and/or/not up to 8 deep), ordering and paging — any combination, all arguments optional. `resolve_names` adds a parallel `names` array so rendering needs no second round trip. Returns `{assertions, truncated}` plus `names` when asked. Capped at 10,000 rows; an unknown `ir_version` or a malformed filter is rejected. |
+| `query` | Runs a shaped read against the query IR: subject/predicate/object, a valid-time point, an observed-time window, open-endedness, an explicit status set, a `filter` tree (ordered comparisons, comparisons against the object's value, and and/or/not up to 8 deep), ordering and paging — any combination, all arguments optional. `resolve_names` adds a parallel `names` array so rendering needs no second round trip. Returns `{assertions, truncated}`, plus `names` when asked and `next_cursor` when a further page exists. Capped at 10,000 rows; an unknown `ir_version` or a malformed filter is rejected. |
 | `aggregate` | Aggregates matching assertions instead of returning them: `count`, `count_distinct`, `sum`, `min`, `max`, `avg`, optionally grouped by subject, predicate, object, status, or a fixed-width time bucket. Selection uses the same arguments as `query`. Returns `{groups: [{key, row_count, values}]}`; rows with no number are skipped rather than counted as zero, and exceeding the 10,000-group cap is an error rather than a truncated answer. |
 | `explain_query` | Returns the plan `query` would follow for the same arguments, without running it: the chosen source (an index, the columnar scan, or the row scan), how many rows it yields, the modelled cost, and every alternative weighed with the reason it was rejected. Index row counts are exact, not sampled; costs are comparable only within one plan. |
 | `query_spill` | Writes a query's rows to disk as columns and returns a descriptor instead of the rows — the way to take a result too large for JSON-RPC. Same arguments as `query` plus an optional `token`; `limit` 0 means everything up to 10,000,000 rows. Requires `--spill-dir`. |
+| `describe_predicates` | Lists every interned predicate with its id and current (Active, open-ended) row count. Call it before naming a predicate: a query against one that was never interned returns no rows, which looks exactly like the fact being absent. |
+| `describe_corpus` | Describes the store's shape — assertion/entity/predicate counts, distinct subjects and current objects, a count per status, and the `observed_at`/`valid_from` spans — so a caller can size a query before running it. A snapshot of the moment it was called. |
+
+### Paging and budgets
+
+`query` (and `query_spill`) take two arguments beyond the selection surface:
+
+* **`cursor`** — an opaque token from a previous response's `next_cursor`. The page resumes strictly after
+  the row it names, so no row repeats and none is skipped even if someone commits between pages, and deep
+  pages stay as cheap as shallow ones. Walk until `next_cursor` is absent. It must not be combined with
+  `offset`, and must have been produced under the same `order`/`newest_first`; either mismatch is an error
+  rather than a differently-shaped answer. See `docs/query_semantics.md` for the details.
+* **`max_rows_examined`** — give up rather than examine more than this many rows. `0` or omitted means no
+  budget. Rows rather than elapsed time, so the same query on the same data always gets the same answer.
+  `aggregate` takes it too, alongside its existing `max_groups`.
+
+Exceeding either budget comes back as a tool error naming the budget, its limit, and what was reached:
+
+```json
+{"content": [{"type": "text", "text": "error: query budget 'max_rows_examined' exceeded: limit 2, reached 5"}],
+ "isError": true}
+```
 
 ## Example session
 

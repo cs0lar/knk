@@ -369,6 +369,38 @@ instead of parsing 5,000 individual log records, though there's little tail to s
 (no commits happened between the snapshot and the reopen) — a log with a large post-snapshot tail
 would show a smaller relative gain.
 
+### Paging, budgets and discovery (Phase 18)
+
+```
+== paging and budgets (Phase 18) ==
+paging: 100 pages of 100 by offset                      19.735 ms total
+paging: the same walk by cursor                          4.038 ms total
+  => cursor/offset                                       0.205 x
+paging: deepest page by offset                         117.057 us/query
+paging: first page (cursor-sized prefix)                21.224 us/query
+budget: row scan, no budget                             43.006 us/query
+budget: row scan, budget set                            43.205 us/query
+  => overhead                                           -0.332 %
+discovery: describe_predicates                           0.006 us/call
+discovery: describe_corpus                              18.292 us/call
+```
+
+A cursor walk of the whole 10,000-row result costs **~4.9x less** than the same walk by offset (4.0 ms
+against 19.7 ms; two runs gave 0.169x and 0.205x, so treat the ratio as ~5x rather than a precise figure).
+
+The mechanism is narrower than the ratio suggests, and worth stating so the number is not read as more
+than it is. **A cursor page does not skip the selection pass** — every candidate row is filtered on every
+page either way. What offset adds is ordering work: it must order the first `offset + limit` rows to know
+which ones its page contains, and that prefix grows with depth. The single-page comparison isolates it:
+the deepest offset page costs 117 µs against 21 µs for the first, a ~5.6x penalty paid purely for being
+deep, which a cursor never pays.
+
+The budget check is **below measurement noise** (43.0 µs against 43.2 µs, and the sign flipped between
+runs), which is why it is charged unconditionally rather than behind a fast path.
+
+`describe_predicates` is effectively free — it reads index bucket sizes. `describe_corpus` is one linear
+pass over 10,000 assertions at ~18 µs, i.e. ~1.8 ns/row: fine for shaping a query, not for a loop.
+
 ## Reading these numbers against Phase 9's candidate list
 
 * **SIMD scanning / Bloom filters** — no linear scan exists on the hot query path today (`current`/

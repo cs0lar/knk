@@ -1,5 +1,6 @@
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <iostream>
 #include <limits>
@@ -1069,6 +1070,58 @@ QueryPlan KnowledgeKernel::explain_query(const Query &query) const {
 
 AggregateResult KnowledgeKernel::aggregate(const AggregateQuery &query) const {
     return query_engine_.aggregate(query, query_source());
+}
+
+std::vector<PredicateSummary> KnowledgeKernel::describe_predicates() const {
+    std::vector<PredicateSummary> result;
+
+    for (const auto &[id, name] : catalog_.predicates()) {
+        PredicateSummary summary;
+        summary.id = id;
+        summary.name = name;
+        summary.current_rows = index_manager_.current_row_count_by_predicate(id);
+        result.push_back(std::move(summary));
+    }
+
+    return result;
+}
+
+CorpusSummary KnowledgeKernel::describe_corpus() const {
+    CorpusSummary summary;
+    summary.assertion_count = assertions_.size();
+
+    // next_*_id is one past the last allocated, and ids start at 1.
+    summary.entity_count = catalog_.next_entity_id() - 1;
+    summary.predicate_count = catalog_.predicates().size();
+    summary.distinct_subjects = index_manager_.distinct_subjects();
+    summary.distinct_current_objects = index_manager_.distinct_current_objects();
+
+    std::array<size_t, 5> counts{};
+    for (const auto &assertion : assertions_) {
+        size_t slot = static_cast<size_t>(assertion.status);
+        if (slot < counts.size()) {
+            ++counts[slot];
+        }
+
+        if (!summary.min_observed_at.has_value()) {
+            summary.min_observed_at = assertion.observed_at;
+            summary.max_observed_at = assertion.observed_at;
+            summary.min_valid_from = assertion.valid_from;
+            summary.max_valid_from = assertion.valid_from;
+        } else {
+            summary.min_observed_at = std::min(*summary.min_observed_at, assertion.observed_at);
+            summary.max_observed_at = std::max(*summary.max_observed_at, assertion.observed_at);
+            summary.min_valid_from = std::min(*summary.min_valid_from, assertion.valid_from);
+            summary.max_valid_from = std::max(*summary.max_valid_from, assertion.valid_from);
+        }
+    }
+
+    // Every status listed, zero counts included -- see the note on CorpusSummary::status_counts.
+    for (size_t slot = 0; slot < counts.size(); ++slot) {
+        summary.status_counts.emplace_back(static_cast<AssertionStatus>(slot), counts[slot]);
+    }
+
+    return summary;
 }
 
 void KnowledgeKernel::merge_entities(EntityId keep, EntityId absorb, Timestamp merged_at) {

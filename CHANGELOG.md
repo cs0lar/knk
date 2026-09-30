@@ -87,6 +87,30 @@ the PR that makes it — see `CONTRIBUTING.md`.
   `MAX_BATCH_SIZE`; available as a `RecordProvenanceBatchCommand` and the `record_provenance_batch`
   MCP tool.
 
+- **Phase 18 — query surface hardening:** three additions to the query surface, none of which change
+  what any existing query returns.
+  - **Keyset cursors.** `QueryResult::next_cursor` carries an opaque token when a further page exists;
+    pass it back as `Query::cursor` (or the `query`/`query_spill` MCP tools' `cursor` argument) to resume
+    strictly after that row, and stop when it stops arriving. Because every ordering already broke ties on
+    `AssertionId`, `(key, id)` is a total order, so a cursor walk returns every row exactly once — even
+    while another process commits, where offset paging silently repeats or skips rows. It is also cheaper
+    at depth: offset must order `offset + limit` rows to find its page and a cursor orders only the page,
+    measured at 4.0 ms against 19.7 ms to walk 10,000 rows in pages of 100. A cursor combined with a
+    non-zero `offset`, or produced under a different ordering, is rejected rather than reinterpreted.
+  - **Resource budgets.** `Query::max_rows_examined` bounds the rows a query may examine (`0`, the
+    default, means no budget), and the existing `max_groups` cap now throws the same structured
+    `QueryBudgetExceeded` — carrying the budget's name, its limit, and what was reached — so a caller can
+    tell "bigger than I allowed for" from "malformed" by type. Over MCP both arrive as a tool error naming
+    the budget. Rows examined rather than wall-clock time, deliberately: a time budget would make the same
+    query against the same corpus succeed or fail depending on machine load, and everything else about the
+    engine is reproducible. The check costs nothing measurable.
+  - **Discovery.** `describe_predicates` lists every interned predicate, ascending by id, with its current
+    row count; `describe_corpus` gives assertion/entity/predicate counts, distinct subjects and current
+    objects, a count per status, and the `observed_at`/`valid_from` spans. Both are `KernelCommand`s with
+    MCP tools (53 now), and both work on a read-only open. They exist because the one thing an MCP client
+    cannot learn from the query tool's JSON Schema is which predicate *names* a particular store uses, and
+    a guessed name returns no rows — indistinguishable from the fact being absent.
+
 - **Phase 17 — columnar result handoff:** `spill_query` (and the `query_spill` MCP tool) writes a query's
   rows to disk as columns and returns a descriptor instead of the rows, which is how a result too large to
   travel as JSON-RPC text gets handed to an analytics consumer — `limit 0` means everything up to

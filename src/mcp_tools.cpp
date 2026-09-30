@@ -501,6 +501,11 @@ Query require_query(const nlohmann::json &args) {
     query.newest_first = optional_bool(args, "newest_first", false);
     query.limit = optional_size(args, "limit", 0);
     query.offset = optional_size(args, "offset", 0);
+    query.max_rows_examined = optional_size(args, "max_rows_examined", 0);
+
+    if (args.contains("cursor") && !args.at("cursor").is_null()) {
+        query.cursor = args.at("cursor").get<std::string>();
+    }
 
     return query;
 }
@@ -1035,8 +1040,11 @@ const std::vector<ToolDefinition> &tool_definitions() {
               "empty query means every assertion, up to the ceiling of " +
                   std::to_string(MAX_QUERY_RESULT) +
                   " rows that limit is capped to. Returns {assertions, truncated}, where truncated "
-                  "says more rows matched than were returned. The IR is versioned (ir_version, "
-                  "currently " +
+                  "says more rows matched than were returned, plus next_cursor when there is a further "
+                  "page: pass it back as cursor to continue, and stop when it is absent. Prefer that to "
+                  "offset for walking a large result -- it costs one pass per page instead of re-skipping, "
+                  "and it cannot repeat or drop a row if someone commits while you page. The IR is "
+                  "versioned (ir_version, currently " +
                   std::to_string(QUERY_IR_VERSION) +
                   ") and still evolving through the query-engine phases: an unknown version is "
                   "rejected rather than reinterpreted.",
@@ -1074,7 +1082,15 @@ const std::vector<ToolDefinition> &tool_definitions() {
                    {"limit", integer_property("Maximum rows; 0 or omitted means the ceiling, and a larger value "
                                               "is capped to it.")},
                    {"offset", integer_property("Rows to skip after ordering.")},
-                   {"ir_version", integer_property("Query IR version; omitted means the current one.")}},
+                   {"ir_version", integer_property("Query IR version; omitted means the current one.")},
+                   {"cursor", string_property("Opaque token from a previous response's next_cursor: resume "
+                                              "strictly after the row it names. Must not be combined with "
+                                              "offset, and must have been produced under this query's order "
+                                              "and newest_first.")},
+                   {"max_rows_examined",
+                    integer_property("Give up with an error rather than examine more than this many rows; 0 or "
+                                     "omitted means no budget. Rows examined rather than elapsed time, so the "
+                                     "same query on the same data always gets the same answer.")}},
                   {})},
              [](KnowledgeKernel &kernel, const nlohmann::json &args, const ToolContext &context) -> KernelResult {
                  return kernel.execute(QueryCommand{require_query(args)});
@@ -1110,7 +1126,9 @@ const std::vector<ToolDefinition> &tool_definitions() {
                    {"offset", integer_property("Rows to skip after ordering.")},
                    {"token", string_property("Name for the result directory; generated if omitted. "
                                              "Refused if it already exists.")},
-                   {"ir_version", integer_property("Query IR version; omitted means the current one.")}},
+                   {"ir_version", integer_property("Query IR version; omitted means the current one.")},
+                   {"cursor", string_property("Resume after a previous page's next_cursor, as in query.")},
+                   {"max_rows_examined", integer_property("Row budget, as in query; 0 or omitted means none.")}},
                   {})},
              [](KnowledgeKernel &kernel, const nlohmann::json &args, const ToolContext &context) -> KernelResult {
                  if (context.spill_directory.empty()) {
@@ -1190,7 +1208,8 @@ const std::vector<ToolDefinition> &tool_definitions() {
                    {"filter", object_property("Filter tree, exactly as in query.")},
                    {"max_groups", integer_property("Group cap; 0 or omitted means the ceiling, and a larger "
                                                    "value is capped to it.")},
-                   {"ir_version", integer_property("Query IR version; omitted means the current one.")}},
+                   {"ir_version", integer_property("Query IR version; omitted means the current one.")},
+                   {"max_rows_examined", integer_property("Row budget, as in query; 0 or omitted means none.")}},
                   {"aggregations"})},
              [](KnowledgeKernel &kernel, const nlohmann::json &args, const ToolContext &context) -> KernelResult {
                  AggregateQuery aggregate;
@@ -1200,6 +1219,28 @@ const std::vector<ToolDefinition> &tool_definitions() {
                  aggregate.max_groups = optional_size(args, "max_groups", 0);
                  aggregate.ir_version = aggregate.selection.ir_version;
                  return kernel.execute(AggregateCommand{std::move(aggregate)});
+             }});
+
+        defs.push_back(
+            {{"describe_predicates",
+              "Lists every predicate this store has interned, with the id to use in a query and how many "
+              "current (Active, open-ended) rows it has. Call this before guessing a predicate name: a "
+              "query naming a predicate that was never interned returns no rows, which is "
+              "indistinguishable from the fact being absent.",
+              object_schema({}, {})},
+             [](KnowledgeKernel &kernel, const nlohmann::json &args, const ToolContext &context) -> KernelResult {
+                 return kernel.execute(DescribePredicatesCommand{});
+             }});
+
+        defs.push_back(
+            {{"describe_corpus",
+              "Describes the store's shape: assertion/entity/predicate counts, distinct subjects and "
+              "current objects, a count per status, and the observed-time and valid-from spans. Enough to "
+              "size a query -- whether to page or spill, and which time windows contain anything at all. "
+              "A snapshot of the moment it was called, not a live view.",
+              object_schema({}, {})},
+             [](KnowledgeKernel &kernel, const nlohmann::json &args, const ToolContext &context) -> KernelResult {
+                 return kernel.execute(DescribeCorpusCommand{});
              }});
 
         defs.push_back(

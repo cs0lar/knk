@@ -298,17 +298,25 @@ struct SpillQueryCommand {
     std::string token;
 };
 
-using KernelCommand = std::variant<
-    CommitCommand, CommitByNameCommand, CommitBatchCommand, CommitBatchByNameCommand, CommitRetractionCommand,
-    CommitSupersedingCommand, WriteSnapshotCommand, InternEntityCommand, InternValueCommand, InternPredicateCommand,
-    InternDocumentCommand, RecordProvenanceCommand, RecordProvenanceBatchCommand, CommitHypothesisCommand,
-    MergeEntitiesCommand, ArchiveSegmentsBeforeCommand, GetCommand, AssertionsForSubjectCommand, CurrentCommand,
-    CurrentByNameCommand, CurrentByObjectCommand, CurrentByPredicateCommand, ValidAtCommand, KnownAtCommand,
-    ValidAtKnownAtCommand, ValidTimeTimelineCommand, ObservedTimeTimelineCommand, CommitHistoryCommand,
-    ChangesSinceCommand, ExplainCommand, FindConflictsCommand, FindEntityCommand, FindValueCommand,
-    FindPredicateCommand, EntityNameCommand, EntityValueCommand, PredicateNameCommand, DocumentContentCommand,
-    ProvenanceForCommand, EntityNameBatchCommand, EntityValueBatchCommand, PredicateNameBatchCommand,
-    ProvenanceForBatchCommand, HypothesesForCommand, NeighborsCommand, CoOccurringPredicatesCommand,
-    ResolveEntityCommand, QueryCommand, AggregateCommand, ExplainQueryCommand, SpillQueryCommand>;
+// Discovery (Phase 18). No payload: each asks the store to describe itself, and there is nothing to
+// narrow -- a caller that wanted a subset of predicates would be querying, not discovering.
+struct DescribePredicatesCommand {};
+
+struct DescribeCorpusCommand {};
+
+using KernelCommand =
+    std::variant<CommitCommand, CommitByNameCommand, CommitBatchCommand, CommitBatchByNameCommand,
+                 CommitRetractionCommand, CommitSupersedingCommand, WriteSnapshotCommand, InternEntityCommand,
+                 InternValueCommand, InternPredicateCommand, InternDocumentCommand, RecordProvenanceCommand,
+                 RecordProvenanceBatchCommand, CommitHypothesisCommand, MergeEntitiesCommand,
+                 ArchiveSegmentsBeforeCommand, GetCommand, AssertionsForSubjectCommand, CurrentCommand,
+                 CurrentByNameCommand, CurrentByObjectCommand, CurrentByPredicateCommand, ValidAtCommand,
+                 KnownAtCommand, ValidAtKnownAtCommand, ValidTimeTimelineCommand, ObservedTimeTimelineCommand,
+                 CommitHistoryCommand, ChangesSinceCommand, ExplainCommand, FindConflictsCommand, FindEntityCommand,
+                 FindValueCommand, FindPredicateCommand, EntityNameCommand, EntityValueCommand, PredicateNameCommand,
+                 DocumentContentCommand, ProvenanceForCommand, EntityNameBatchCommand, EntityValueBatchCommand,
+                 PredicateNameBatchCommand, ProvenanceForBatchCommand, HypothesesForCommand, NeighborsCommand,
+                 CoOccurringPredicatesCommand, ResolveEntityCommand, QueryCommand, AggregateCommand,
+                 ExplainQueryCommand, SpillQueryCommand, DescribePredicatesCommand, DescribeCorpusCommand>;
 
 } // namespace knk

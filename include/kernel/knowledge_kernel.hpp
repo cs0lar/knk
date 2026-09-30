@@ -20,6 +20,7 @@
 #include "kernel/query.hpp"
 #include "kernel/query_engine.hpp"
 #include "kernel/query_plan.hpp"
+#include "kernel/schema.hpp"
 #include "kernel/spill.hpp"
 #include "kernel/status.hpp"
 #include "kernel/storage_engine.hpp"
@@ -352,6 +353,16 @@ class KnowledgeKernel {
     // an aggregate that would produce more groups than its cap allows -- truncating an aggregate would
     // hand back a wrong answer that looks like a right one.
     AggregateResult aggregate(const AggregateQuery &query) const;
+
+    // Schema discovery (Phase 18): every interned predicate with the rows it currently has. The one thing
+    // an MCP client cannot learn from the query tool's JSON Schema is which predicate *names* this store
+    // actually uses, and guessing produces empty results that look like absent facts.
+    std::vector<PredicateSummary> describe_predicates() const;
+
+    // Corpus shape: row and entity counts, per-status counts, and the observed/valid-time span. Counts
+    // come from the indexes where they are exact and free; the status counts and time span are one linear
+    // pass over assertions_, which is why this is a discovery call and not something to put in a loop.
+    CorpusSummary describe_corpus() const;
 
     // Merges absorb into keep: a one-way, append-only redirect durably recorded in EntityMergeLog,
     // then applied to the in-memory Catalog. Assertions are never rewritten by a merge -- assertions_

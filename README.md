@@ -61,6 +61,12 @@ never loses the history of how its knowledge changed.
 - **Columnar result handoff** — `query_spill` writes a large result to disk as plain fixed-width columns
   plus a dictionary of the ids it mentions, and returns a descriptor; a reader is about twenty lines
   (`tools/read_spill.py`), and a read-only kernel can produce one without writing to the store.
+- **Cursor paging and budgets** — `next_cursor` resumes a walk strictly after the last row returned, so
+  paging cannot repeat or skip rows while another process commits, and stays as cheap at page 100 as at
+  page 1; `max_rows_examined` and `max_groups` bound a query's work and fail with a structured error
+  naming the budget rather than with a slow answer.
+- **Discovery** — `describe_predicates` and `describe_corpus` tell a caller which predicates a store
+  actually uses and what shape it is, so an agent can build a query instead of guessing names.
 - **Entity/predicate catalog** — idempotent name and typed-literal interning
   (`intern_entity`/`intern_value`/`intern_predicate`), plus a payload store for large content
   (documents) addressed by id.

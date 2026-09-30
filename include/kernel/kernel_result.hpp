@@ -13,6 +13,7 @@
 #include "kernel/provenance_log.hpp"
 #include "kernel/query.hpp"
 #include "kernel/query_plan.hpp"
+#include "kernel/schema.hpp"
 #include "kernel/spill.hpp"
 #include "kernel/value.hpp"
 
@@ -57,6 +58,8 @@ using KernelResult = std::variant<std::monostate,                               
                                   QueryResult,                                  // query
                                   AggregateResult,                              // aggregate
                                   QueryPlan,                                    // explain_query
-                                  SpillDescriptor>;                             // spill_query
+                                  SpillDescriptor,                              // spill_query
+                                  std::vector<PredicateSummary>,                // describe_predicates
+                                  CorpusSummary>;                               // describe_corpus
 
 } // namespace knk
