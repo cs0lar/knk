@@ -856,6 +856,35 @@ void randomized_queries_agree_across_index_scan_and_reference() {
         if (!indexed.empty()) {
             ++non_empty;
         }
+
+        // Paging with a cursor (Phase 18) must produce exactly the rows the unpaged query produced, in
+        // the same order -- against generated filters and orderings, not just the hand-written cases in
+        // query_surface_tests.cpp. Run on a slice of the queries because each one costs several passes,
+        // and only on untruncated ones, where "every row" is a knowable answer.
+        if (i % 7 == 0 && !indexed_result.truncated && !indexed.empty() && query.offset == 0) {
+            Query paged = query;
+            paged.limit = 3;
+
+            std::vector<AssertionId> walked;
+            std::string cursor;
+            for (size_t page = 0; page <= indexed.size(); ++page) {
+                paged.cursor = cursor;
+                QueryResult result = kernel.query(paged);
+                for (const auto &assertion : result.assertions) {
+                    walked.push_back(assertion.id);
+                }
+                if (result.next_cursor.empty()) {
+                    break;
+                }
+                cursor = result.next_cursor;
+            }
+
+            if (walked != indexed) {
+                std::cerr << "cursor walk disagreed with the unpaged answer at query " << i << " (seed " << SEED
+                          << ")\n";
+                assert(false && "cursor walk did not reproduce the unpaged result");
+            }
+        }
     }
 
     // Guards the generator itself: a corpus or generator that mostly produces empty answers would make

@@ -157,6 +157,7 @@ Notes that matter when comparing the two:
 * **Bounded.** `limit == 0` means `MAX_QUERY_RESULT` (10,000), a larger limit is capped to it, and
   `QueryResult::truncated` distinguishes "that was all" from "here is the first page".
 * **Versioned.** A `Query` carrying an unknown `ir_version` is rejected, never reinterpreted.
+* **Paging** is either `offset` or a `cursor`, never both — see below.
 
 ### Filters (Phase 11)
 
@@ -275,6 +276,99 @@ considered:
   use them at all.
 * The plan `explain_query` returns is produced by the same call the executor makes, so it cannot describe
   something other than what will run.
+
+## Paging with cursors (Phase 18)
+
+Two ways to walk a result larger than one page:
+
+```cpp
+Query query;
+query.order = QueryOrder::ObservedAt;
+query.limit = 100;
+
+std::string cursor;
+while (true) {
+    query.cursor = cursor;
+    QueryResult page = kernel.query(query);
+    // ... use page.assertions ...
+    if (page.next_cursor.empty()) {
+        break;              // that was the last page
+    }
+    cursor = page.next_cursor;
+}
+```
+
+* **`next_cursor` is present only when a further page exists**, so a walk ends when it stops arriving
+  rather than by counting rows. It is an opaque token: pass it back, do not parse it.
+* **A cursor is exact.** Every ordering breaks ties on `AssertionId`, so `(ordering key, id)` is a total
+  order over the result and "strictly after this position" names exactly one place in it. No row is
+  returned twice and none is skipped.
+* **A cursor survives a concurrent writer; an offset does not.** Offset is a count, so a row committed
+  ahead of your position shifts every later page — walking `newest_first` while someone commits, page two
+  by offset re-returns rows page one already gave you. A cursor names a position in the ordering, so it
+  cannot. Against a read-only open (Phase 13) the question does not arise at all: that view is fixed at
+  open, so the same walk returns the same rows however long it takes.
+* **A cursor is cheaper at depth.** It does not skip the selection pass — every candidate row is still
+  filtered on every page — but offset must order `offset + limit` rows to know which its page holds, and
+  that prefix grows as you go deeper. Measured on 10,000 rows in pages of 100: 19.7 ms for the whole walk
+  by offset against 4.0 ms by cursor, and 117 µs for the deepest offset page against 21 µs for the first
+  (`docs/benchmarks.md`).
+* **Rejected, not guessed at:** a cursor together with a non-zero `offset`, a cursor produced under a
+  different `order`/`newest_first`, and a malformed or unknown-version token. Each would otherwise return
+  a plausible-looking wrong window.
+* An aggregate takes no cursor: it returns groups, not rows.
+
+## Resource budgets (Phase 18)
+
+| Budget | Field | Applies to |
+| --- | --- | --- |
+| Rows examined | `Query::max_rows_examined` | `query`, `aggregate`, `spill_query` |
+| Group count | `AggregateQuery::max_groups` | `aggregate` |
+| Result rows | `MAX_QUERY_RESULT` / `MAX_SPILL_ROWS` | always, not caller-settable |
+
+Exceeding one of the first two throws `QueryBudgetExceeded`, which carries the budget's name, its limit,
+and what was reached. It derives from `std::runtime_error`, so a caller that does not care can treat it
+like any other failure; over MCP it comes back as a tool error naming the budget.
+
+* **Rows examined, not elapsed time.** A wall-clock budget would make the same query against the same
+  corpus succeed or fail depending on machine load. Everything else here is reproducible — the plan
+  explains itself, the answer does not depend on how it was reached — and a timeout would be the one part
+  that is not. `max_rows_examined` bounds work deterministically instead.
+* **Opt-in.** `0` means no budget, which is what every query written before the field existed carries. The
+  standing protection is the result ceiling, not a default budget.
+* **What "examined" counts** is candidate rows, and how many that is depends on the plan: an index path
+  charges per candidate id and stops early, while the columnar path's passes are whole-column and are
+  refused up front. So a budget can decide *whether* a query throws on one path and not another — it still
+  cannot change which rows a query returns.
+* A group cap is never satisfied by truncation. A partial aggregate is a wrong answer that looks like a
+  right one, so exceeding `max_groups` is an error.
+
+## Discovery (Phase 18)
+
+A `Query` is discoverable from its schema; what is *in* a given store is not. Two calls answer that.
+
+`describe_predicates()` — every interned predicate, ascending by id, with its current row count
+(`Active` and open-ended, i.e. what `current_by_predicate` would return):
+
+```json
+[{"id": 1, "name": "works_at", "current_rows": 412}, {"id": 2, "name": "lives_in", "current_rows": 88}]
+```
+
+Call it before naming a predicate. A query against a predicate that was never interned returns no rows,
+which is indistinguishable from the fact being absent. A predicate interned but never asserted still
+appears, with `current_rows: 0`.
+
+`describe_corpus()` — the shape of the store: `assertion_count`, `entity_count`, `predicate_count`,
+`distinct_subjects`, `distinct_current_objects`, a count per status (every status, zeros included), and
+the `observed_at` / `valid_from` spans. Enough to decide whether to page or spill, and which time windows
+contain anything.
+
+* `valid_to` is deliberately **not** summarized: `OPEN_ENDED` is `0`, so its minimum would report 1970 for
+  any store holding a single current fact.
+* The spans are absent (`null`) on an empty corpus rather than `0`.
+* Both are snapshots of the moment they were called, and both work on a read-only open. `describe_corpus`
+  is one linear pass (~18 µs per 10,000 assertions), so it is for shaping a query, not for calling inside
+  a loop.
 
 ---
 

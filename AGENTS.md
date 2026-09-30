@@ -1514,6 +1514,57 @@ Current implementation status (shipped 2026-09-30):
 * **Tests:** budgets enforced; cursors stable against a concurrent writer, which Phase 13's snapshot
  readers make well-defined.
 
+Current implementation status (shipped 2026-09-30):
+
+* **The wall-clock budget in this plan was not implemented, deliberately.** A time budget makes the same
+ query against the same corpus succeed or fail depending on machine load, which would undo what the rest
+ of the engine works for: a plan that explains itself, results that do not depend on how they were
+ reached, and differential tests that can assert two paths agree. `max_rows_examined` is a deterministic
+ proxy for the same protection -- it bounds work, and the same query on the same data always gets the same
+ answer, budget included. It also sidesteps the separate problem that the kernel never reads a clock (see
+ Time Handling), which a timeout would have been the first exception to. If a wall-clock cap is ever
+ genuinely wanted, it belongs in the *server* around the call, not in query semantics.
+* **The budget is opt-in (0 means none), not a default.** The engine's standing protection is the result
+ ceiling; a default row budget would fail exactly the large-corpus scans the columnar path exists to make
+ fast. Charged per candidate on the id-driven paths so an over-budget query stops early, and up front on
+ the columnar path, whose passes are whole-column and have no cheap mid-pass abort. A consequence worth
+ knowing: with a budget set, `force_scan`/`force_row_scan` can change *whether a query throws*, because
+ they change how much work it does -- they still cannot change which rows it returns.
+* **Cursors are keyset, not offset.** Every `QueryOrder` already broke ties on `AssertionId`, so
+ `(key, id)` is a total order and "strictly after this position" names exactly one place in the result.
+ That is what makes a walk exact: no row repeats, none is skipped. A cursor carries the ordering it was
+ made under and is **rejected** if the query's ordering disagrees, and rejected alongside a non-zero
+ `offset`, because both are two answers to "where does this page start".
+* **The performance claim in this plan's framing was narrower than it looked, and the comment in
+ `query.hpp` was corrected before shipping.** A cursor page does *not* skip the selection pass -- every
+ candidate row is still filtered on every page. What a cursor avoids is the *ordering* prefix: offset must
+ order `offset + limit` rows to know which its page holds, and that grows with depth, while a cursor's
+ prefix stays the page size. Measured: 10,000 rows in pages of 100 costs 19.7 ms by offset against 4.0 ms
+ by cursor, and the deepest offset page alone costs 117 us against 21 us for the first. The budget check
+ itself is below measurement noise.
+* **Discovery is two calls, not a schema.** `describe_predicates` lists every interned predicate with its
+ id and current row count -- the one thing an MCP client cannot learn from the query tool's JSON Schema,
+ and the thing that makes a guessed predicate name look like an absent fact. `describe_corpus` gives row,
+ entity and predicate counts, distinct subjects and current objects, a count per status, and the
+ observed/valid-from spans. Both work on a read-only open. `valid_to` is deliberately *not* summarized:
+ `OPEN_ENDED` is 0, so its min would report 1970 for any store holding a current fact.
+* Predicates come back **ascending by id**, sorted in `Catalog::predicates()` rather than in the caller:
+ an agent shows this list to a person, and a list that reshuffles between identical calls reads as data
+ changing. A predicate interned but never asserted still appears, since that is precisely the name a
+ caller needs to be told about.
+* The group cap became a structured `QueryBudgetExceeded` too, so a caller can tell "the answer is bigger
+ than I allowed for" from "my query was malformed" by type rather than by matching on a message.
+* **Tested** in `tests/query_surface_tests.cpp`: cursor walks over every ordering, both directions, all
+ three execution paths and three page sizes against a corpus where ordering keys deliberately collide (so
+ the tie-break is exercised rather than bypassed); the last page carrying no cursor; a writer committing
+ mid-walk, where the cursor holds and offset is *asserted* to repeat two rows; a read-only walk being
+ repeatable to the row while a writer commits; malformed and mismatched cursors; budgets on all three
+ paths and in `aggregate`; and the discovery calls, including on a read-only open. `query_differential_tests`
+ now also walks a slice of its generated queries by cursor and requires the result to equal the unpaged
+ answer. Nine meaning-changing mutations of the cursor comparison, the budget check and the discovery
+ counts were each caught; a tenth (`>=` for `>` inside a branch guarded by `key != cursor.key`) was
+ confirmed to be an equivalent mutant rather than a gap.
+
 #### Phase 19 — As-of-commit reconstruction
 
 The one semantic gap an analytics caller will certainly hit, and it is currently *documented as a

@@ -78,7 +78,9 @@ void tool_specs_cover_every_kernel_command_with_a_well_formed_schema() {
                                          "query",
                                          "aggregate",
                                          "explain_query",
-                                         "query_spill"};
+                                         "query_spill",
+                                         "describe_predicates",
+                                         "describe_corpus"};
 
     const auto &specs = tool_specs();
     assert(specs.size() == expected_names.size());

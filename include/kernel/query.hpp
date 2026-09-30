@@ -13,6 +13,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <stdexcept>
+#include <string>
 #include <vector>
 
 #include "kernel/assertion.hpp"
@@ -166,6 +168,37 @@ struct Query {
     size_t limit = 0;
     size_t offset = 0;
 
+    // Keyset pagination (Phase 18): resume strictly after the row this cursor names, in the query's own
+    // ordering. Obtained from a previous QueryResult::next_cursor and opaque to the caller.
+    //
+    // Preferred over offset for walking a large result, for two reasons.
+    //
+    // The first is depth. A cursor page does *not* skip the selection pass -- every candidate row is
+    // filtered on every page either way -- but offset has to order the first offset+limit rows to know
+    // which ones its page contains, and that prefix grows as the walk goes deeper, while a cursor's stays
+    // the page size. Measured: walking 10,000 rows in pages of 100 costs 19.7 ms by offset and 4.0 ms by
+    // cursor, and the deepest offset page alone costs 117 us against 21 us for the first
+    // (docs/benchmarks.md).
+    //
+    // The second is that offset silently shifts when rows are committed underneath it -- page two can
+    // repeat or skip rows -- while a cursor names a position in the ordering rather than a count.
+    //
+    // A cursor and a non-zero offset together are rejected: they are two answers to the same question, and
+    // guessing which one a caller meant is worse than saying so. A cursor whose ordering disagrees with
+    // the query's is rejected for the same reason.
+    std::string cursor;
+
+    // Ceiling on rows the engine may examine before giving up, as a structured QueryBudgetExceeded rather
+    // than a slow answer. 0 means no budget, which is what every query written before this field existed
+    // carries. The check costs nothing measurable (docs/benchmarks.md), so it is not worth a fast path.
+    //
+    // Rows examined rather than wall-clock time, deliberately: a time budget makes the same query against
+    // the same data succeed or fail depending on machine load, which would undo the reproducibility the
+    // rest of the engine works for (a plan that explains itself, results independent of how they were
+    // reached). Rows examined is a deterministic proxy for the same protection -- the same query on the
+    // same corpus always gets the same answer, budget included.
+    size_t max_rows_examined = 0;
+
     // Diagnostic only, and deliberately not exposed as an MCP tool argument: skip index selection and
     // evaluate against every assertion. Its purpose is differential testing -- every query can be run
     // both ways and the results compared, which is how index use is kept from changing results rather
@@ -179,6 +212,20 @@ struct Query {
     bool force_row_scan = false;
 };
 
+// Thrown when a query exceeds a budget it was given. A distinct type so a library caller can catch this
+// specifically -- "the query was too big" is a different situation from "the query was malformed", and a
+// caller may want to retry the first with a narrower filter.
+struct QueryBudgetExceeded : std::runtime_error {
+    QueryBudgetExceeded(std::string budget_name, size_t limit_value, size_t reached_value)
+        : std::runtime_error("query budget '" + budget_name + "' exceeded: limit " + std::to_string(limit_value) +
+                             ", reached " + std::to_string(reached_value)),
+          budget(std::move(budget_name)), limit(limit_value), reached(reached_value) {}
+
+    std::string budget;
+    size_t limit = 0;
+    size_t reached = 0;
+};
+
 struct QueryResult {
     std::vector<Assertion> assertions;
 
@@ -186,6 +233,10 @@ struct QueryResult {
     // returned row. Kept alongside the rows rather than folded into Assertion so the on-disk record
     // shape and the wire shape of an unresolved query are both unchanged.
     std::vector<ResolvedNames> names;
+
+    // Set when more rows remain after this page: pass it back as Query::cursor to continue. Empty when the
+    // page is the end of the result, so a caller pages until it is empty rather than counting.
+    std::string next_cursor;
 
     // True when more rows matched than were returned, i.e. the limit (or MAX_QUERY_RESULT) cut the
     // answer short. Distinguishes "exactly this many matched" from "here are the first N", which a

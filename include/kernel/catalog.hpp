@@ -42,6 +42,11 @@ class Catalog {
     const Value *find_entity_value(EntityId id) const;
     std::optional<std::string> predicate_name(PredicateId id) const;
 
+    // Every interned predicate, ascending by id. The catalog's storage is an unordered_map, so the sort
+    // happens here rather than leaking iteration order to a caller -- schema discovery (Phase 18) is
+    // something an agent shows a user, and a list that reshuffles between calls reads as a bug.
+    std::vector<std::pair<PredicateId, std::string>> predicates() const;
+
     EntityId next_entity_id() const;
     PredicateId next_predicate_id() const;
 

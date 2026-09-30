@@ -8,6 +8,7 @@
 #include <string_view>
 #include <unordered_set>
 
+#include "kernel/query_cursor.hpp"
 #include "kernel/query_engine.hpp"
 #include "kernel/query_planner.hpp"
 
@@ -458,8 +459,9 @@ void validate_aggregate(const AggregateQuery &query) {
     // groups. A caller who set them meant something the aggregate cannot deliver.
     const Query &selection = query.selection;
     if (selection.limit != 0 || selection.offset != 0 || selection.order != QueryOrder::AssertionId ||
-        selection.newest_first || selection.resolve_names) {
-        throw std::runtime_error("aggregate selection must not set limit/offset/order/newest_first/resolve_names");
+        selection.newest_first || selection.resolve_names || !selection.cursor.empty()) {
+        throw std::runtime_error(
+            "aggregate selection must not set limit/offset/cursor/order/newest_first/resolve_names");
     }
 }
 
@@ -478,6 +480,31 @@ std::vector<uint32_t> QueryEngine::select_rows(const Query &query, const QuerySo
     if (query.filter.has_value()) {
         validate(*query.filter, 1);
     }
+
+    // Decoded before any work: a bad token should cost nothing, and the ordering check below is the
+    // difference between "the wrong window" and "an error".
+    std::optional<QueryCursor> cursor;
+    if (!query.cursor.empty()) {
+        if (query.offset != 0) {
+            throw std::runtime_error("query sets both a cursor and an offset");
+        }
+
+        cursor = decode_query_cursor(query.cursor);
+        if (cursor->order != query.order || cursor->newest_first != query.newest_first) {
+            throw std::runtime_error("query cursor was produced under a different ordering");
+        }
+    }
+
+    // Rows the engine is allowed to look at. Counted per candidate on the id-driven paths so an
+    // over-budget query stops early rather than after the fact; the columnar path's passes are
+    // whole-column, so it is refused up front instead -- see the budget note in docs/query_semantics.md.
+    size_t examined = 0;
+    auto charge = [&query, &examined](size_t rows) {
+        examined += rows;
+        if (query.max_rows_examined != 0 && examined > query.max_rows_examined) {
+            throw QueryBudgetExceeded("max_rows_examined", query.max_rows_examined, examined);
+        }
+    };
 
     // Resolved once, then compared against raw stored ids -- see matches().
     std::optional<EntityId> subject;
@@ -501,15 +528,31 @@ std::vector<uint32_t> QueryEngine::select_rows(const Query &query, const QuerySo
 
     if (is_index_source(plan.chosen)) {
         for (AssertionId id : candidate_ids(plan.chosen, query, subject, object, index_manager)) {
+            charge(1);
             const Assertion *assertion = find_by_id(assertions, id);
-            if (assertion != nullptr && matches(query, *assertion, subject, object, catalog)) {
+            if (assertion != nullptr && matches(query, *assertion, subject, object, catalog) &&
+                (!cursor.has_value() || after_query_cursor(*cursor, *assertion))) {
                 matched.push_back(static_cast<uint32_t>(id - 1));
             }
         }
     } else if (plan.chosen == PlanSource::ColumnarScan) {
         // The columnar path: the selectors, time windows, open-endedness and status set are answered by
         // passes over single columns, and only the survivors are touched as rows.
+        charge(assertions.size());
         vectorized_select(query, source.columns, source.effective_status, subject, object, matched);
+
+        if (cursor.has_value()) {
+            // After the column passes rather than inside them: the cursor is a comparison on the ordering
+            // field, which is one of the columns already narrowed, so folding it in would save a pass over
+            // the survivors and cost a special case in every narrow_*. Not worth it until it measures.
+            auto surviving = matched.begin();
+            for (uint32_t row : matched) {
+                if (after_query_cursor(*cursor, assertions[row])) {
+                    *surviving++ = row;
+                }
+            }
+            matched.erase(surviving, matched.end());
+        }
 
         if (query.filter.has_value()) {
             // The filter tree stays per-row: it can consult the catalog and has arbitrary boolean shape,
@@ -524,7 +567,9 @@ std::vector<uint32_t> QueryEngine::select_rows(const Query &query, const QuerySo
         }
     } else {
         for (size_t i = 0; i < assertions.size(); ++i) {
-            if (matches(query, assertions[i], subject, object, catalog)) {
+            charge(1);
+            if (matches(query, assertions[i], subject, object, catalog) &&
+                (!cursor.has_value() || after_query_cursor(*cursor, assertions[i]))) {
                 matched.push_back(static_cast<uint32_t>(i));
             }
         }
@@ -572,6 +617,17 @@ QueryResult QueryEngine::execute(const Query &query, const QuerySource &source) 
     result.assertions.reserve(page_end - query.offset);
     for (size_t i = query.offset; i < page_end; ++i) {
         result.assertions.push_back(assertions[matched[i]]);
+    }
+
+    // Handed out only when there is a next page. An empty next_cursor is how a caller knows to stop, so
+    // emitting one unconditionally would turn every walk into an extra round trip that returns nothing.
+    if (!result.assertions.empty() && result.truncated) {
+        QueryCursor next;
+        next.order = query.order;
+        next.newest_first = query.newest_first;
+        next.key = cursor_key(result.assertions.back(), query.order);
+        next.id = result.assertions.back().id;
+        result.next_cursor = encode_query_cursor(next);
     }
 
     // Only the returned page is resolved, never the whole match set: a 10,000-row match paged three at
@@ -646,6 +702,16 @@ AggregateResult QueryEngine::aggregate(const AggregateQuery &query, const QueryS
 
     size_t max_groups = query.max_groups == 0 ? MAX_GROUP_COUNT : std::min(query.max_groups, MAX_GROUP_COUNT);
 
+    // Same budget as a row query, charged the same way -- an aggregate reads exactly the same rows, it
+    // just folds them instead of collecting them.
+    size_t examined = 0;
+    auto charge = [&selection, &examined](size_t rows) {
+        examined += rows;
+        if (selection.max_rows_examined != 0 && examined > selection.max_rows_examined) {
+            throw QueryBudgetExceeded("max_rows_examined", selection.max_rows_examined, examined);
+        }
+    };
+
     struct Group {
         int64_t row_count = 0;
         std::vector<AggregateState> states;
@@ -666,7 +732,9 @@ AggregateResult QueryEngine::aggregate(const AggregateQuery &query, const QueryS
         auto it = groups.find(key);
         if (it == groups.end()) {
             if (groups.size() >= max_groups) {
-                throw std::runtime_error("aggregate produced more groups than max_groups allows");
+                // A budget, not a malformed query: the caller asked something well-formed whose answer is
+                // bigger than they allowed for, and the structured type lets them tell that from a typo.
+                throw QueryBudgetExceeded("max_groups", max_groups, groups.size() + 1);
             }
 
             Group fresh;
@@ -724,6 +792,7 @@ AggregateResult QueryEngine::aggregate(const AggregateQuery &query, const QueryS
 
     if (is_index_source(plan.chosen)) {
         for (AssertionId id : candidate_ids(plan.chosen, selection, subject, object, index_manager)) {
+            charge(1);
             const Assertion *assertion = find_by_id(assertions, id);
             if (assertion != nullptr && matches(selection, *assertion, subject, object, catalog)) {
                 fold(*assertion);
@@ -731,6 +800,7 @@ AggregateResult QueryEngine::aggregate(const AggregateQuery &query, const QueryS
         }
     } else if (plan.chosen == PlanSource::ColumnarScan) {
         std::vector<uint32_t> rows;
+        charge(assertions.size());
         vectorized_select(selection, source.columns, source.effective_status, subject, object, rows);
 
         for (uint32_t row : rows) {
@@ -741,6 +811,7 @@ AggregateResult QueryEngine::aggregate(const AggregateQuery &query, const QueryS
         }
     } else {
         for (const auto &assertion : assertions) {
+            charge(1);
             if (matches(selection, assertion, subject, object, catalog)) {
                 fold(assertion);
             }

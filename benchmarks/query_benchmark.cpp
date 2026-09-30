@@ -353,6 +353,131 @@ void planner_cost_inputs(const KnowledgeKernel &kernel, size_t queries) {
     report("  => per row, row scan", rows / (2.0 * static_cast<double>(SUBJECT_COUNT)) * 1e9, "ns");
 }
 
+// --- paging: cursor versus offset (Phase 18) -------------------------------------
+//
+// The claim worth checking is narrower than it first looks. A cursor page does not skip the selection
+// pass: the engine still filters every candidate row on every page, for a cursor exactly as for an
+// offset. What changes is the *ordering* work. Paging with offset must order the first offset+limit rows
+// to know which ones the page contains, and that prefix grows with depth; a cursor's prefix is the page
+// size, forever. This measures both walks over the same result so the difference is the mechanism and
+// not the corpus.
+void paging_walks(KnowledgeKernel &kernel, size_t page_size) {
+    Query base;
+    base.statuses = {AssertionStatus::Active};
+    base.order = QueryOrder::ObservedAt;
+
+    Query counted = base;
+    counted.limit = MAX_QUERY_RESULT;
+    size_t total = kernel.query(counted).assertions.size();
+    size_t pages = total / page_size;
+
+    Timer offset_timer;
+    for (size_t page = 0; page < pages; ++page) {
+        Query query = base;
+        query.limit = page_size;
+        query.offset = page * page_size;
+        kernel.query(query);
+    }
+    double offset_elapsed = offset_timer.elapsed_seconds();
+
+    Timer cursor_timer;
+    std::string cursor;
+    size_t walked = 0;
+    for (size_t page = 0; page < pages; ++page) {
+        Query query = base;
+        query.limit = page_size;
+        query.cursor = cursor;
+        QueryResult result = kernel.query(query);
+        walked += result.assertions.size();
+        if (result.next_cursor.empty()) {
+            break;
+        }
+        cursor = result.next_cursor;
+    }
+    double cursor_elapsed = cursor_timer.elapsed_seconds();
+
+    report("paging: " + std::to_string(pages) + " pages of " + std::to_string(page_size) + " by offset",
+           offset_elapsed * 1000.0, "ms total");
+    report("paging: the same walk by cursor", cursor_elapsed * 1000.0, "ms total");
+    report("  => cursor/offset", cursor_elapsed / offset_elapsed, "x");
+    report("  => rows walked", static_cast<double>(walked), "rows");
+
+    // The last page specifically: the deepest offset is where the growing sort prefix costs most, and a
+    // single-page comparison is the honest way to show it rather than averaging it away.
+    Query deepest = base;
+    deepest.limit = page_size;
+    deepest.offset = (pages - 1) * page_size;
+
+    Timer deep_timer;
+    constexpr size_t repeats = 20;
+    for (size_t i = 0; i < repeats; ++i) {
+        kernel.query(deepest);
+    }
+    double deep_elapsed = deep_timer.elapsed_seconds() / static_cast<double>(repeats);
+
+    Query first = base;
+    first.limit = page_size;
+
+    Timer shallow_timer;
+    for (size_t i = 0; i < repeats; ++i) {
+        kernel.query(first);
+    }
+    double shallow_elapsed = shallow_timer.elapsed_seconds() / static_cast<double>(repeats);
+
+    report("paging: deepest page by offset", deep_elapsed * 1e6, "us/query");
+    report("paging: first page (cursor-sized prefix)", shallow_elapsed * 1e6, "us/query");
+}
+
+// --- budgets (Phase 18) ----------------------------------------------------------
+//
+// A budget is only worth having if checking it is cheap, since the check runs per candidate row on the
+// id-driven paths. This measures the same query with and without one.
+void budget_overhead(KnowledgeKernel &kernel, size_t queries) {
+    Query unbudgeted;
+    unbudgeted.statuses = {AssertionStatus::Active};
+    unbudgeted.force_scan = true;
+    unbudgeted.force_row_scan = true;
+    unbudgeted.limit = 1;
+
+    Timer without_timer;
+    for (size_t i = 0; i < queries; ++i) {
+        kernel.query(unbudgeted);
+    }
+    double without = without_timer.elapsed_seconds() / static_cast<double>(queries);
+
+    Query budgeted = unbudgeted;
+    budgeted.max_rows_examined = 1'000'000'000; // never hit, so this times the check and nothing else
+
+    Timer with_timer;
+    for (size_t i = 0; i < queries; ++i) {
+        kernel.query(budgeted);
+    }
+    double with = with_timer.elapsed_seconds() / static_cast<double>(queries);
+
+    report("budget: row scan, no budget", without * 1e6, "us/query");
+    report("budget: row scan, budget set", with * 1e6, "us/query");
+    report("  => overhead", (with - without) / without * 100.0, "%");
+}
+
+// --- discovery (Phase 18) --------------------------------------------------------
+//
+// describe_corpus is a linear pass, so its cost has to be stated rather than assumed: a caller shaping
+// one query with it is fine, a caller calling it per query is not.
+void discovery_latency(KnowledgeKernel &kernel, size_t calls) {
+    Timer predicates_timer;
+    for (size_t i = 0; i < calls; ++i) {
+        kernel.describe_predicates();
+    }
+    report("discovery: describe_predicates", predicates_timer.elapsed_seconds() / static_cast<double>(calls) * 1e6,
+           "us/call");
+
+    Timer corpus_timer;
+    for (size_t i = 0; i < calls; ++i) {
+        kernel.describe_corpus();
+    }
+    report("discovery: describe_corpus", corpus_timer.elapsed_seconds() / static_cast<double>(calls) * 1e6, "us/call");
+}
+
 // --- a corpus too large to cache (Phase 16) --------------------------------------
 //
 // Every number above this point is measured on 10,000 assertions, which is ~880 KB of records and ~80 KB
@@ -450,6 +575,11 @@ int main() {
 
     section("cost model inputs (Phase 16)");
     planner_cost_inputs(kernel, 500);
+
+    section("paging and budgets (Phase 18)");
+    paging_walks(kernel, 100);
+    budget_overhead(kernel, 200);
+    discovery_latency(kernel, 200);
 
     section("a corpus too large to cache (" + std::to_string(LARGE_CORPUS) + " assertions)");
     large_corpus_scans(20);

@@ -313,6 +313,12 @@ nlohmann::json kernel_result_to_json(const KernelResult &result) {
                 // "here are the first N" without re-counting.
                 nlohmann::json result{{"assertions", assertions}, {"truncated", value.truncated}};
 
+                // Only when there is a next page. Present-and-a-token versus absent is the whole paging
+                // protocol: a caller feeds it back as `cursor` and stops when it stops arriving.
+                if (!value.next_cursor.empty()) {
+                    result["next_cursor"] = value.next_cursor;
+                }
+
                 // Only present when the query asked for resolution, and then parallel to the rows: a
                 // caller zips the two, and an absent name is null in its slot rather than missing.
                 if (!value.names.empty()) {
@@ -331,6 +337,35 @@ nlohmann::json kernel_result_to_json(const KernelResult &result) {
                 }
 
                 return result;
+            } else if constexpr (std::is_same_v<T, std::vector<PredicateSummary>>) {
+                nlohmann::json array = nlohmann::json::array();
+                for (const auto &summary : value) {
+                    array.push_back(nlohmann::json{
+                        {"id", summary.id}, {"name", summary.name}, {"current_rows", summary.current_rows}});
+                }
+                return array;
+            } else if constexpr (std::is_same_v<T, CorpusSummary>) {
+                // Keyed by status *name*, not by the on-disk byte: the byte is a storage detail, and a
+                // caller reading this is about to write those names into a query's `statuses`.
+                nlohmann::json statuses = nlohmann::json::object();
+                for (const auto &[status, count] : value.status_counts) {
+                    statuses[status_name(status)] = count;
+                }
+
+                auto span = [](const std::optional<Timestamp> &bound) {
+                    return bound.has_value() ? nlohmann::json(*bound) : nlohmann::json(nullptr);
+                };
+
+                return nlohmann::json{{"assertion_count", value.assertion_count},
+                                      {"entity_count", value.entity_count},
+                                      {"predicate_count", value.predicate_count},
+                                      {"distinct_subjects", value.distinct_subjects},
+                                      {"distinct_current_objects", value.distinct_current_objects},
+                                      {"status_counts", statuses},
+                                      {"min_observed_at", span(value.min_observed_at)},
+                                      {"max_observed_at", span(value.max_observed_at)},
+                                      {"min_valid_from", span(value.min_valid_from)},
+                                      {"max_valid_from", span(value.max_valid_from)}};
             } else if constexpr (std::is_same_v<T, std::vector<std::optional<std::string>>>) {
                 // One slot per id, in input order: a slot the single resolver would answer null for is
                 // null here too, so a caller can zip ids with answers without matching them up.
