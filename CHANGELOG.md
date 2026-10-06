@@ -87,6 +87,26 @@ the PR that makes it — see `CONTRIBUTING.md`.
   `MAX_BATCH_SIZE`; available as a `RecordProvenanceBatchCommand` and the `record_provenance_batch`
   MCP tool.
 
+- **Phase 19 — as-of reconstruction:** `Query::as_of_commit` and `Query::as_of_observed` (and the matching
+  MCP arguments on `query`, `aggregate`, `explain_query` and `query_spill`) answer a query against the
+  store as it stood at an earlier point: rows committed or observed later are invisible, and every visible
+  row's status is what it was *then* rather than what it is now. This closes the gap `known_at` has carried
+  since Phase 1 — `known_at` applies an observed-time cutoff but reports status as it stands now, so once a
+  fact is corrected it disappears from every past answer, and "what did we believe at close" was
+  unanswerable. The reconstructed status is what the caller sees everywhere: the `statuses` set, a `Status`
+  filter, an aggregate's `group_by: status`, each returned row's own `status` field, and a spill's status
+  column. The two modes are mutually exclusive and genuinely differ, since `observed_at` is caller-supplied
+  and may be backdated. Reconstruction is O(1) per row (the kernel keeps the id of the record that closed
+  each row), measured at 1.37x a plain columnar scan over the same rows and *cheaper* than a present-tense
+  query when the as-of point is partway through the log. The current-state indexes are rejected for an
+  as-of query on correctness grounds, with `explain_query` saying so.
+  - **Snapshot format v2.** The snapshot stored effective statuses, which cannot express what a closed row
+    was committed as — a superseded `Hypothesis` was indistinguishable from a superseded `Active` fact — so
+    the startup fast path would have answered an as-of query differently from a full replay. It now stores
+    the status each record was appended with, and effective status is re-derived at load from the
+    supersession/retraction links. A v1 snapshot is refused and the kernel falls back to full replay: one
+    slower startup, no data loss, since a snapshot was never authoritative.
+
 - **Phase 18 — query surface hardening:** three additions to the query surface, none of which change
   what any existing query returns.
   - **Keyset cursors.** `QueryResult::next_cursor` carries an opaque token when a further page exists;

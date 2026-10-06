@@ -14,10 +14,12 @@ status, and `supersedes_id`/`retracts_id` links), not a row or graph edge.
 
 Phases 1–8 of `AGENTS.md`'s "Current Roadmap" are complete (in-memory temporal model → storage engine → persistent
 indexes → storage internals → catalog/payload store → provenance + command layer → hypotheses + bounded traversal →
-merge/archival). Phase 9 (performance) is deliberately gated: a benchmark harness and baseline exist, but no
-optimization work has started. Check `AGENTS.md`'s roadmap before starting work — the project does not jump ahead of
-the current phase, and several headings inside `AGENTS.md` still carry stale "current phase" markers, so trust the
-per-phase "Current implementation status" blocks and `CHANGELOG.md` over the headings.
+merge/archival), as is the query-engine arc, Phases 10–19 (query IR → filters → aggregation → read-only opens →
+columnar store → vectorized execution → cost-based planning → columnar result handoff → cursors/budgets/discovery →
+as-of reconstruction). Phase 9 (general performance) stays gated: the optimization that has happened was
+benchmark-driven and confined to the query-engine phases. Check `AGENTS.md`'s roadmap before starting work — the
+project does not jump ahead of the current phase, and several headings inside `AGENTS.md` still carry stale "current
+phase" markers, so trust the per-phase "Current implementation status" blocks and `CHANGELOG.md` over the headings.
 
 ## Build & test commands
 

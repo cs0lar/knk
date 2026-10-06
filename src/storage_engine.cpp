@@ -170,10 +170,11 @@ void StorageEngine::write_checkpoint(AssertionId last_fully_indexed_id) {
 
 AssertionId StorageEngine::load_checkpoint() const { return checkpoint_.read(); }
 
-void StorageEngine::write_snapshot(AssertionId last_snapshotted_id, const std::vector<Assertion> &assertions) {
+void StorageEngine::write_snapshot(AssertionId last_snapshotted_id, const std::vector<Assertion> &assertions,
+                                   std::span<const uint8_t> appended_status) {
     require_writable("write_snapshot");
 
-    snapshot_store_.write(last_snapshotted_id, assertions);
+    snapshot_store_.write(last_snapshotted_id, assertions, appended_status);
 }
 
 std::optional<SnapshotData> StorageEngine::load_snapshot() const { return snapshot_store_.read(); }

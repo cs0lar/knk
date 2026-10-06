@@ -24,6 +24,7 @@
 #include "kernel/index_manager.hpp"
 #include "kernel/query.hpp"
 #include "kernel/query_plan.hpp"
+#include "kernel/status_history.hpp"
 #include "kernel/vectorized_scan.hpp"
 
 namespace knk {
@@ -43,6 +44,10 @@ struct QuerySource {
     // Replayed, effective status per row, parallel to `assertions`. Needed because the columns are a
     // verbatim projection of the log and their status byte is the one the record was *appended* with.
     std::span<const uint8_t> effective_status;
+
+    // How each row's status came to be what it is, which is what an as-of query reconstructs from
+    // (Phase 19). Unused unless Query::as_of_commit or as_of_observed is set.
+    const StatusHistory &status_history;
 };
 
 class QueryEngine {

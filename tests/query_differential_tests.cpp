@@ -48,6 +48,11 @@ struct Corpus {
     std::vector<EntityId> objects; // a mix of named entities and typed literals
     std::vector<Timestamp> timestamps;
     std::vector<Assertion> assertions; // what the brute-force evaluator reads
+
+    // The status each record was *committed* with, indexed by id - 1, recorded as the corpus is built.
+    // The engine keeps the same thing in StatusHistory; this is the test's own independent copy, which
+    // is the point -- a reference that read the engine's would not be checking anything.
+    std::vector<AssertionStatus> appended;
 };
 
 // Deliberately heterogeneous: text-valued objects next to int64 and double literals (so ObjectValue
@@ -100,10 +105,12 @@ Corpus populate(KnowledgeKernel &kernel) {
         if (rng() % 7 == 0) {
             kernel.commit_hypothesis(subject, predicate, object, valid_from, valid_to, observed_at, confidence,
                                      corpus.subjects.front(), observed_at, "guess");
+            corpus.appended.push_back(AssertionStatus::Hypothesis);
             continue;
         }
 
         AssertionId id = kernel.commit(subject, predicate, object, valid_from, valid_to, observed_at, confidence);
+        corpus.appended.push_back(AssertionStatus::Active);
         live.push_back(id);
 
         // Supersede or retract some of what exists, so Superseded/Retracted/Retraction rows appear.
@@ -115,9 +122,11 @@ Corpus populate(KnowledgeKernel &kernel) {
                     live.push_back(kernel.commit_superseding(existing->subject, existing->predicate,
                                                              pick(corpus.objects), existing->valid_from, OPEN_ENDED,
                                                              observed_at, confidence, target));
+                    corpus.appended.push_back(AssertionStatus::Active);
                 } else {
                     kernel.commit_retraction(existing->subject, existing->predicate, existing->object,
                                              existing->valid_from, existing->valid_to, observed_at, confidence, target);
+                    corpus.appended.push_back(AssertionStatus::Retraction);
                 }
             }
         }
@@ -132,6 +141,10 @@ Corpus populate(KnowledgeKernel &kernel) {
     for (const auto &assertion : kernel.query(everything).assertions) {
         corpus.assertions.push_back(assertion);
     }
+
+    // One record per id, in id order -- if this ever stops holding, every as-of reference below would be
+    // reading the wrong row's committed status.
+    assert(corpus.appended.size() == corpus.assertions.size());
 
     return corpus;
 }
@@ -237,6 +250,48 @@ bool reference_filter(const Filter &filter, const Assertion &a, const KnowledgeK
 
 // The row-selection half of the reference, shared by the row and aggregate references below: an
 // aggregate must fold exactly the rows a query would have returned.
+// Status as of the query's as-of point, computed the naive way the engine deliberately avoids: look
+// through every record for one that closed this row in time. O(n) per row against the engine's O(1), and
+// written from the definition rather than from the implementation -- which is what makes it a check.
+AssertionStatus reference_status(const Query &query, const Assertion &row, const Corpus &corpus) {
+    if (!query.as_of_commit.has_value() && !query.as_of_observed.has_value()) {
+        return row.status;
+    }
+
+    AssertionStatus status = corpus.appended[row.id - 1];
+    const Assertion *closer = nullptr;
+
+    for (const auto &candidate : corpus.assertions) {
+        bool closes = candidate.supersedes_id == row.id || candidate.retracts_id == row.id;
+        if (!closes) {
+            continue;
+        }
+
+        bool in_scope = query.as_of_commit.has_value() ? candidate.id <= *query.as_of_commit
+                                                       : candidate.observed_at <= *query.as_of_observed;
+        if (!in_scope) {
+            continue;
+        }
+
+        // The last one that applies wins, ordered the way the kernel would have applied them.
+        if (closer == nullptr) {
+            closer = &candidate;
+        } else if (query.as_of_commit.has_value()) {
+            closer = candidate.id > closer->id ? &candidate : closer;
+        } else if (candidate.observed_at != closer->observed_at) {
+            closer = candidate.observed_at > closer->observed_at ? &candidate : closer;
+        } else {
+            closer = candidate.id > closer->id ? &candidate : closer;
+        }
+    }
+
+    if (closer != nullptr) {
+        status = closer->supersedes_id == row.id ? AssertionStatus::Superseded : AssertionStatus::Retracted;
+    }
+
+    return status;
+}
+
 std::vector<Assertion> reference_matching_rows(const Query &query, const Corpus &corpus,
                                                const KnowledgeKernel &kernel) {
     std::optional<EntityId> subject;
@@ -252,6 +307,19 @@ std::vector<Assertion> reference_matching_rows(const Query &query, const Corpus 
     std::vector<Assertion> matched;
 
     for (const auto &a : corpus.assertions) {
+        if (query.as_of_commit.has_value() && a.id > *query.as_of_commit) {
+            continue;
+        }
+        if (query.as_of_observed.has_value() && a.observed_at > *query.as_of_observed) {
+            continue;
+        }
+
+        // The row as the query sees it. Substituting the status here rather than testing it separately
+        // means the filter tree, the grouping and the returned record all see the same thing -- which is
+        // exactly the property the engine has to have, so the reference has to have it too.
+        Assertion row = a;
+        row.status = reference_status(query, a, corpus);
+
         if (subject.has_value() && a.subject != *subject) {
             continue;
         }
@@ -262,7 +330,7 @@ std::vector<Assertion> reference_matching_rows(const Query &query, const Corpus 
             continue;
         }
         if (!query.statuses.empty() &&
-            std::find(query.statuses.begin(), query.statuses.end(), a.status) == query.statuses.end()) {
+            std::find(query.statuses.begin(), query.statuses.end(), row.status) == query.statuses.end()) {
             continue;
         }
         if (query.open_ended_only && a.valid_to != OPEN_ENDED) {
@@ -280,11 +348,11 @@ std::vector<Assertion> reference_matching_rows(const Query &query, const Corpus 
         if (query.observed_to.has_value() && a.observed_at > *query.observed_to) {
             continue;
         }
-        if (query.filter.has_value() && !reference_filter(*query.filter, a, kernel)) {
+        if (query.filter.has_value() && !reference_filter(*query.filter, row, kernel)) {
             continue;
         }
 
-        matched.push_back(a);
+        matched.push_back(row);
     }
 
     return matched;
@@ -589,6 +657,21 @@ struct Generator {
         query.newest_first = roll(2) == 0;
         query.limit = roll(13);
         query.offset = roll(7);
+
+        // As-of modes (Phase 19), on a third of queries. Commit points are drawn across the whole log
+        // *and* past its end, so both "partway through" and "effectively now" are generated; observed
+        // points come from the same pool the corpus drew its timestamps from, so a cutoff lands exactly
+        // on a record's observed_at rather than only between them.
+        switch (roll(6)) {
+        case 0:
+            query.as_of_commit = static_cast<AssertionId>(roll(corpus.assertions.size() + 4));
+            break;
+        case 1:
+            query.as_of_observed = corpus.timestamps[roll(corpus.timestamps.size())];
+            break;
+        default:
+            break;
+        }
 
         return query;
     }

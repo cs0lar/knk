@@ -602,15 +602,21 @@ void the_mcp_surface_exposes_cursors_budgets_and_discovery() {
                 assert(properties.contains("cursor"));
                 assert(properties.contains("max_rows_examined"));
 
-                // The wire-format rule from AGENTS.md: the new properties go at the end, so no existing
-                // argument's position moves. Checked here because nothing else would notice.
+                // The wire-format rule from AGENTS.md, pinned as the whole list rather than as "the new
+                // ones are last": callers bind arguments positionally, so every existing position must
+                // stay put and a later phase's additions must land at the end. Spelling the order out is
+                // what makes that check survive the next addition.
                 std::vector<std::string> names;
                 for (auto it = properties.begin(); it != properties.end(); ++it) {
                     names.push_back(it.key());
                 }
-                assert(names[0] == "subject");
-                assert(names[names.size() - 2] == "cursor");
-                assert(names[names.size() - 1] == "max_rows_examined");
+
+                std::vector<std::string> expected{
+                    "subject",     "predicate",         "object",       "valid_at",      "observed_from",
+                    "observed_to", "open_ended_only",   "statuses",     "filter",        "resolve_names",
+                    "order",       "newest_first",      "limit",        "offset",        "ir_version",
+                    "cursor",      "max_rows_examined", "as_of_commit", "as_of_observed"};
+                assert(names == expected);
             }
         }
     }

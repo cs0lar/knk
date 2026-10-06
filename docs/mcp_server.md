@@ -161,6 +161,19 @@ against a running server for the full JSON Schema of each.
   budget. Rows rather than elapsed time, so the same query on the same data always gets the same answer.
   `aggregate` takes it too, alongside its existing `max_groups`.
 
+### As-of queries
+
+`query`, `aggregate`, `explain_query` and `query_spill` take two more arguments, at most one at a time:
+
+* **`as_of_commit`** — answer against the log as it stood after that many records.
+* **`as_of_observed`** — the same question in observed time: rows observed later are invisible, and a
+  correction counts only if it had been observed by then.
+
+Both report every row's status *as of that point*, including in the `status` field of the rows that come
+back. This is what `known_at` should have been — `known_at` applies the observed-time cutoff but reports
+status as it stands now, so a fact corrected last week vanishes from last month's answer. See
+`docs/query_semantics.md` for the full semantics.
+
 Exceeding either budget comes back as a tool error naming the budget, its limit, and what was reached:
 
 ```json

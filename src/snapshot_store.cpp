@@ -3,6 +3,8 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <span>
+#include <stdexcept>
 #include <system_error>
 
 #include "kernel/checksum.hpp"
@@ -14,14 +16,18 @@ namespace knk {
 namespace {
 
 constexpr std::array<char, 4> SNAPSHOT_MAGIC{'K', 'N', 'K', 'S'};
-constexpr uint32_t SNAPSHOT_FORMAT_VERSION = 1;
+// v2: records carry the status they were appended with, not the effective one (see the header).
+constexpr uint32_t SNAPSHOT_FORMAT_VERSION = 2;
 constexpr size_t HEADER_SIZE = SNAPSHOT_MAGIC.size() + sizeof(uint32_t);
 
 // last_snapshotted_id, record_count, and the raw assertion bytes are checksummed together as one
 // contiguous buffer -- crc32() only takes a single buffer, and a snapshot is rare/explicit rather
 // than on the hot commit path, so the extra copy is an acceptable simplicity tradeoff.
+// `appended_status` overrides each record's status byte when non-empty, which is how write() stores the
+// appended status without copying the whole vector first. read() passes an empty span: the records it
+// just parsed already carry the stored byte, so both callers checksum identical bytes.
 std::vector<char> build_payload(uint64_t last_snapshotted_id, uint64_t record_count,
-                                const std::vector<Assertion> &assertions) {
+                                const std::vector<Assertion> &assertions, std::span<const uint8_t> appended_status) {
     std::vector<char> payload(sizeof(last_snapshotted_id) + sizeof(record_count) +
                               assertions.size() * sizeof(Assertion));
 
@@ -30,8 +36,13 @@ std::vector<char> build_payload(uint64_t last_snapshotted_id, uint64_t record_co
     offset += sizeof(last_snapshotted_id);
     std::memcpy(payload.data() + offset, &record_count, sizeof(record_count));
     offset += sizeof(record_count);
-    if (!assertions.empty()) {
-        std::memcpy(payload.data() + offset, assertions.data(), assertions.size() * sizeof(Assertion));
+
+    for (size_t i = 0; i < assertions.size(); ++i) {
+        Assertion record = assertions[i];
+        if (!appended_status.empty()) {
+            record.status = static_cast<AssertionStatus>(appended_status[i]);
+        }
+        std::memcpy(payload.data() + offset + i * sizeof(Assertion), &record, sizeof(Assertion));
     }
 
     return payload;
@@ -41,9 +52,14 @@ std::vector<char> build_payload(uint64_t last_snapshotted_id, uint64_t record_co
 
 SnapshotStore::SnapshotStore(std::filesystem::path path) : path_(std::move(path)) {}
 
-void SnapshotStore::write(AssertionId last_snapshotted_id, const std::vector<Assertion> &assertions) {
+void SnapshotStore::write(AssertionId last_snapshotted_id, const std::vector<Assertion> &assertions,
+                          std::span<const uint8_t> appended_status) {
+    if (appended_status.size() != assertions.size()) {
+        throw std::runtime_error("snapshot appended_status must be parallel to assertions");
+    }
+
     uint64_t record_count = assertions.size();
-    auto payload = build_payload(last_snapshotted_id, record_count, assertions);
+    auto payload = build_payload(last_snapshotted_id, record_count, assertions, appended_status);
     uint32_t crc = crc32(payload.data(), payload.size());
 
     write_file_atomically(path_, [&](std::ostream &out) {
@@ -123,7 +139,7 @@ std::optional<SnapshotData> SnapshotStore::read() const {
         return std::nullopt;
     }
 
-    auto payload = build_payload(last_snapshotted_id, record_count, assertions);
+    auto payload = build_payload(last_snapshotted_id, record_count, assertions, {});
     if (crc32(payload.data(), payload.size()) != stored_crc) {
         return std::nullopt;
     }

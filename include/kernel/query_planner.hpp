@@ -1,5 +1,7 @@
 #pragma once
 
+#include <algorithm>
+
 // Chooses which source a query reads its candidate rows from (Phase 16), replacing the fixed heuristics
 // Phase 11 shipped.
 //
@@ -26,6 +28,17 @@ namespace knk {
 
 // `subject` and `object` are already resolved through merge redirects. `columns_available` says whether
 // the columnar store covers exactly the rows being queried (see columns_usable).
+// The tightest upper bound on observed_at the query implies, which is what the observed-time index can
+// be driven by. as_of_observed is such a bound: a row observed later was not known at the as-of point.
+// Shared between the planner and the executor deliberately -- if the two disagreed about this, the index
+// would be costed for one window and read for another.
+inline std::optional<Timestamp> observed_upper_bound(const Query &query) {
+    if (query.observed_to.has_value() && query.as_of_observed.has_value()) {
+        return std::min(*query.observed_to, *query.as_of_observed);
+    }
+    return query.observed_to.has_value() ? query.observed_to : query.as_of_observed;
+}
+
 QueryPlan plan_query(const Query &query, std::optional<EntityId> subject, std::optional<EntityId> object,
                      const IndexManager &index_manager, bool columns_available, size_t total_rows);
 

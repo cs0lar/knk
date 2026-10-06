@@ -1,6 +1,7 @@
 #include <cassert>
 #include <fstream>
 #include <iostream>
+#include <stdexcept>
 
 #include "kernel/snapshot_store.hpp"
 
@@ -12,6 +13,12 @@ Assertion make_assertion(AssertionId id, EntityId subject) {
     return Assertion{id, subject, 1, 2, 0, 0, 100, 1.0, AssertionStatus::Active};
 }
 
+// v2 stores the status each record was *appended* with, supplied alongside the records because the
+// in-memory ones carry the effective status (see snapshot_store.hpp). Everything here is committed Active.
+std::vector<uint8_t> active_statuses(size_t count) {
+    return std::vector<uint8_t>(count, static_cast<uint8_t>(AssertionStatus::Active));
+}
+
 void snapshot_store_round_trips_written_assertions() {
     auto path = std::filesystem::temp_directory_path() / "kernel_snapshot_round_trip.dat";
     std::filesystem::remove(path);
@@ -19,7 +26,7 @@ void snapshot_store_round_trips_written_assertions() {
     std::vector<Assertion> assertions{make_assertion(1, 10), make_assertion(2, 20)};
 
     SnapshotStore store(path);
-    store.write(2, assertions);
+    store.write(2, assertions, active_statuses(assertions.size()));
 
     auto loaded = store.read();
     assert(loaded.has_value());
@@ -45,8 +52,8 @@ void snapshot_store_write_replaces_prior_snapshot() {
     std::filesystem::remove(path);
 
     SnapshotStore store(path);
-    store.write(1, {make_assertion(1, 10)});
-    store.write(2, {make_assertion(1, 10), make_assertion(2, 20)});
+    store.write(1, {make_assertion(1, 10)}, active_statuses(1));
+    store.write(2, {make_assertion(1, 10), make_assertion(2, 20)}, active_statuses(2));
 
     auto loaded = store.read();
     assert(loaded.has_value());
@@ -61,7 +68,7 @@ void snapshot_store_round_trips_empty_snapshot() {
     std::filesystem::remove(path);
 
     SnapshotStore store(path);
-    store.write(0, {});
+    store.write(0, {}, {});
 
     auto loaded = store.read();
     assert(loaded.has_value());
@@ -92,7 +99,7 @@ void snapshot_store_never_throws_when_checksum_is_tampered_with() {
     std::filesystem::remove(path);
 
     SnapshotStore store(path);
-    store.write(1, {make_assertion(1, 10)});
+    store.write(1, {make_assertion(1, 10)}, active_statuses(1));
 
     {
         // Flip the last byte of the file, which sits inside the trailing crc32.
@@ -116,7 +123,7 @@ void snapshot_store_never_throws_when_record_count_is_inconsistent() {
     std::filesystem::remove(path);
 
     SnapshotStore store(path);
-    store.write(1, {make_assertion(1, 10)});
+    store.write(1, {make_assertion(1, 10)}, active_statuses(1));
 
     {
         // Corrupt record_count (right after the 8-byte header + 8-byte last_snapshotted_id) so it no
@@ -133,10 +140,73 @@ void snapshot_store_never_throws_when_record_count_is_inconsistent() {
     std::filesystem::remove(path);
 }
 
+// v2 (Phase 19) stores the status a record was *appended* with, not the one it currently has. Pinned
+// because nothing else in this file would notice the difference, and the whole point of the change is
+// that a snapshot of a closed row must still say what it was committed as.
+void snapshot_store_writes_the_appended_status_not_the_effective_one() {
+    auto path = std::filesystem::temp_directory_path() / "kernel_snapshot_appended_status.dat";
+    std::filesystem::remove(path);
+
+    Assertion superseded_now = make_assertion(1, 10);
+    superseded_now.status = AssertionStatus::Superseded; // what it is today
+
+    SnapshotStore store(path);
+    std::vector<uint8_t> appended{static_cast<uint8_t>(AssertionStatus::Hypothesis)}; // what it was committed as
+
+    store.write(1, {superseded_now}, appended);
+
+    auto loaded = store.read();
+    assert(loaded.has_value());
+    assert(loaded->assertions.size() == 1);
+    assert(loaded->assertions.front().status == AssertionStatus::Hypothesis);
+}
+
+void snapshot_store_rejects_a_mismatched_status_array() {
+    auto path = std::filesystem::temp_directory_path() / "kernel_snapshot_bad_status_array.dat";
+    std::filesystem::remove(path);
+
+    SnapshotStore store(path);
+
+    bool threw = false;
+    try {
+        store.write(2, {make_assertion(1, 10), make_assertion(2, 20)}, active_statuses(1));
+    } catch (const std::runtime_error &) {
+        threw = true;
+    }
+    assert(threw);
+
+    std::filesystem::remove(path);
+}
+
+// A snapshot written by an older build is not readable by this one, and says so by being unusable rather
+// than by being misread -- the format version is the whole mechanism, so it gets a test.
+void snapshot_store_refuses_an_older_format_version() {
+    auto path = std::filesystem::temp_directory_path() / "kernel_snapshot_v1.dat";
+    std::filesystem::remove(path);
+
+    SnapshotStore store(path);
+    store.write(1, {make_assertion(1, 10)}, active_statuses(1));
+
+    {
+        // Rewrite the version word in the header (4 magic bytes, then uint32 version) as v1.
+        std::fstream io(path, std::ios::binary | std::ios::in | std::ios::out);
+        io.seekp(4);
+        uint32_t old_version = 1;
+        io.write(reinterpret_cast<const char *>(&old_version), sizeof(old_version));
+    }
+
+    assert(!store.read().has_value());
+
+    std::filesystem::remove(path);
+}
+
 } // namespace
 
 int main() {
     snapshot_store_round_trips_written_assertions();
+    snapshot_store_writes_the_appended_status_not_the_effective_one();
+    snapshot_store_rejects_a_mismatched_status_array();
+    snapshot_store_refuses_an_older_format_version();
     snapshot_store_returns_nullopt_when_missing();
     snapshot_store_write_replaces_prior_snapshot();
     snapshot_store_round_trips_empty_snapshot();

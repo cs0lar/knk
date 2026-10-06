@@ -1374,7 +1374,8 @@ void snapshot_ahead_of_log_is_ignored() {
             bogus_assertions.push_back(Assertion{id, ALICE, WORKS_AT, ACME, JAN_1_2023, OPEN_ENDED, JUL_1_2024, 0.95,
                                                  AssertionStatus::Active});
         }
-        storage.write_snapshot(5, bogus_assertions);
+        std::vector<uint8_t> appended(bogus_assertions.size(), static_cast<uint8_t>(AssertionStatus::Active));
+        storage.write_snapshot(5, bogus_assertions, appended);
     }
 
     KnowledgeKernel recovered_kernel(StorageConfig{root});

@@ -502,6 +502,8 @@ Query require_query(const nlohmann::json &args) {
     query.limit = optional_size(args, "limit", 0);
     query.offset = optional_size(args, "offset", 0);
     query.max_rows_examined = optional_size(args, "max_rows_examined", 0);
+    query.as_of_commit = optional_id(args, "as_of_commit");
+    query.as_of_observed = optional_timestamp(args, "as_of_observed");
 
     if (args.contains("cursor") && !args.at("cursor").is_null()) {
         query.cursor = args.at("cursor").get<std::string>();
@@ -1090,7 +1092,16 @@ const std::vector<ToolDefinition> &tool_definitions() {
                    {"max_rows_examined",
                     integer_property("Give up with an error rather than examine more than this many rows; 0 or "
                                      "omitted means no budget. Rows examined rather than elapsed time, so the "
-                                     "same query on the same data always gets the same answer.")}},
+                                     "same query on the same data always gets the same answer.")},
+                   {"as_of_commit",
+                    integer_property("Answer as of the log after this many records: rows committed later are "
+                                     "invisible, and every row's status is what it was then. Not combinable with "
+                                     "as_of_observed.")},
+                   {"as_of_observed",
+                    integer_property("The same question in observed time: rows observed after this are invisible, "
+                                     "and a correction counts only if it had been observed by then. This is what "
+                                     "known_at should have been -- known_at applies the cutoff but reports status "
+                                     "as it stands now.")}},
                   {})},
              [](KnowledgeKernel &kernel, const nlohmann::json &args, const ToolContext &context) -> KernelResult {
                  return kernel.execute(QueryCommand{require_query(args)});
@@ -1128,7 +1139,16 @@ const std::vector<ToolDefinition> &tool_definitions() {
                                              "Refused if it already exists.")},
                    {"ir_version", integer_property("Query IR version; omitted means the current one.")},
                    {"cursor", string_property("Resume after a previous page's next_cursor, as in query.")},
-                   {"max_rows_examined", integer_property("Row budget, as in query; 0 or omitted means none.")}},
+                   {"max_rows_examined", integer_property("Row budget, as in query; 0 or omitted means none.")},
+                   {"as_of_commit",
+                    integer_property("Answer as of the log after this many records: rows committed later are "
+                                     "invisible, and every row's status is what it was then. Not combinable with "
+                                     "as_of_observed.")},
+                   {"as_of_observed",
+                    integer_property("The same question in observed time: rows observed after this are invisible, "
+                                     "and a correction counts only if it had been observed by then. This is what "
+                                     "known_at should have been -- known_at applies the cutoff but reports status "
+                                     "as it stands now.")}},
                   {})},
              [](KnowledgeKernel &kernel, const nlohmann::json &args, const ToolContext &context) -> KernelResult {
                  if (context.spill_directory.empty()) {
@@ -1165,7 +1185,16 @@ const std::vector<ToolDefinition> &tool_definitions() {
                    {"filter", object_property("Filter tree, exactly as in query.")},
                    {"limit", integer_property("Maximum rows; affects the plan only via paging.")},
                    {"offset", integer_property("Rows to skip after ordering.")},
-                   {"ir_version", integer_property("Query IR version; omitted means the current one.")}},
+                   {"ir_version", integer_property("Query IR version; omitted means the current one.")},
+                   {"as_of_commit",
+                    integer_property("Answer as of the log after this many records: rows committed later are "
+                                     "invisible, and every row's status is what it was then. Not combinable with "
+                                     "as_of_observed.")},
+                   {"as_of_observed",
+                    integer_property("The same question in observed time: rows observed after this are invisible, "
+                                     "and a correction counts only if it had been observed by then. This is what "
+                                     "known_at should have been -- known_at applies the cutoff but reports status "
+                                     "as it stands now.")}},
                   {})},
              [](KnowledgeKernel &kernel, const nlohmann::json &args, const ToolContext &context) -> KernelResult {
                  return kernel.execute(ExplainQueryCommand{require_query(args)});
@@ -1209,7 +1238,16 @@ const std::vector<ToolDefinition> &tool_definitions() {
                    {"max_groups", integer_property("Group cap; 0 or omitted means the ceiling, and a larger "
                                                    "value is capped to it.")},
                    {"ir_version", integer_property("Query IR version; omitted means the current one.")},
-                   {"max_rows_examined", integer_property("Row budget, as in query; 0 or omitted means none.")}},
+                   {"max_rows_examined", integer_property("Row budget, as in query; 0 or omitted means none.")},
+                   {"as_of_commit",
+                    integer_property("Answer as of the log after this many records: rows committed later are "
+                                     "invisible, and every row's status is what it was then. Not combinable with "
+                                     "as_of_observed.")},
+                   {"as_of_observed",
+                    integer_property("The same question in observed time: rows observed after this are invisible, "
+                                     "and a correction counts only if it had been observed by then. This is what "
+                                     "known_at should have been -- known_at applies the cutoff but reports status "
+                                     "as it stands now.")}},
                   {"aggregations"})},
              [](KnowledgeKernel &kernel, const nlohmann::json &args, const ToolContext &context) -> KernelResult {
                  AggregateQuery aggregate;
