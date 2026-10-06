@@ -91,7 +91,10 @@ class StorageEngine {
 
     AssertionId load_checkpoint() const;
 
-    void write_snapshot(AssertionId last_snapshotted_id, const std::vector<Assertion> &assertions);
+    // `appended_status` is parallel to `assertions`; see SnapshotStore for why the snapshot stores the
+    // status each record was appended with rather than the one it now has.
+    void write_snapshot(AssertionId last_snapshotted_id, const std::vector<Assertion> &assertions,
+                        std::span<const uint8_t> appended_status);
 
     std::optional<SnapshotData> load_snapshot() const;
 

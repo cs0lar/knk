@@ -68,7 +68,7 @@ SpillColumn describe(const std::string &name, const std::string &type, size_t wi
 
 SpillDescriptor write_spill(const std::filesystem::path &directory, const std::string &token,
                             std::span<const uint32_t> selection, std::span<const Assertion> assertions,
-                            const Catalog &catalog) {
+                            const Catalog &catalog, std::span<const uint8_t> status_override) {
     if (selection.size() > MAX_SPILL_ROWS) {
         throw std::runtime_error("spill exceeds MAX_SPILL_ROWS");
     }
@@ -121,9 +121,15 @@ SpillDescriptor write_spill(const std::filesystem::path &directory, const std::s
                             [](const Assertion &a) { return a.observed_at; });
     write_column<double>(spill_directory / "confidence.col", selection, assertions,
                          [](const Assertion &a) { return a.confidence; });
-    // Effective status, because a spill is a query result and must say what a query says.
-    write_column<uint8_t>(spill_directory / "status.col", selection, assertions,
-                          [](const Assertion &a) { return static_cast<uint8_t>(a.status); });
+    // Effective status, because a spill is a query result and must say what a query says -- or the
+    // reconstructed status, when the query asked as of an earlier point.
+    if (status_override.empty()) {
+        write_column<uint8_t>(spill_directory / "status.col", selection, assertions,
+                              [](const Assertion &a) { return static_cast<uint8_t>(a.status); });
+    } else {
+        write_column<uint8_t>(spill_directory / "status.col", selection, assertions,
+                              [&status_override](const Assertion &a) { return status_override[a.id - 1]; });
+    }
     write_column<AssertionId>(spill_directory / "supersedes_id.col", selection, assertions,
                               [](const Assertion &a) { return a.supersedes_id; });
     write_column<AssertionId>(spill_directory / "retracts_id.col", selection, assertions,

@@ -212,6 +212,10 @@ add_executable(query_plan_tests
     tests/query_plan_tests.cpp
 )
 
+add_executable(as_of_tests
+    tests/as_of_tests.cpp
+)
+
 add_executable(query_surface_tests
     tests/query_surface_tests.cpp
 )
@@ -325,6 +329,10 @@ target_link_libraries(column_store_tests
 )
 
 target_link_libraries(query_plan_tests
+    PRIVATE kernel
+)
+
+target_link_libraries(as_of_tests
     PRIVATE kernel
 )
 
@@ -469,6 +477,11 @@ add_test(
 add_test(
     NAME query_plan_tests
     COMMAND query_plan_tests
+)
+
+add_test(
+    NAME as_of_tests
+    COMMAND as_of_tests
 )
 
 add_test(

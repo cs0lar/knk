@@ -589,6 +589,20 @@ record_count][record_count * sizeof(Assertion) raw bytes][4-byte uint32 crc32]`,
 the whole payload, not per-record CRCs like the four framed logs — safe here because
 `write_file_atomically` already guarantees no torn file, so there's no tail-tolerance to preserve).
 
+**Version 2 (Phase 19) stores each record's *appended* status, not its effective one.** The status byte
+in the stored records is what the record was committed with — `Active`, `Hypothesis` or `Retraction` —
+matching what `assertions.log` holds, rather than what the row's status has since become. Version 1
+stored the effective status, which is lossy: a superseded row reads `Superseded` whether it was committed
+`Active` or as a `Hypothesis`, so a snapshot of it could not say what was believed before the
+supersession, and the snapshot fast path would answer an as-of query differently from a full replay. The
+kernel re-derives effective status after loading, from the `supersedes_id`/`retracts_id` links the
+records already carry — the same derivation replay performs.
+
+Reading a v1 snapshot from a v2 build yields "no usable snapshot" by the version check below, which
+costs one slow startup and loses nothing: the log is the source of truth and the snapshot is only ever a
+hint. Nothing else in the store is affected, and a v2 build rewrites the file on the next
+`write_snapshot()`.
+
 Like `indexes/checkpoint`, reading a snapshot **never throws** — any anomaly (missing file, bad
 magic/version, `record_count != last_snapshotted_id`, a file size that doesn't match the expected size
 computed from `record_count`, or a bad crc) degrades to "no usable snapshot," never an error. The

@@ -23,6 +23,7 @@
 #include "kernel/schema.hpp"
 #include "kernel/spill.hpp"
 #include "kernel/status.hpp"
+#include "kernel/status_history.hpp"
 #include "kernel/storage_engine.hpp"
 #include "kernel/time.hpp"
 #include "kernel/value.hpp"
@@ -133,9 +134,16 @@ class KnowledgeKernel {
     // is no automatic cadence, so commit-path latency is unaffected.
     void write_snapshot();
 
-    void mark_superseded(AssertionId superseded_id);
+    // `by_id` is the record doing the superseding: recorded, not just applied, because as-of
+    // reconstruction needs to know *when* the row stopped being current (see status_history.hpp).
+    // Rebuilds the derived status structures (the closing links, every row's effective status, and
+    // effective_status_) from assertions_ and status_history_.appended. Run once at the end of each
+    // replay path; idempotent, and never writes to disk.
+    void rebuild_status_state();
 
-    void mark_retracted(AssertionId retracted_id);
+    void mark_superseded(AssertionId superseded_id, AssertionId by_id);
+
+    void mark_retracted(AssertionId retracted_id, AssertionId by_id);
 
     std::optional<Assertion> get(AssertionId id) const;
 
@@ -420,6 +428,12 @@ class KnowledgeKernel {
     // record was appended with, so a superseded row still reads Active there (see column_store.hpp). One
     // byte per row, rebuilt at the end of construction and maintained by apply()/mark_*.
     std::vector<uint8_t> effective_status_;
+
+    // How each row's status came to be what it is: the status it was committed with, and the ids of the
+    // records that superseded or retracted it. Derived state like everything else here, rebuilt at the
+    // end of construction and maintained by apply()/mark_*. It is what lets a query ask for the status as
+    // of an earlier commit without scanning for the record that closed each row (see status_history.hpp).
+    StatusHistory status_history_;
 
     // Names generated spills. A counter rather than a clock, because the kernel never reads one; the
     // generator also skips tokens already on disk, so a fresh process cannot collide with an old result.

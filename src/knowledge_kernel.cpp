@@ -117,11 +117,24 @@ KnowledgeKernel::KnowledgeKernel(StorageConfig config, OpenMode mode) : storage_
         if (used_snapshot) {
             assertions_ = snapshot->assertions;
             next_id_ = snapshot->last_snapshotted_id + 1;
+
+            // A v2 snapshot stores appended statuses (see SnapshotStore), so these are exactly the bytes
+            // apply() would have recorded. rebuild_status_state() below turns them back into effective
+            // statuses using the links the records carry.
+            status_history_.appended.clear();
+            status_history_.appended.reserve(assertions_.size());
+            for (const auto &assertion : assertions_) {
+                status_history_.appended.push_back(static_cast<uint8_t>(assertion.status));
+            }
         }
 
         for (const auto &record : tail_records) {
             restore_assertion(record);
         }
+
+        // Before the object index is rebuilt below, which asks is_current_assertion() of every row: on
+        // this path assertions_ carries appended statuses until this call derives the effective ones.
+        rebuild_status_state();
 
         // restore_assertion (unlike apply) never touches IndexManager, so the object index -- which
         // has no persisted log of its own to restore from above -- would otherwise come out empty on
@@ -141,6 +154,8 @@ KnowledgeKernel::KnowledgeKernel(StorageConfig config, OpenMode mode) : storage_
         for (const auto &record : full_records) {
             apply(record);
         }
+
+        rebuild_status_state();
 
         // Healing the files is a write, so a read-only open stops here: the rebuild above already
         // happened in memory, which is what makes its answers correct, and the stale or corrupt files on
@@ -167,11 +182,36 @@ KnowledgeKernel::KnowledgeKernel(StorageConfig config, OpenMode mode) : storage_
             storage_.write_checkpoint(max_committed_id);
         }
     }
+}
 
-    // Built once here rather than maintained through every replay path: the snapshot fast path assigns
-    // assertions_ wholesale and restore_assertion() bypasses apply(), so a single pass at the end is both
-    // cheaper to reason about and impossible to get out of step. Commits maintain it incrementally from
-    // here on.
+void KnowledgeKernel::rebuild_status_state() {
+    // The closing links, in one pass. Built here rather than maintained through every replay path: the
+    // snapshot fast path assigns assertions_ wholesale and restore_assertion() bypasses apply(), so a
+    // single pass is both cheaper to reason about and impossible to get out of step. Commits maintain all
+    // of this incrementally from here on.
+    //
+    // status_history_.appended is *not* rebuilt here: by this point assertions_ no longer knows it, which
+    // is exactly why it is recorded on arrival in apply()/restore_assertion() and seeded from the snapshot.
+    status_history_.superseded_by.assign(assertions_.size(), 0);
+    status_history_.retracted_by.assign(assertions_.size(), 0);
+
+    for (const auto &assertion : assertions_) {
+        if (assertion.supersedes_id != 0 && assertion.supersedes_id <= assertions_.size()) {
+            status_history_.superseded_by[assertion.supersedes_id - 1] = assertion.id;
+        }
+        if (assertion.retracts_id != 0 && assertion.retracts_id <= assertions_.size()) {
+            status_history_.retracted_by[assertion.retracts_id - 1] = assertion.id;
+        }
+    }
+
+    // Effective status, derived from those links rather than trusted from wherever assertions_ came from.
+    // A v2 snapshot stores appended statuses, so this is what turns them back into current ones -- and on
+    // the full-replay path, where restore_assertion()/apply() already applied them, it is idempotent.
+    for (size_t row = 0; row < assertions_.size(); ++row) {
+        AssertionStatus status = status_history_.as_of_commit(row, next_id_);
+        assertions_[row].status = status;
+    }
+
     effective_status_.clear();
     effective_status_.reserve(assertions_.size());
     for (const auto &assertion : assertions_) {
@@ -181,20 +221,21 @@ KnowledgeKernel::KnowledgeKernel(StorageConfig config, OpenMode mode) : storage_
 
 void KnowledgeKernel::write_snapshot() {
     require_writable("write_snapshot");
-    storage_.write_snapshot(next_id_ - 1, assertions_);
+    storage_.write_snapshot(next_id_ - 1, assertions_, status_history_.appended);
 }
 
 void KnowledgeKernel::apply(const Assertion &assertion) {
     if (assertion.supersedes_id != 0) {
-        mark_superseded(assertion.supersedes_id);
+        mark_superseded(assertion.supersedes_id, assertion.id);
     }
 
     if (assertion.retracts_id != 0) {
-        mark_retracted(assertion.retracts_id);
+        mark_retracted(assertion.retracts_id, assertion.id);
     }
 
     assertions_.push_back(assertion);
     effective_status_.push_back(static_cast<uint8_t>(assertion.status));
+    status_history_.push(assertion.status);
     index_manager_.add(assertion);
 
     next_id_ = std::max(next_id_, assertion.id + 1);
@@ -211,22 +252,33 @@ void KnowledgeKernel::restore_assertion(const Assertion &assertion) {
 
     assertions_.push_back(assertion);
 
+    // Captured here, where it is still the status the record was appended with. A later record may be
+    // about to overwrite assertions_[...].status above, and nothing would then remember what this row was
+    // committed as -- which is the whole question an as-of query asks.
+    status_history_.push(assertion.status);
+
     next_id_ = std::max(next_id_, assertion.id + 1);
 }
 
-void KnowledgeKernel::mark_superseded(AssertionId superseded_id) {
+void KnowledgeKernel::mark_superseded(AssertionId superseded_id, AssertionId by_id) {
     assertions_[superseded_id - 1].status = AssertionStatus::Superseded;
     if (superseded_id - 1 < effective_status_.size()) {
         // Guarded because replay calls this before the array exists; construction rebuilds it wholesale.
         effective_status_[superseded_id - 1] = static_cast<uint8_t>(AssertionStatus::Superseded);
     }
+    if (superseded_id - 1 < status_history_.size()) {
+        status_history_.superseded_by[superseded_id - 1] = by_id;
+    }
     index_manager_.mark_superseded(superseded_id);
 }
 
-void KnowledgeKernel::mark_retracted(AssertionId retracted_id) {
+void KnowledgeKernel::mark_retracted(AssertionId retracted_id, AssertionId by_id) {
     assertions_[retracted_id - 1].status = AssertionStatus::Retracted;
     if (retracted_id - 1 < effective_status_.size()) {
         effective_status_[retracted_id - 1] = static_cast<uint8_t>(AssertionStatus::Retracted);
+    }
+    if (retracted_id - 1 < status_history_.size()) {
+        status_history_.retracted_by[retracted_id - 1] = by_id;
     }
     index_manager_.mark_retracted(retracted_id);
 }
@@ -1034,7 +1086,8 @@ void KnowledgeKernel::require_writable(const char *operation) const {
 QuerySource KnowledgeKernel::query_source() const {
     // map_columns() caches its mappings, so this is a pointer hand-off after the first call rather than
     // an mmap per query; a commit invalidates it, which is exactly when it should be redone.
-    return QuerySource{assertions_, index_manager_, catalog_, storage_.map_columns(), effective_status_};
+    return QuerySource{assertions_,       index_manager_, catalog_, storage_.map_columns(),
+                       effective_status_, status_history_};
 }
 
 QueryResult KnowledgeKernel::query(const Query &query) const { return query_engine_.execute(query, query_source()); }
@@ -1061,7 +1114,20 @@ SpillDescriptor KnowledgeKernel::spill_query(const Query &query, const std::file
         } while (std::filesystem::exists(directory / chosen));
     }
 
-    return write_spill(directory, chosen, page, assertions_, catalog_);
+    // Under an as-of mode the spilled status column has to be the reconstructed one, for the same reason
+    // a returned row's does: the selection was made against it.
+    std::vector<uint8_t> as_of_status;
+    if (query.as_of_commit.has_value() || query.as_of_observed.has_value()) {
+        as_of_status.resize(assertions_.size());
+        for (size_t row = 0; row < assertions_.size(); ++row) {
+            as_of_status[row] =
+                static_cast<uint8_t>(query.as_of_commit.has_value()
+                                         ? status_history_.as_of_commit(row, *query.as_of_commit)
+                                         : status_history_.as_of_observed(row, *query.as_of_observed, assertions_));
+        }
+    }
+
+    return write_spill(directory, chosen, page, assertions_, catalog_, as_of_status);
 }
 
 QueryPlan KnowledgeKernel::explain_query(const Query &query) const {

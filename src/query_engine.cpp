@@ -134,7 +134,8 @@ bool apply_op(CompareOp op, int ordering) {
 // changing what it means.
 int compare_ints(int64_t left, int64_t right) { return left < right ? -1 : (left == right ? 0 : 1); }
 
-bool evaluate_comparison(const Filter &filter, const Assertion &assertion, const Catalog &catalog) {
+bool evaluate_comparison(const Filter &filter, const Assertion &assertion, AssertionStatus status,
+                         const Catalog &catalog) {
     const Value &operand = filter.operand;
 
     switch (filter.field) {
@@ -156,7 +157,9 @@ bool evaluate_comparison(const Filter &filter, const Assertion &assertion, const
     case FilterField::ObservedAt:
         return apply_op(filter.op, compare_ints(assertion.observed_at, operand.timestamp_value));
     case FilterField::Status: {
-        std::string_view left(status_name(assertion.status));
+        // The *resolved* status, so a filter and the `statuses` set can never disagree about what a row
+        // is -- under an as-of mode both see what the row was then.
+        std::string_view left(status_name(status));
         std::string_view right(operand.text);
         return apply_op(filter.op, left < right ? -1 : (left == right ? 0 : 1));
     }
@@ -174,14 +177,14 @@ bool evaluate_comparison(const Filter &filter, const Assertion &assertion, const
     return false;
 }
 
-bool evaluate(const Filter &filter, const Assertion &assertion, const Catalog &catalog) {
+bool evaluate(const Filter &filter, const Assertion &assertion, AssertionStatus status, const Catalog &catalog) {
     switch (filter.kind) {
     case FilterKind::Comparison:
-        return evaluate_comparison(filter, assertion, catalog);
+        return evaluate_comparison(filter, assertion, status, catalog);
 
     case FilterKind::And:
         for (const auto &child : filter.children) {
-            if (!evaluate(child, assertion, catalog)) {
+            if (!evaluate(child, assertion, status, catalog)) {
                 return false;
             }
         }
@@ -189,14 +192,14 @@ bool evaluate(const Filter &filter, const Assertion &assertion, const Catalog &c
 
     case FilterKind::Or:
         for (const auto &child : filter.children) {
-            if (evaluate(child, assertion, catalog)) {
+            if (evaluate(child, assertion, status, catalog)) {
                 return true;
             }
         }
         return false;
 
     case FilterKind::Not:
-        return !evaluate(filter.children.front(), assertion, catalog);
+        return !evaluate(filter.children.front(), assertion, status, catalog);
     }
 
     return false;
@@ -222,7 +225,7 @@ std::vector<AssertionId> candidate_ids(PlanSource source, const Query &query, st
     case PlanSource::SubjectIndex:
         return index_manager.assertions_for_subject(*subject);
     case PlanSource::ObservedTimeIndex:
-        return index_manager.observed_before(*subject, *query.observed_to);
+        return index_manager.observed_before(*subject, *observed_upper_bound(query));
     case PlanSource::ObjectCurrentIndex:
         return index_manager.current_assertions_by_object(*object);
     case PlanSource::PredicateCurrentIndex:
@@ -253,8 +256,67 @@ bool valid_at_covers(const Assertion &assertion, Timestamp valid_time) {
     return starts_before_or_at && ends_after;
 }
 
-bool matches(const Query &query, const Assertion &assertion, std::optional<EntityId> subject,
+// The status a query compares against for one row: the row's status now, or what it was at the as-of
+// point. One place, used by all three execution paths, so they cannot drift apart.
+AssertionStatus resolved_status(const Query &query, const QuerySource &source, const Assertion &assertion) {
+    size_t row = static_cast<size_t>(assertion.id - 1);
+
+    if (query.as_of_commit.has_value()) {
+        return source.status_history.as_of_commit(row, *query.as_of_commit);
+    }
+
+    if (query.as_of_observed.has_value()) {
+        return source.status_history.as_of_observed(row, *query.as_of_observed, source.assertions);
+    }
+
+    return assertion.status;
+}
+
+// The same thing for every row at once, which is what the columnar path needs: vectorized_select filters
+// on a status byte per row, so handing it reconstructed bytes makes as-of queries work there with no
+// change inside the scan itself. One byte per row, built per query and discarded with it.
+std::vector<uint8_t> reconstructed_status(const Query &query, const QuerySource &source, size_t rows) {
+    std::vector<uint8_t> status(rows);
+
+    for (size_t row = 0; row < rows; ++row) {
+        status[row] = static_cast<uint8_t>(
+            query.as_of_commit.has_value()
+                ? source.status_history.as_of_commit(row, *query.as_of_commit)
+                : source.status_history.as_of_observed(row, *query.as_of_observed, source.assertions));
+    }
+
+    return status;
+}
+
+// Restricts the columns to the first `rows` rows, which is how an as-of-commit query makes everything
+// committed later invisible without a per-row id comparison.
+ColumnSpans narrowed_columns(const ColumnSpans &columns, size_t rows) {
+    ColumnSpans narrowed;
+    narrowed.subject = columns.subject.first(rows);
+    narrowed.predicate = columns.predicate.first(rows);
+    narrowed.object = columns.object.first(rows);
+    narrowed.valid_from = columns.valid_from.first(rows);
+    narrowed.valid_to = columns.valid_to.first(rows);
+    narrowed.observed_at = columns.observed_at.first(rows);
+    narrowed.confidence = columns.confidence.first(rows);
+    narrowed.status = columns.status.first(rows);
+    narrowed.supersedes_id = columns.supersedes_id.first(rows);
+    narrowed.retracts_id = columns.retracts_id.first(rows);
+    return narrowed;
+}
+
+bool matches(const Query &query, const Assertion &assertion, AssertionStatus status, std::optional<EntityId> subject,
              std::optional<EntityId> object, const Catalog &catalog) {
+    // As-of visibility first: a row committed after the point being asked about did not exist then, and a
+    // row the kernel had not yet observed was not known then. Neither is a status question.
+    if (query.as_of_commit.has_value() && assertion.id > *query.as_of_commit) {
+        return false;
+    }
+
+    if (query.as_of_observed.has_value() && assertion.observed_at > *query.as_of_observed) {
+        return false;
+    }
+
     // The resolved query argument is compared against the raw stored id, which is what the existing
     // methods do: merge_entities never rewrites assertions_, it redirects at the query boundary only.
     if (subject.has_value() && assertion.subject != *subject) {
@@ -269,7 +331,7 @@ bool matches(const Query &query, const Assertion &assertion, std::optional<Entit
         return false;
     }
 
-    if (!status_allowed(query, assertion.status)) {
+    if (!status_allowed(query, status)) {
         return false;
     }
 
@@ -290,7 +352,7 @@ bool matches(const Query &query, const Assertion &assertion, std::optional<Entit
     }
 
     // Cheapest first: the filter tree is the only test that can hit the catalog, so it runs last.
-    if (query.filter.has_value() && !evaluate(*query.filter, assertion, catalog)) {
+    if (query.filter.has_value() && !evaluate(*query.filter, assertion, status, catalog)) {
         return false;
     }
 
@@ -358,7 +420,7 @@ Timestamp floor_bucket(Timestamp value, Timestamp width) {
     return quotient * width;
 }
 
-Value group_key_value(const Assertion &assertion, const GroupBy &group_by) {
+Value group_key_value(const Assertion &assertion, AssertionStatus status, const GroupBy &group_by) {
     switch (group_by.field) {
     case GroupField::Subject:
         return Value::of_int64(static_cast<int64_t>(assertion.subject));
@@ -367,7 +429,9 @@ Value group_key_value(const Assertion &assertion, const GroupBy &group_by) {
     case GroupField::Object:
         return Value::of_int64(static_cast<int64_t>(assertion.object));
     case GroupField::Status:
-        return Value::of_text(status_name(assertion.status));
+        // The resolved status, so grouping by status under an as-of query groups rows by what they were
+        // then -- the same status the selection filtered on.
+        return Value::of_text(status_name(status));
     case GroupField::ValidFromBucket:
         return Value::of_timestamp(floor_bucket(assertion.valid_from, group_by.bucket_width));
     case GroupField::ObservedAtBucket:
@@ -481,6 +545,12 @@ std::vector<uint32_t> QueryEngine::select_rows(const Query &query, const QuerySo
         validate(*query.filter, 1);
     }
 
+    // Two different questions about two different clocks; a query asking both has not decided what it
+    // means, and picking one for it would answer a question nobody asked.
+    if (query.as_of_commit.has_value() && query.as_of_observed.has_value()) {
+        throw std::runtime_error("query sets both as_of_commit and as_of_observed");
+    }
+
     // Decoded before any work: a bad token should cost nothing, and the ordering check below is the
     // difference between "the wrong window" and "an error".
     std::optional<QueryCursor> cursor;
@@ -530,7 +600,8 @@ std::vector<uint32_t> QueryEngine::select_rows(const Query &query, const QuerySo
         for (AssertionId id : candidate_ids(plan.chosen, query, subject, object, index_manager)) {
             charge(1);
             const Assertion *assertion = find_by_id(assertions, id);
-            if (assertion != nullptr && matches(query, *assertion, subject, object, catalog) &&
+            if (assertion != nullptr &&
+                matches(query, *assertion, resolved_status(query, source, *assertion), subject, object, catalog) &&
                 (!cursor.has_value() || after_query_cursor(*cursor, *assertion))) {
                 matched.push_back(static_cast<uint32_t>(id - 1));
             }
@@ -539,7 +610,26 @@ std::vector<uint32_t> QueryEngine::select_rows(const Query &query, const QuerySo
         // The columnar path: the selectors, time windows, open-endedness and status set are answered by
         // passes over single columns, and only the survivors are touched as rows.
         charge(assertions.size());
-        vectorized_select(query, source.columns, source.effective_status, subject, object, matched);
+
+        // An as-of query scans the same columns with two substitutions: the rows committed after the
+        // as-of point are cut off the end, and the status bytes are the reconstructed ones. The scan
+        // itself is unchanged -- it filters on a status byte per row either way.
+        std::vector<uint8_t> as_of_status;
+        ColumnSpans scan_columns = source.columns;
+        std::span<const uint8_t> scan_status = source.effective_status;
+
+        if (query.as_of_commit.has_value() || query.as_of_observed.has_value()) {
+            size_t rows = assertions.size();
+            if (query.as_of_commit.has_value()) {
+                rows = std::min(rows, static_cast<size_t>(*query.as_of_commit));
+            }
+
+            scan_columns = narrowed_columns(source.columns, rows);
+            as_of_status = reconstructed_status(query, source, rows);
+            scan_status = as_of_status;
+        }
+
+        vectorized_select(query, scan_columns, scan_status, subject, object, matched);
 
         if (cursor.has_value()) {
             // After the column passes rather than inside them: the cursor is a comparison on the ordering
@@ -559,7 +649,8 @@ std::vector<uint32_t> QueryEngine::select_rows(const Query &query, const QuerySo
             // so it is applied to what the vectorized passes left rather than to everything.
             auto surviving = matched.begin();
             for (uint32_t row : matched) {
-                if (evaluate(*query.filter, assertions[row], catalog)) {
+                if (evaluate(*query.filter, assertions[row], resolved_status(query, source, assertions[row]),
+                             catalog)) {
                     *surviving++ = row;
                 }
             }
@@ -568,7 +659,8 @@ std::vector<uint32_t> QueryEngine::select_rows(const Query &query, const QuerySo
     } else {
         for (size_t i = 0; i < assertions.size(); ++i) {
             charge(1);
-            if (matches(query, assertions[i], subject, object, catalog) &&
+            if (matches(query, assertions[i], resolved_status(query, source, assertions[i]), subject, object,
+                        catalog) &&
                 (!cursor.has_value() || after_query_cursor(*cursor, assertions[i]))) {
                 matched.push_back(static_cast<uint32_t>(i));
             }
@@ -616,7 +708,13 @@ QueryResult QueryEngine::execute(const Query &query, const QuerySource &source) 
     size_t page_end = std::min(matched.size(), requested_end);
     result.assertions.reserve(page_end - query.offset);
     for (size_t i = query.offset; i < page_end; ++i) {
-        result.assertions.push_back(assertions[matched[i]]);
+        Assertion row = assertions[matched[i]];
+
+        // The row as it was, not as it is: having selected on the reconstructed status, returning a
+        // record that says `Superseded` in the answer to "what was Active then" would hand the caller a
+        // contradiction and let them draw the wrong conclusion from a correct selection.
+        row.status = resolved_status(query, source, row);
+        result.assertions.push_back(row);
     }
 
     // Handed out only when there is a next page. An empty next_cursor is how a caller knows to stop, so
@@ -690,6 +788,10 @@ AggregateResult QueryEngine::aggregate(const AggregateQuery &query, const QueryS
         validate(*selection.filter, 1);
     }
 
+    if (selection.as_of_commit.has_value() && selection.as_of_observed.has_value()) {
+        throw std::runtime_error("query sets both as_of_commit and as_of_observed");
+    }
+
     std::optional<EntityId> subject;
     if (selection.subject.has_value()) {
         subject = catalog.resolve(*selection.subject);
@@ -726,7 +828,7 @@ AggregateResult QueryEngine::aggregate(const AggregateQuery &query, const QueryS
         std::vector<Value> key;
         key.reserve(query.group_by.size());
         for (const auto &group_by : query.group_by) {
-            key.push_back(group_key_value(assertion, group_by));
+            key.push_back(group_key_value(assertion, resolved_status(selection, source, assertion), group_by));
         }
 
         auto it = groups.find(key);
@@ -794,25 +896,44 @@ AggregateResult QueryEngine::aggregate(const AggregateQuery &query, const QueryS
         for (AssertionId id : candidate_ids(plan.chosen, selection, subject, object, index_manager)) {
             charge(1);
             const Assertion *assertion = find_by_id(assertions, id);
-            if (assertion != nullptr && matches(selection, *assertion, subject, object, catalog)) {
+            if (assertion != nullptr && matches(selection, *assertion, resolved_status(selection, source, *assertion),
+                                                subject, object, catalog)) {
                 fold(*assertion);
             }
         }
     } else if (plan.chosen == PlanSource::ColumnarScan) {
         std::vector<uint32_t> rows;
         charge(assertions.size());
-        vectorized_select(selection, source.columns, source.effective_status, subject, object, rows);
+
+        std::vector<uint8_t> as_of_status;
+        ColumnSpans scan_columns = source.columns;
+        std::span<const uint8_t> scan_status = source.effective_status;
+
+        if (selection.as_of_commit.has_value() || selection.as_of_observed.has_value()) {
+            size_t visible = assertions.size();
+            if (selection.as_of_commit.has_value()) {
+                visible = std::min(visible, static_cast<size_t>(*selection.as_of_commit));
+            }
+
+            scan_columns = narrowed_columns(source.columns, visible);
+            as_of_status = reconstructed_status(selection, source, visible);
+            scan_status = as_of_status;
+        }
+
+        vectorized_select(selection, scan_columns, scan_status, subject, object, rows);
 
         for (uint32_t row : rows) {
             const Assertion &assertion = assertions[row];
-            if (!selection.filter.has_value() || evaluate(*selection.filter, assertion, catalog)) {
+            if (!selection.filter.has_value() ||
+                evaluate(*selection.filter, assertion, resolved_status(selection, source, assertion), catalog)) {
                 fold(assertion);
             }
         }
     } else {
         for (const auto &assertion : assertions) {
             charge(1);
-            if (matches(selection, assertion, subject, object, catalog)) {
+            if (matches(selection, assertion, resolved_status(selection, source, assertion), subject, object,
+                        catalog)) {
                 fold(assertion);
             }
         }

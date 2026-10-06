@@ -411,7 +411,9 @@ void storage_engine_read_only_refuses_writes_directly() {
     Assertion assertion{99, ALICE, WORKS_AT, ACME, 0, OPEN_ENDED, 0, 1.0, AssertionStatus::Active};
     assert(throws([&] { engine.append_assertion(assertion); }));
     assert(throws([&] { engine.write_checkpoint(1); }));
-    assert(throws([&] { engine.write_snapshot(1, {assertion}); }));
+    // A well-formed call, so the only reason it can throw is the read-only open itself.
+    std::vector<uint8_t> appended{static_cast<uint8_t>(AssertionStatus::Active)};
+    assert(throws([&] { engine.write_snapshot(1, {assertion}, appended); }));
     assert(throws([&] { engine.append_subject_entry(ALICE, 1); }));
     assert(throws([&] { engine.rewrite_subject_index({}); }));
     assert(throws([&] { engine.append_entity_catalog_entry(1, Value::of_text("x")); }));

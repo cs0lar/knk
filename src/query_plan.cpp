@@ -103,9 +103,10 @@ QueryPlan plan_query(const Query &query, std::optional<EntityId> subject, std::o
         size_t rows = index_manager.row_count_for_subject(*subject);
         plan.considered.push_back(usable(PlanSource::SubjectIndex, rows, index_cost(rows)));
 
-        if (query.observed_to.has_value()) {
+        auto observed_bound = observed_upper_bound(query);
+        if (observed_bound.has_value()) {
             // A prefix of the subject's rows, so never worse and often much smaller.
-            size_t observed_rows = index_manager.observed_before_count(*subject, *query.observed_to);
+            size_t observed_rows = index_manager.observed_before_count(*subject, *observed_bound);
             plan.considered.push_back(usable(PlanSource::ObservedTimeIndex, observed_rows, index_cost(observed_rows)));
         } else {
             plan.considered.push_back(rejected(PlanSource::ObservedTimeIndex, "query has no observed_to bound"));
@@ -121,6 +122,11 @@ QueryPlan plan_query(const Query &query, std::optional<EntityId> subject, std::o
             plan.considered.push_back(rejected(source, source == PlanSource::ObjectCurrentIndex
                                                            ? "query names no object"
                                                            : "query names no predicate"));
+        } else if (query.as_of_commit.has_value() || query.as_of_observed.has_value()) {
+            // The current-state indexes describe what is current *now*. An as-of query asks what was
+            // current then, and the two differ by exactly the rows the index has already dropped, so it
+            // cannot answer -- not a cost judgement, a correctness one.
+            plan.considered.push_back(rejected(source, "index describes current state now; query is as-of"));
         } else if (!current_shaped) {
             plan.considered.push_back(
                 rejected(source, "index holds only Active open-ended rows; query is not current-shaped"));

@@ -478,6 +478,66 @@ void discovery_latency(KnowledgeKernel &kernel, size_t calls) {
     report("discovery: describe_corpus", corpus_timer.elapsed_seconds() / static_cast<double>(calls) * 1e6, "us/call");
 }
 
+// --- as-of reconstruction (Phase 19) ---------------------------------------------
+//
+// The design claim is that reconstruction is O(1) per row -- the kernel keeps the reverse link, so a row
+// never has to be searched for the record that closed it. What that should look like here is an as-of
+// query costing about what the same query costs without one. The alternative design (scan for the closing
+// record per row) would be quadratic and would show up as a large multiple.
+void as_of_latency(KnowledgeKernel &kernel, size_t queries) {
+    Query now;
+    now.statuses = {AssertionStatus::Active};
+    now.open_ended_only = true;
+    now.force_scan = true;
+    now.limit = 1;
+
+    Timer now_timer;
+    for (size_t i = 0; i < queries; ++i) {
+        kernel.query(now);
+    }
+    double now_elapsed = now_timer.elapsed_seconds() / static_cast<double>(queries);
+
+    size_t rows = kernel.describe_corpus().assertion_count;
+
+    // At the newest id, so exactly the same rows are scanned as without an as-of mode and the difference
+    // is the reconstruction alone. The midpoint below is the realistic case and is *cheaper* only because
+    // half the columns are cut off the scan -- worth separating, or the headline ratio flatters itself.
+    Query newest = now;
+    newest.as_of_commit = static_cast<AssertionId>(rows);
+
+    Timer newest_timer;
+    for (size_t i = 0; i < queries; ++i) {
+        kernel.query(newest);
+    }
+    double newest_elapsed = newest_timer.elapsed_seconds() / static_cast<double>(queries);
+
+    Query midpoint = now;
+    midpoint.as_of_commit = static_cast<AssertionId>(rows / 2);
+
+    Timer commit_timer;
+    for (size_t i = 0; i < queries; ++i) {
+        kernel.query(midpoint);
+    }
+    double commit_elapsed = commit_timer.elapsed_seconds() / static_cast<double>(queries);
+
+    Query observed = now;
+    observed.as_of_observed = 2'000;
+
+    Timer observed_timer;
+    for (size_t i = 0; i < queries; ++i) {
+        kernel.query(observed);
+    }
+    double observed_elapsed = observed_timer.elapsed_seconds() / static_cast<double>(queries);
+
+    report("as-of: columnar scan, no as-of mode", now_elapsed * 1e6, "us/query");
+    report("as-of: as_of_commit at the newest id (same rows)", newest_elapsed * 1e6, "us/query");
+    report("  => reconstruction overhead", newest_elapsed / now_elapsed, "x");
+    report("as-of: as_of_commit at the midpoint (half the rows)", commit_elapsed * 1e6, "us/query");
+    report("  => versus no as-of", commit_elapsed / now_elapsed, "x");
+    report("as-of: as_of_observed", observed_elapsed * 1e6, "us/query");
+    report("  => versus no as-of", observed_elapsed / now_elapsed, "x");
+}
+
 // --- a corpus too large to cache (Phase 16) --------------------------------------
 //
 // Every number above this point is measured on 10,000 assertions, which is ~880 KB of records and ~80 KB
@@ -575,6 +635,9 @@ int main() {
 
     section("cost model inputs (Phase 16)");
     planner_cost_inputs(kernel, 500);
+
+    section("as-of reconstruction (Phase 19)");
+    as_of_latency(kernel, 200);
 
     section("paging and budgets (Phase 18)");
     paging_walks(kernel, 100);

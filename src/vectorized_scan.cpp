@@ -121,6 +121,13 @@ void vectorized_select(const Query &query, const ColumnSpans &columns, std::span
         narrow_observed_to(mask, columns.observed_at, *query.observed_to);
     }
 
+    // The as-of-observed cutoff is the same pass: a row the kernel had not observed by then was not known
+    // then. Applied here rather than folded into observed_to by the caller, which would mean copying the
+    // whole Query (filter tree and all) to change one field.
+    if (query.as_of_observed.has_value()) {
+        narrow_observed_to(mask, columns.observed_at, *query.as_of_observed);
+    }
+
     for (size_t i = 0; i < rows; ++i) {
         if (mask[i] != 0) {
             selection.push_back(static_cast<uint32_t>(i));

@@ -150,6 +150,25 @@ struct Query {
     // excludes supersessions and retractions the caller wanted.
     std::vector<AssertionStatus> statuses;
 
+    // As-of reconstruction (Phase 19). Exactly one of these may be set.
+    //
+    // as_of_commit = N answers the query against the log as it stood after N records: rows with a larger
+    // id are invisible, and every visible row's status is what it was *then* -- Active if nothing at or
+    // before N had yet superseded or retracted it. as_of_observed = T is the same question asked in
+    // observed time: rows observed later are invisible, and a correction counts only if it too had been
+    // observed by T.
+    //
+    // as_of_observed is what `known_at` should have been. known_at applies the observed-time cutoff to
+    // which rows it considers but filters status as it stands *now*, so a fact corrected last week
+    // vanishes from last month's answer; with this set, last month's answer stops changing. The old
+    // behaviour is still reachable -- it is simply observed_to without an as-of mode -- because an
+    // auditor asking "which of the things we knew then do we still believe" is asking a real question.
+    //
+    // Status here means the *reconstructed* status: the `statuses` set and a Status filter both compare
+    // against it, so a query cannot see one status and filter on another.
+    std::optional<AssertionId> as_of_commit;
+    std::optional<Timestamp> as_of_observed;
+
     // Everything the selectors above cannot say: ordered comparisons, comparisons against the object's
     // interned Value rather than its id, and boolean combinations. Absent means no filtering. A filter
     // is evaluated per row and never changes which index is selected -- see QueryEngine.

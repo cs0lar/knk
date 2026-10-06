@@ -401,6 +401,32 @@ runs), which is why it is charged unconditionally rather than behind a fast path
 `describe_predicates` is effectively free — it reads index bucket sizes. `describe_corpus` is one linear
 pass over 10,000 assertions at ~18 µs, i.e. ~1.8 ns/row: fine for shaping a query, not for a loop.
 
+### As-of reconstruction (Phase 19)
+
+```
+== as-of reconstruction (Phase 19) ==
+as-of: columnar scan, no as-of mode                     26.802 us/query
+as-of: as_of_commit at the newest id (same rows)        37.024 us/query
+  => reconstruction overhead                             1.381 x
+as-of: as_of_commit at the midpoint (half the rows)     17.336 us/query
+  => versus no as-of                                     0.647 x
+as-of: as_of_observed                                   42.352 us/query
+  => versus no as-of                                     1.580 x
+```
+
+The claim being checked is that reconstruction is a **constant factor, not a search**. The kernel keeps,
+per row, the id of the record that closed it, so deriving status as of an earlier point never scans for
+that record; the naive alternative is quadratic and would show up here as a large multiple rather than
+1.4x.
+
+The three rows measure different things on purpose. At the newest id the same rows are scanned as without
+an as-of mode, so the 1.38x is the reconstruction alone — one byte-array materialization pass over the
+visible rows. At the midpoint an as-of query is *cheaper* than a present-tense one (0.65x), because the
+rows committed after that point are cut off the scan entirely; that is the realistic case, and quoting it
+as the headline would flatter the feature, which is why both are here. `as_of_observed` costs more (1.58x)
+because it also reads each closing record's `observed_at`, which is a random access into the row array for
+every row something closed.
+ 
 ## Reading these numbers against Phase 9's candidate list
 
 * **SIMD scanning / Bloom filters** — no linear scan exists on the hot query path today (`current`/

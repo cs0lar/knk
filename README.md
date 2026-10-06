@@ -61,6 +61,9 @@ never loses the history of how its knowledge changed.
 - **Columnar result handoff** — `query_spill` writes a large result to disk as plain fixed-width columns
   plus a dictionary of the ids it mentions, and returns a descriptor; a reader is about twenty lines
   (`tools/read_spill.py`), and a read-only kernel can produce one without writing to the store.
+- **As-of reconstruction** — `as_of_commit`/`as_of_observed` answer a query against the store as it stood
+  at an earlier point: rows committed or observed later are invisible, and every row's status is what it
+  was *then*, so "what did we believe at close" stops changing every time a fact is corrected.
 - **Cursor paging and budgets** — `next_cursor` resumes a walk strictly after the last row returned, so
   paging cannot repeat or skip rows while another process commits, and stays as cheap at page 100 as at
   page 1; `max_rows_examined` and `max_groups` bound a query's work and fail with a structured error
@@ -149,10 +152,16 @@ an example JSON-RPC session, and how to point a real MCP client at it.
 Phases 1–8 of the roadmap in [`AGENTS.md`](AGENTS.md#current-roadmap) are complete: in-memory
 temporal model, storage engine, persistent indexes, segmented/checksummed storage internals,
 entity/predicate catalog + payload store, provenance + the command layer, hypotheses + bounded
-graph traversal, and entity merge + archival. Phase 9 (performance work — SIMD, mmap, lock-free
-readers, etc.) is explicitly gated behind a demonstrated bottleneck from real usage; a benchmark
-harness and baseline exist (see [`docs/benchmarks.md`](docs/benchmarks.md)), but no optimization
-work has started.
+graph traversal, and entity merge + archival.
+
+The query-engine arc, Phases 10–19, is also complete: the query IR, filters and name resolution,
+aggregation, read-only opens, the columnar store, vectorized execution, cost-based planning and
+`explain_query`, columnar result handoff, cursors/budgets/discovery, and as-of reconstruction.
+
+Phase 9 (general performance work — SIMD, lock-free readers, etc.) remains explicitly gated behind a
+demonstrated bottleneck from real usage; a benchmark harness and baselines exist (see
+[`docs/benchmarks.md`](docs/benchmarks.md)), and the optimization work that has happened was
+benchmark-driven and confined to the query engine's own phases.
 
 ## Further reading
 

@@ -1582,6 +1582,49 @@ columnar pass, no new durable state.
  exactly N records — checkable by replaying a log prefix into a scratch kernel and comparing.
 * **Docs:** the Query Semantics subtlety about `known_at` gets a pointer to this as the real answer.
 
+Current implementation status (shipped 2026-10-06):
+
+* **Both modes shipped, not one.** The plan offered "as-of-commit (or as-of-observed-time)" as a choice.
+ They cost the same to implement once the reverse links exist, and shipping only the commit mode would
+ have left the stated motivation half-answered: the gap this phase exists to close is `known_at`'s, which
+ is an *observed-time* question. `as_of_commit` is the exact, auditable one (commit ids are the only
+ monotonic, gap-free ordering the kernel controls); `as_of_observed` is the one an analyst asks. They are
+ mutually exclusive, and they genuinely differ, because `observed_at` is caller-supplied and can be
+ backdated -- a test pins a record that is visible to one and not the other at corresponding points.
+* **O(1) per row, not a scan.** The kernel keeps, per row, the id of the record that superseded or
+ retracted it (`StatusHistory`), so reconstruction never searches for the closing record. Measured at
+ 1.37x a plain columnar scan over the same rows, and *cheaper* than a present-tense query when the as-of
+ point is partway through the log, because the rows after it are cut off the scan. The naive alternative
+ is quadratic; the differential suite's reference implementation is deliberately written that way, which
+ is what makes it an independent check.
+* **This forced a storage format change, and that was the right call rather than a workaround.** A
+ snapshot stored *effective* statuses, which cannot say what a closed row was committed as -- a superseded
+ `Hypothesis` is indistinguishable from a superseded `Active` fact. So the fast path and a full replay
+ would have answered the same as-of query differently, breaking "every in-memory structure is rebuildable
+ by replaying the log". Snapshot format v2 stores the appended status and the kernel re-derives effective
+ status at load. A v1 snapshot is simply unusable to a v2 build: one slow startup, nothing lost, since the
+ snapshot was never authoritative. Documented in `docs/storage_format.md` with read/write and
+ version-rejection tests, per the storage rules.
+* **Reconstructed status is what the caller sees everywhere**, not just what selection filters on: the
+ `statuses` set, a `Status` filter, an aggregate's `group_by: status`, the `status` field of each returned
+ row, and the status column of a spill. Returning a row labelled `Superseded` in the answer to "what was
+ Active then" would be a contradiction the caller could reasonably act on.
+* **The current-state indexes are rejected for an as-of query on correctness grounds**, with a reason that
+ says so -- they describe what is current *now*, and differ from what was current then by exactly the rows
+ they have already dropped. The subject and observed-time indexes are status-agnostic and still apply;
+ `observed_upper_bound()` is shared by the planner and the executor so the two cannot disagree about which
+ window the observed-time index is being read for.
+* **Tested** in `tests/as_of_tests.cpp`, whose headline test does not check a hand-computed expectation: for
+ every prefix of the log it builds *the kernel as it was* in a scratch store and requires
+ `as_of_commit = N` against the full log to equal what that kernel answers, for every status, on all three
+ execution paths. Plus the superseded-hypothesis case, snapshot-vs-replay equivalence, backdating,
+ aggregates, status filters, planner rejections, and the MCP surface. `query_differential_tests` now
+ generates as-of queries too, answered against a reference that reconstructs status the quadratic way from
+ the definition. Nine meaning-changing mutations were each caught -- both as-of boundaries, the
+ later-event-wins rule, the visibility cutoff, column narrowing, the columnar status substitution, the
+ returned row's status, the snapshot regression, and the planner's index rejection.
+* **This completes the query-engine arc (Phases 10-19).**
+
 **Deliberately not in this arc:** joins beyond id→name projection, a general graph query language
 (Phase 7's bounded traversal remains the only exception), RDF/SPARQL, materialized views, a text/full
 -text index over entity names (#55 settled that this belongs in the caller, not the kernel), and any

@@ -70,9 +70,12 @@ struct SpillDescriptor {
 // `directory / token`, with a descriptor and a dictionary. Throws if the token already exists -- silently
 // overwriting a result someone may be reading is worse than refusing -- or if the selection exceeds
 // MAX_SPILL_ROWS.
+// `status_override`, when non-empty, supplies the status byte per row (indexed by row, not by position in
+// `selection`) in place of the record's own. It exists for as-of queries (Phase 19): a spill is a query
+// result and must say what the query said, which under an as-of mode is the status as of that point.
 SpillDescriptor write_spill(const std::filesystem::path &directory, const std::string &token,
                             std::span<const uint32_t> selection, std::span<const Assertion> assertions,
-                            const Catalog &catalog);
+                            const Catalog &catalog, std::span<const uint8_t> status_override = {});
 
 // Removes a spill directory. Nothing sweeps automatically: the kernel never reads a wall clock (so a TTL
 // is not available to it), and deleting a result someone is still reading would be worse than leaving a

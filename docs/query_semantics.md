@@ -64,6 +64,12 @@ Assertions for `subject` that are **Active** and were observed at or before `obs
 
 **Excludes:** non-Active statuses; assertions observed after `observed_time`.
 
+> **The subtlety, and its answer.** "Active" here means active **now**, not active then. So once a fact
+> is corrected, `known_at` stops returning it for *every* past time — last month's answer changes because
+> of something that happened last week. That is the right behaviour for "which of the things we knew by
+> then do we still believe", and the wrong one for "what did we believe then". The second question is
+> what `as_of_observed` answers — see [As-of reconstruction](#as-of-reconstruction-phase-19).
+
 ### `valid_at_known_at(subject, valid_time, observed_time)`
 
 Bitemporal intersection: assertions known by `observed_time` whose valid interval covers `valid_time`, **Active** only.
@@ -370,6 +376,49 @@ contain anything.
   is one linear pass (~18 µs per 10,000 assertions), so it is for shaping a query, not for calling inside
   a loop.
 
+## As-of reconstruction (Phase 19)
+
+Every query above answers with status as it stands **now**. `as_of_commit` and `as_of_observed` answer
+with status as it stood then — the difference between "which of the things we knew by March do we still
+believe" and "what did we believe in March".
+
+```cpp
+Query query;
+query.subject = alice;
+query.statuses = {AssertionStatus::Active};
+query.as_of_observed = march_31;   // or: query.as_of_commit = 1'250'000;
+```
+
+| | Visible rows | Status |
+| --- | --- | --- |
+| `as_of_commit = N` | `id <= N` | as of the log's first N records |
+| `as_of_observed = T` | `observed_at <= T` | corrections count only if observed by `T` |
+
+* **Exactly one may be set.** They are two questions about two different clocks; a query asking both has
+  not decided what it means.
+* **Status means the reconstructed status everywhere**: the `statuses` set, a `Status` filter, an
+  aggregate's `group_by: status`, and the `status` field of each returned row. A row returned to "what
+  was Active in March" never comes back labelled `Superseded`.
+* **A hypothesis stays a hypothesis.** A `Hypothesis` row later superseded reads as `Hypothesis` as of a
+  point before the supersession — not `Active`. (This is why the snapshot format stores the status each
+  record was *appended* with; see `docs/storage_format.md`.)
+* **The two modes genuinely differ**, because `observed_at` is caller-supplied: a record committed last
+  but backdated is visible to `as_of_observed` at the earlier time and invisible to `as_of_commit` at the
+  corresponding point. By the same token a *backdated correction* can close a row as of a time before the
+  row itself was observed — that follows from what `observed_at` means, and is the same latitude
+  `known_at` already gives.
+* **An as-of point past the end of the log is "now"**, and `as_of_commit = 0` is "before anything", which
+  returns nothing. Neither is an error.
+* **Cost is a constant factor, not a search.** The kernel keeps, per row, the id of the record that closed
+  it, so reconstruction is O(1) per row rather than a scan for the closing record. Measured at 1.37x a
+  plain columnar scan over the same rows for `as_of_commit` and 1.58x for `as_of_observed` (which also
+  reads the closing record's `observed_at`); an `as_of_commit` partway through the log is *cheaper* than a
+  present-tense query, because the rows after it are not scanned at all.
+* **The current-state indexes cannot serve an as-of query** and are rejected for correctness, not cost:
+  they describe what is current now, and they differ from what was current then by exactly the rows they
+  have already dropped. `explain_query` says so. The subject and observed-time indexes are status-agnostic
+  and still apply — and for `as_of_observed` the observed-time index is exactly the right shape.
+
 ---
 
 ## Quick reference
@@ -377,7 +426,7 @@ contain anything.
 | Method | Active only? | Notes |
 | --- | --- | --- |
 | `current` / `current_by_*` | Yes | Open-ended current facts |
-| `valid_at` / `known_at` / `valid_at_known_at` | Yes | Temporal slice |
+| `valid_at` / `known_at` / `valid_at_known_at` | Yes | Temporal slice; status as it stands *now* — see as-of |
 | `valid_time_timeline` / `observed_time_timeline` | Yes | Sorted Active timeline |
 | `commit_history` | **No** | Full audit for subject+predicate |
 | `changes_since` | **No** | Global change stream |
